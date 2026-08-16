@@ -26,9 +26,6 @@
       "new_sqlite_classes": ["FxgaCoordinator"]
     }
   ],
-  "limits": {
-    "subrequests": 45
-  },
   "observability": {
     "enabled": true
   },
