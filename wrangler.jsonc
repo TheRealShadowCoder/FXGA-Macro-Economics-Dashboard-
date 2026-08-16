@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "fxga-macro-intelligence-dashboard",
+  "account_id": "4f260a0775a3df407e08512610c9898b",
+  "compatibility_date": "2026-08-16",
+  "main": "./worker/index.ts",
+  "workers_dev": true,
+  "assets": {
+    "not_found_handling": "single-page-application"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "APP_NAME": "FXGA Macro Intelligence",
+    "CACHE_TTL_SECONDS": "300"
+  }
+}
