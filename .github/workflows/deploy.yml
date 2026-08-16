@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: fxga-production
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -39,7 +43,7 @@ jobs:
           accountId: 4f260a0775a3df407e08512610c9898b
           wranglerVersion: '4.118.0'
           command: deploy
-      - name: Verify live FRED macro universe
+      - name: Verify live macro intelligence stack
         run: |
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
@@ -53,6 +57,10 @@ jobs:
 
           const health = await getJson('/api/health');
           if (!health?.configured?.fred) throw new Error('Live Worker does not report FRED as configured');
+          if (!health?.configured?.browserRun) throw new Error('Browser Run binding is not live');
+          if (!health?.configured?.durableCoordinator) throw new Error('Durable Object coordinator is not live');
+          if (health?.safety?.workerSubrequestCeiling > 45) throw new Error('FXGA subrequest ceiling exceeds 45');
+          if (health?.safety?.browserSoftBudgetSecondsPerUtcDay > 480) throw new Error('FXGA browser budget exceeds 480 seconds/day');
 
           const catalog = await getJson('/api/fred/catalog');
           if (!Array.isArray(catalog?.series) || catalog.series.length < 90) {
@@ -77,5 +85,36 @@ jobs:
             }
           }
 
-          console.log(`FRED macro universe verification passed: ${catalog.total} series across ${catalog.categories.length} categories`);
+          const analysis = await getJson('/api/analysis');
+          if (!analysis?.regime?.name || !Array.isArray(analysis?.dimensions) || analysis.dimensions.length < 7) {
+            throw new Error('Macro analysis endpoint is incomplete');
+          }
+          if (!Array.isArray(analysis?.assets) || analysis.assets.length < 4 || analysis?.coverage?.observed < 20) {
+            throw new Error('Macro analysis coverage is unexpectedly low');
+          }
+
+          const acquisition = await getJson('/api/acquisition/catalog');
+          if (!Array.isArray(acquisition?.methods) || acquisition.methods.length < 10) throw new Error('Acquisition method stack is incomplete');
+          if (!Array.isArray(acquisition?.sources) || acquisition.sources.length < 10) throw new Error('Acquisition source registry is incomplete');
+          if (acquisition?.limits?.externalSubrequestsPerInvocation > 45) throw new Error('Acquisition subrequest guard exceeds safety ceiling');
+          if (acquisition?.status?.browserBudget?.softLimitSeconds > 480) throw new Error('Browser Run safety budget exceeds 480 seconds/day');
+
+          await new Promise((resolve, reject) => {
+            if (typeof WebSocket === 'undefined') return reject(new Error('Node runner has no WebSocket implementation'));
+            const ws = new WebSocket(base.replace('https://', 'wss://') + '/api/live');
+            const timer = setTimeout(() => { try { ws.close(); } catch {} reject(new Error('WebSocket verification timed out')); }, 8000);
+            ws.addEventListener('message', (event) => {
+              try {
+                const payload = JSON.parse(String(event.data));
+                if (payload?.type === 'connected') {
+                  clearTimeout(timer);
+                  ws.close(1000, 'CI verification complete');
+                  resolve();
+                }
+              } catch {}
+            });
+            ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket verification failed')); });
+          });
+
+          console.log(`FXGA live verification passed: ${catalog.total} FRED series, ${analysis.regime.name}, ${acquisition.methods.length} acquisition methods.`);
           NODE
