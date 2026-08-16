@@ -6,7 +6,7 @@ import type { Env } from '../types';
 const DAILY_SOFT_CAP_SECONDS = 480;
 const RESERVATION_SECONDS = 45;
 const MIN_LAUNCH_GAP_MS = 22_000;
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const DOCUMENT_TTL_MS = 6 * 60 * 60 * 1000;
 
 export interface RenderedCalendarDocument {
@@ -29,6 +29,7 @@ export interface RenderedCalendarDocument {
     tables: number;
   };
   warnings: string[];
+  networkTrace: Array<{ url: string; status: number; contentType: string }>;
 }
 
 interface StoredDocument {
@@ -42,6 +43,10 @@ function dayKey() {
 
 function documentKey(sourceId: string) {
   return `calendar-browser:${CACHE_VERSION}:${sourceId}`;
+}
+
+function debugKey(sourceId: string) {
+  return `calendar-browser-debug:${sourceId}`;
 }
 
 async function cachedDocument(storage: DurableObjectStorage, sourceId: string) {
@@ -79,9 +84,12 @@ async function settleBrowser(storage: DurableObjectStorage, usageKey: string, us
   });
 }
 
-function shouldCaptureJson(url: string, contentType: string) {
-  if (!contentType.toLowerCase().includes('json')) return false;
+function shouldTrace(url: string) {
   return /fxstreet|myfxbook|calendar|economic|event|widget/i.test(url);
+}
+
+function shouldCaptureJson(url: string, contentType: string) {
+  return contentType.toLowerCase().includes('json') && shouldTrace(url);
 }
 
 async function renderPage(
@@ -93,22 +101,25 @@ async function renderPage(
 
   const page = await browser.newPage();
   const captured: Array<{ kind: string; value: unknown }> = [];
+  const networkTrace: Array<{ url: string; status: number; contentType: string }> = [];
   const captures: Promise<void>[] = [];
 
   page.on('response', (response) => {
-    if (captured.length >= 30) return;
     const task = (async () => {
       try {
         const headers = response.headers();
         const contentType = headers['content-type'] ?? '';
         const url = response.url();
-        if (!response.ok() || !shouldCaptureJson(url, contentType)) return;
+        if (shouldTrace(url) && networkTrace.length < 80) {
+          networkTrace.push({ url: url.slice(0, 500), status: response.status(), contentType: contentType.slice(0, 120) });
+        }
+        if (captured.length >= 30 || !response.ok() || !shouldCaptureJson(url, contentType)) return;
         const value = await response.json();
         const serialized = JSON.stringify(value);
         if (serialized.length > 1_000_000) return;
         captured.push({ kind: `network-json:${new URL(url).hostname}`, value });
       } catch {
-        // Ignore non-JSON or already-consumed network responses.
+        // Ignore non-JSON, inaccessible, or already-consumed responses.
       }
     })();
     captures.push(task);
@@ -116,7 +127,7 @@ async function renderPage(
 
   try {
     await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
-    const settleMs = sourceId === 'fxstreet-calendar' ? 6_000 : 4_000;
+    const settleMs = sourceId === 'fxstreet-calendar' ? 7_000 : 5_000;
     await page.waitForTimeout(settleMs);
     await Promise.allSettled(captures);
 
@@ -137,10 +148,31 @@ async function renderPage(
         embeddedPayloads: embeddedJson.length,
       },
       warnings: [],
+      networkTrace,
     };
   } finally {
     await page.close().catch(() => undefined);
   }
+}
+
+async function persistDebug(storage: DurableObjectStorage, sourceId: string, document: RenderedCalendarDocument | null, error?: unknown) {
+  await storage.put(debugKey(sourceId), document ? {
+    fetchedAt: document.fetchedAt,
+    title: document.title.slice(0, 300),
+    textPreview: document.text.slice(0, 1200),
+    textCharacters: document.extraction.textCharacters,
+    tables: document.extraction.tables,
+    embeddedPayloads: document.extraction.embeddedPayloads,
+    embeddedKinds: document.embeddedJson.map((payload) => payload.kind).slice(0, 30),
+    networkTrace: document.networkTrace.slice(0, 60),
+  } : {
+    fetchedAt: new Date().toISOString(),
+    error: error instanceof Error ? error.message.slice(0, 800) : String(error ?? 'Browser render unavailable').slice(0, 800),
+  });
+}
+
+export async function getCalendarBrowserDebug(storage: DurableObjectStorage, sourceId: string) {
+  return (await storage.get<Record<string, unknown>>(debugKey(sourceId))) ?? null;
 }
 
 export async function renderCalendarSourcesShared(
@@ -153,14 +185,19 @@ export async function renderCalendarSourcesShared(
 
   for (const sourceId of sourceIds) {
     const cached = await cachedDocument(storage, sourceId);
-    if (cached) result[sourceId] = cached;
-    else missing.push(sourceId);
+    if (cached) {
+      result[sourceId] = cached;
+      await persistDebug(storage, sourceId, cached);
+    } else missing.push(sourceId);
   }
   if (!missing.length) return result;
 
   const reservation = await reserveBrowser(storage, env);
   if (!reservation.allowed || !reservation.usageKey || reservation.used === undefined) {
-    for (const sourceId of missing) result[sourceId] = null;
+    for (const sourceId of missing) {
+      result[sourceId] = null;
+      await persistDebug(storage, sourceId, null, reservation.reason);
+    }
     return result;
   }
 
@@ -176,12 +213,10 @@ export async function renderCalendarSourcesShared(
           expiresAt: Date.now() + DOCUMENT_TTL_MS,
           document,
         } satisfies StoredDocument);
+        await persistDebug(storage, sourceId, document);
       } catch (error) {
         result[sourceId] = null;
-        await storage.put(`calendar-browser-error:${sourceId}`, {
-          at: new Date().toISOString(),
-          message: error instanceof Error ? error.message.slice(0, 500) : 'Browser render failed',
-        });
+        await persistDebug(storage, sourceId, null, error);
       }
     }
     return result;
