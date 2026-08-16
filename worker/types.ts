@@ -49,6 +49,9 @@ export interface CalendarEvent {
   currency?: string;
   unit?: string;
   source?: string;
+  lastUpdate?: string;
+  ticker?: string;
+  symbol?: string;
 }
 
 export interface NewsItem {
