@@ -52,6 +52,10 @@ export interface CalendarEvent {
   lastUpdate?: string;
   ticker?: string;
   symbol?: string;
+  providers?: string[];
+  sourceCount?: number;
+  confidence?: number;
+  canonicalKey?: string;
 }
 
 export interface NewsItem {
