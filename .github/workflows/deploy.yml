@@ -20,6 +20,17 @@ jobs:
         run: npm install
       - name: Build
         run: npm run build
+      - name: Sync FRED API key to Cloudflare Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 4f260a0775a3df407e08512610c9898b
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          if [ -n "$FRED_API_KEY" ]; then
+            printf '%s' "$FRED_API_KEY" | npx wrangler secret put FRED_API_KEY
+          else
+            echo "::warning::FRED_API_KEY repository secret is not configured; FRED collection will remain disabled."
+          fi
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4
         with:
