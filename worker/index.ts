@@ -69,9 +69,6 @@ async function dashboard(env: Env) {
     errors.push({ provider: 'Release Scheduler', message: caught instanceof Error ? caught.message : 'Scheduler failed' });
   }
 
-  // Central-bank RSS is independent from the economic-release scheduler and remains
-  // cache controlled. Economic calendar and macro observations below come from
-  // Durable Object state rather than new upstream requests on every dashboard view.
   try {
     news = await getOfficialNews();
   } catch (caught) {
@@ -90,6 +87,8 @@ async function dashboard(env: Env) {
     sources: sourceRegistry(env),
     scheduler: scheduler ? {
       initialized: scheduler.initialized,
+      mode: scheduler.mode ?? null,
+      calendarSources: scheduler.calendarSources ?? [],
       calendarSyncedAt: scheduler.calendarSyncedAt ?? null,
       nextCalendarSyncAt: scheduler.nextCalendarSyncAt ?? null,
       nextReleaseAt: scheduler.nextReleaseAt ?? null,
@@ -126,7 +125,9 @@ export default {
           timestamp: new Date().toISOString(),
           configured: {
             fred: Boolean(env.FRED_API_KEY),
-            tradingEconomics: Boolean(env.TRADING_ECONOMICS_API_KEY),
+            calendarScraping: true,
+            calendarSources: ['Myfxbook', 'FXStreet', 'CNBC'],
+            tradingEconomicsLegacyOptional: Boolean(env.TRADING_ECONOMICS_API_KEY),
             browserRun: Boolean(env.BROWSER),
             durableCoordinator: Boolean(env.FXGA_COORDINATOR),
           },
@@ -144,6 +145,7 @@ export default {
             releaseMode: 'Event-driven Durable Object alarms',
             normalStateUpstreamCalendarRequests: 0,
             normalStateUpstreamFredRequests: 0,
+            releaseWindowPrimary: 'Myfxbook lightweight scrape',
           },
         }, { headers: { 'Cache-Control': 'no-store' } });
       }
@@ -235,7 +237,13 @@ export default {
           .map((item: any) => item.event)
           .filter((event: any) => Number(event.importance ?? 1) >= importance && Date.parse(event.date) <= cutoff)
           .sort((a: any, b: any) => Date.parse(a.date) - Date.parse(b.date));
-        return json({ events, cached: true, calendarSyncedAt: scheduler.calendarSyncedAt ?? null }, { headers: { 'Cache-Control': 'public, max-age=30' } });
+        return json({
+          events,
+          cached: true,
+          mode: scheduler.mode ?? 'scraped-calendar-consensus',
+          calendarSources: scheduler.calendarSources ?? ['Myfxbook', 'FXStreet', 'CNBC'],
+          calendarSyncedAt: scheduler.calendarSyncedAt ?? null,
+        }, { headers: { 'Cache-Control': 'public, max-age=30' } });
       }
 
       if (url.pathname === '/api/news') {
@@ -253,12 +261,11 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    if (!env.TRADING_ECONOMICS_API_KEY) return;
     ctx.waitUntil(
       coordinator(env)
         .fetch('https://fxga-coordinator.internal/scheduler/sync')
         .then(async (response) => {
-          if (!response.ok) throw new Error(`Scheduled calendar sync returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
+          if (!response.ok) throw new Error(`Scheduled scraped-calendar sync returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
         }),
     );
   },
