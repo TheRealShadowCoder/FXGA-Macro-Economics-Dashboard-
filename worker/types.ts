@@ -24,6 +24,7 @@ export interface MacroObservation {
   change: number | null;
   units: string;
   frequency: string;
+  categories: string[];
   lastUpdated?: string;
   history: Array<{ date: string; value: number }>;
 }

@@ -18,8 +18,31 @@ export interface MacroObservation {
   change: number | null;
   units: string;
   frequency: string;
+  categories: string[];
   lastUpdated?: string;
   history: Array<{ date: string; value: number }>;
+}
+
+export interface FredSeriesDefinition {
+  id: string;
+  title: string;
+  units: string;
+  frequency: string;
+  categories: string[];
+}
+
+export interface FredCategory {
+  id: string;
+  label: string;
+  description: string;
+  count: number;
+}
+
+export interface FredCatalogPayload {
+  total: number;
+  maxSeriesPerRequest: number;
+  categories: FredCategory[];
+  series: FredSeriesDefinition[];
 }
 
 export interface CalendarEvent {

@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MetricCard } from './components/MetricCard';
-import { fetchDashboard } from './lib/api';
-import type { CalendarEvent, DashboardPayload, NewsItem } from './lib/types';
+import { fetchDashboard, fetchFredCatalog, fetchFredCategory } from './lib/api';
+import type { CalendarEvent, DashboardPayload, FredCatalogPayload, MacroObservation, NewsItem } from './lib/types';
 
-type View = 'overview' | 'calendar' | 'indicators' | 'news' | 'sources';
+type View = 'overview' | 'calendar' | 'indicators' | 'universe' | 'news' | 'sources';
 
 const NAV: Array<{ id: View; label: string }> = [
   { id: 'overview', label: 'Macro Pulse' },
   { id: 'calendar', label: 'Economic Calendar' },
-  { id: 'indicators', label: 'Indicators' },
+  { id: 'indicators', label: 'Core Indicators' },
+  { id: 'universe', label: 'Macro Universe' },
   { id: 'news', label: 'Central Bank News' },
   { id: 'sources', label: 'Source Health' },
 ];
@@ -56,6 +57,13 @@ export default function App() {
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
+  const [catalog, setCatalog] = useState<FredCatalogPayload | null>(null);
+  const [catalogError, setCatalogError] = useState('');
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [universeCategory, setUniverseCategory] = useState('inflation');
+  const [universeSeries, setUniverseSeries] = useState<MacroObservation[]>([]);
+  const [universeLoading, setUniverseLoading] = useState(false);
+  const [universeError, setUniverseError] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -71,6 +79,30 @@ export default function App() {
 
   useEffect(() => { void load(); }, []);
 
+  useEffect(() => {
+    if (view !== 'universe' || catalog || catalogLoading) return;
+    let cancelled = false;
+    setCatalogLoading(true);
+    setCatalogError('');
+    void fetchFredCatalog()
+      .then((payload) => { if (!cancelled) setCatalog(payload); })
+      .catch((err) => { if (!cancelled) setCatalogError(err instanceof Error ? err.message : 'Unable to load FRED catalog'); })
+      .finally(() => { if (!cancelled) setCatalogLoading(false); });
+    return () => { cancelled = true; };
+  }, [view, catalog, catalogLoading]);
+
+  useEffect(() => {
+    if (view !== 'universe' || !catalog) return;
+    let cancelled = false;
+    setUniverseLoading(true);
+    setUniverseError('');
+    void fetchFredCategory(universeCategory, catalog.maxSeriesPerRequest)
+      .then((series) => { if (!cancelled) setUniverseSeries(series); })
+      .catch((err) => { if (!cancelled) setUniverseError(err instanceof Error ? err.message : 'Unable to load macro category'); })
+      .finally(() => { if (!cancelled) setUniverseLoading(false); });
+    return () => { cancelled = true; };
+  }, [view, catalog, universeCategory]);
+
   const filteredNews = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!data || !q) return data?.news ?? [];
@@ -83,9 +115,16 @@ export default function App() {
     return data.calendar.filter((e) => `${e.event} ${e.country} ${e.category}`.toLowerCase().includes(q));
   }, [data, query]);
 
+  const filteredUniverse = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return universeSeries;
+    return universeSeries.filter((item) => `${item.seriesId} ${item.title} ${item.categories.join(' ')}`.toLowerCase().includes(q));
+  }, [universeSeries, query]);
+
   const highImpact = data?.calendar.filter((event) => event.importance >= 3).length ?? 0;
   const liveSources = data?.sources.filter((source) => source.status === 'live').length ?? 0;
   const configuredSources = data?.sources.length ?? 0;
+  const activeCategory = catalog?.categories.find((category) => category.id === universeCategory);
 
   return (
     <div className="app-shell">
@@ -159,6 +198,39 @@ export default function App() {
 
         {data && view === 'calendar' && <section className="panel full"><div className="panel-title"><div><span className="eyebrow">Actual · Forecast · Previous</span><h2>Economic calendar</h2></div><span>{filteredCalendar.length} events</span></div>{filteredCalendar.length ? filteredCalendar.map((event) => <CalendarRow key={event.id} event={event} />) : <div className="empty">No calendar events returned. Configure the Trading Economics secret to enable the live calendar.</div>}</section>}
         {data && view === 'indicators' && <section className="metrics-grid wide">{data.macro.map((item) => <MetricCard key={item.seriesId} item={item} />)}</section>}
+
+        {view === 'universe' && (
+          <>
+            {catalogError && <div className="alert error">{catalogError}</div>}
+            {catalogLoading && !catalog ? <div className="loading-panel">Loading FRED macro universe…</div> : null}
+            {catalog && (
+              <>
+                <section className="panel universe-panel">
+                  <div className="universe-summary">
+                    <div><span className="eyebrow">Institutional Macro Catalog</span><h2>{catalog.total} validated FRED series</h2></div>
+                    <div className="catalog-stats"><strong>{catalog.categories.length}</strong><span>macro categories</span><strong>{catalog.maxSeriesPerRequest}</strong><span>max live series/request</span></div>
+                  </div>
+                  <div className="category-strip">
+                    {catalog.categories.map((category) => (
+                      <button key={category.id} className={universeCategory === category.id ? 'active' : ''} onClick={() => setUniverseCategory(category.id)}>
+                        <strong>{category.label}</strong><span>{category.count}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+                <section className="section-head universe-heading">
+                  <div><span className="eyebrow">{activeCategory?.label}</span><h2>{activeCategory?.description}</h2></div>
+                  <span>{universeLoading ? 'Syncing live observations…' : `${filteredUniverse.length} live series`}</span>
+                </section>
+                {universeError && <div className="alert error">{universeError}</div>}
+                {universeLoading && !universeSeries.length ? <div className="loading-panel">Fetching live FRED observations…</div> : null}
+                {!universeLoading && !filteredUniverse.length ? <div className="empty">No series match this category or search.</div> : null}
+                <section className="metrics-grid wide">{filteredUniverse.map((item) => <MetricCard key={item.seriesId} item={item} />)}</section>
+              </>
+            )}
+          </>
+        )}
+
         {data && view === 'news' && <section className="panel full"><div className="panel-title"><div><span className="eyebrow">Primary-source intelligence</span><h2>Official releases and speeches</h2></div><span>{filteredNews.length} items</span></div>{filteredNews.map((item) => <NewsRow key={item.id} item={item} />)}</section>}
         {data && view === 'sources' && <section className="source-grid">{data.sources.map((source) => <article className="source-card" key={source.id}><div className="source-status"><span className={`status ${source.status}`}></span>{source.status.replace('_', ' ')}</div><h3>{source.name}</h3><p>{source.category} · {source.region}</p>{source.note && <small>{source.note}</small>}</article>)}</section>}
 

@@ -1,5 +1,5 @@
 import { getEconomicCalendar } from './providers/calendar';
-import { CORE_SERIES, getFredSeries } from './providers/fred';
+import { DEFAULT_DASHBOARD_SERIES, getFredCatalog, getFredSeries, resolveFredSeries } from './providers/fred';
 import { getOfficialNews } from './providers/rss';
 import { sourceRegistry } from './sources';
 import type { Env } from './types';
@@ -40,7 +40,7 @@ async function cached(request: Request, env: Env, handler: () => Promise<Respons
 
 async function dashboard(env: Env) {
   const [macroResult, calendarResult, newsResult] = await Promise.allSettled([
-    getFredSeries(env),
+    getFredSeries(env, [...DEFAULT_DASHBOARD_SERIES]),
     getEconomicCalendar(env, 7, 1),
     getOfficialNews(),
   ]);
@@ -76,6 +76,7 @@ export default {
             fred: Boolean(env.FRED_API_KEY),
             tradingEconomics: Boolean(env.TRADING_ECONOMICS_API_KEY),
           },
+          fredUniverse: getFredCatalog().total,
         }, { headers: { 'Cache-Control': 'no-store' } });
       }
 
@@ -87,14 +88,27 @@ export default {
         return cached(request, env, async () => json(await dashboard(env)));
       }
 
+      if (url.pathname === '/api/fred/catalog') {
+        return json(getFredCatalog(), { headers: { 'Cache-Control': 'public, max-age=3600' } });
+      }
+
       if (url.pathname === '/api/fred') {
         return cached(request, env, async () => {
           const raw = url.searchParams.get('series');
           const requested = raw ? raw.split(',').map((value) => value.trim().toUpperCase()).filter(Boolean) : undefined;
-          if (requested?.some((id) => !CORE_SERIES.some((series) => series.id === id))) {
-            return error('One or more FRED series are not in the server allowlist');
-          }
-          return json({ series: await getFredSeries(env, requested) });
+          const category = url.searchParams.get('category') || undefined;
+          const query = url.searchParams.get('q') || undefined;
+          const limit = Number(url.searchParams.get('limit') || 12);
+          const selected = resolveFredSeries({ requested, category, query, limit });
+          const series = await getFredSeries(env, selected.map((item) => item.id));
+          return json({
+            series,
+            selection: {
+              category: category ?? null,
+              query: query ?? null,
+              count: series.length,
+            },
+          });
         });
       }
 
