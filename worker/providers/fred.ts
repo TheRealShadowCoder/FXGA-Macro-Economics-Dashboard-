@@ -128,33 +128,45 @@ export const FRED_SERIES: FredSeriesDefinition[] = [
   { id: 'DEXUSUK', title: 'U.S. Dollar to British Pound Exchange Rate', units: 'USD/GBP', frequency: 'Daily', categories: ['usd-fx'] },
   { id: 'DEXJPUS', title: 'Japanese Yen to U.S. Dollar Exchange Rate', units: 'JPY/USD', frequency: 'Daily', categories: ['usd-fx'] },
   { id: 'DEXCAUS', title: 'Canadian Dollar to U.S. Dollar Exchange Rate', units: 'CAD/USD', frequency: 'Daily', categories: ['usd-fx'] },
+  { id: 'DEXUSAL', title: 'U.S. Dollar to Australian Dollar Exchange Rate', units: 'USD/AUD', frequency: 'Daily', categories: ['usd-fx'] },
 
-  { id: 'VIXCLS', title: 'CBOE VIX', units: 'Index', frequency: 'Daily', categories: ['volatility', 'financial-conditions'] },
-  { id: 'VXNCLS', title: 'CBOE Nasdaq 100 Volatility Index', units: 'Index', frequency: 'Daily', categories: ['volatility'] },
+  { id: 'VIXCLS', title: 'CBOE Volatility Index: VIX', units: 'Index', frequency: 'Daily', categories: ['volatility', 'financial-conditions'] },
+  { id: 'VXNCLS', title: 'CBOE Nasdaq-100 Volatility Index', units: 'Index', frequency: 'Daily', categories: ['volatility'] },
   { id: 'GVZCLS', title: 'CBOE Gold ETF Volatility Index', units: 'Index', frequency: 'Daily', categories: ['volatility'] },
   { id: 'OVXCLS', title: 'CBOE Crude Oil ETF Volatility Index', units: 'Index', frequency: 'Daily', categories: ['volatility'] },
 
+  { id: 'PCE', title: 'Personal Consumption Expenditures', units: 'USD bn', frequency: 'Monthly', categories: ['consumption', 'growth'] },
   { id: 'PCEC96', title: 'Real Personal Consumption Expenditures', units: 'Bn chained $', frequency: 'Monthly', categories: ['consumption', 'growth'] },
-  { id: 'PCE', title: 'Personal Consumption Expenditures', units: 'USD bn', frequency: 'Monthly', categories: ['consumption'] },
-  { id: 'RSAFS', title: 'Advance Retail & Food Services Sales', units: 'USD mn', frequency: 'Monthly', categories: ['consumption', 'business-activity'] },
-  { id: 'RRSFS', title: 'Advance Real Retail & Food Services Sales', units: 'Index/real', frequency: 'Monthly', categories: ['consumption'] },
+  { id: 'RSAFS', title: 'Advance Retail Sales', units: 'USD mn', frequency: 'Monthly', categories: ['consumption', 'growth'] },
   { id: 'DSPIC96', title: 'Real Disposable Personal Income', units: 'Bn chained $', frequency: 'Monthly', categories: ['consumption'] },
   { id: 'PSAVERT', title: 'Personal Saving Rate', units: '%', frequency: 'Monthly', categories: ['consumption'] },
   { id: 'UMCSENT', title: 'University of Michigan Consumer Sentiment', units: 'Index', frequency: 'Monthly', categories: ['consumption', 'leading-indicators'] },
 
   { id: 'BUSINV', title: 'Total Business Inventories', units: 'USD mn', frequency: 'Monthly', categories: ['business-activity'] },
-  { id: 'ISRATIO', title: 'Business Inventories-to-Sales Ratio', units: 'Ratio', frequency: 'Monthly', categories: ['business-activity'] },
-];
-
-export const DEFAULT_DASHBOARD_SERIES = [
-  'CPIAUCSL', 'PCEPILFE', 'UNRATE', 'PAYEMS', 'A191RL1Q225SBEA', 'INDPRO',
-  'WALCL', 'FEDFUNDS', 'DGS2', 'DGS10', 'T10Y2Y', 'DTWEXBGS', 'VIXCLS', 'NFCI',
+  { id: 'ISRATIO', title: 'Total Business Inventory/Sales Ratio', units: 'Ratio', frequency: 'Monthly', categories: ['business-activity'] },
 ] as const;
 
 export const MAX_SERIES_PER_REQUEST = 16;
-const FRED_CONCURRENCY = 5;
-const seriesById = new Map(FRED_SERIES.map((series) => [series.id, series]));
-const categoryIds = new Set(FRED_CATEGORIES.map((category) => category.id));
+export const FRED_CONCURRENCY = 5;
+const MAX_INTERNAL_SERIES = 40;
+
+export const DEFAULT_DASHBOARD_SERIES = [
+  'CPIAUCSL',
+  'CPILFESL',
+  'PCEPI',
+  'PCEPILFE',
+  'UNRATE',
+  'PAYEMS',
+  'FEDFUNDS',
+  'DGS2',
+  'DGS10',
+  'T10Y2Y',
+  'DTWEXBGS',
+  'VIXCLS',
+] as const;
+
+const seriesById = new Map<string, FredSeriesDefinition>(FRED_SERIES.map((item) => [item.id, item]));
+const categoryIds = new Set(FRED_CATEGORIES.map((item) => item.id));
 
 function cleanNumber(value: string): number | null {
   if (!value || value === '.') return null;
@@ -180,13 +192,13 @@ export function resolveFredSeries(options: {
   query?: string;
   limit?: number;
 } = {}): FredSeriesDefinition[] {
-  const limit = Math.min(Math.max(Number(options.limit || 12), 1), MAX_SERIES_PER_REQUEST);
+  const limit = Math.min(Math.max(Number(options.limit ?? MAX_SERIES_PER_REQUEST), 1), MAX_SERIES_PER_REQUEST);
 
   if (options.requested?.length) {
-    const requested = options.requested.map((id) => id.trim().toUpperCase()).filter(Boolean);
-    const unknown = requested.filter((id) => !seriesById.has(id));
-    if (unknown.length) throw new Error(`Unknown or unsupported FRED series: ${unknown.join(', ')}`);
-    return requested.slice(0, MAX_SERIES_PER_REQUEST).map((id) => seriesById.get(id)!);
+    const unique = [...new Set(options.requested.map((id) => id.trim().toUpperCase()).filter(Boolean))];
+    const invalid = unique.filter((id) => !seriesById.has(id));
+    if (invalid.length) throw new Error(`Unknown or disallowed FRED series: ${invalid.join(', ')}`);
+    return unique.slice(0, limit).map((id) => seriesById.get(id)!);
   }
 
   if (options.category && !categoryIds.has(options.category)) {
@@ -239,16 +251,27 @@ async function fetchFredSeries(env: Env, series: FredSeriesDefinition): Promise<
   };
 }
 
-export async function getFredSeries(env: Env, requestedIds?: string[]): Promise<MacroObservation[]> {
-  if (!env.FRED_API_KEY) throw new Error('FRED_API_KEY is not configured');
-
-  const selected = resolveFredSeries({ requested: requestedIds, limit: MAX_SERIES_PER_REQUEST });
+async function fetchSelectedFredSeries(env: Env, selected: FredSeriesDefinition[]): Promise<MacroObservation[]> {
   const results: MacroObservation[] = [];
-
   for (let index = 0; index < selected.length; index += FRED_CONCURRENCY) {
     const batch = selected.slice(index, index + FRED_CONCURRENCY);
     results.push(...await Promise.all(batch.map((series) => fetchFredSeries(env, series))));
   }
-
   return results;
+}
+
+export async function getFredSeries(env: Env, requestedIds?: string[]): Promise<MacroObservation[]> {
+  if (!env.FRED_API_KEY) throw new Error('FRED_API_KEY is not configured');
+  const selected = resolveFredSeries({ requested: requestedIds, limit: MAX_SERIES_PER_REQUEST });
+  return fetchSelectedFredSeries(env, selected);
+}
+
+export async function getFredInternalSeries(env: Env, requestedIds: string[]): Promise<MacroObservation[]> {
+  if (!env.FRED_API_KEY) throw new Error('FRED_API_KEY is not configured');
+  const unique = [...new Set(requestedIds.map((id) => id.trim().toUpperCase()).filter(Boolean))];
+  if (unique.length > MAX_INTERNAL_SERIES) throw new Error(`Internal FRED request exceeds ${MAX_INTERNAL_SERIES} series safety cap`);
+  const invalid = unique.filter((id) => !seriesById.has(id));
+  if (invalid.length) throw new Error(`Unknown or disallowed FRED series: ${invalid.join(', ')}`);
+  const selected = unique.map((id) => seriesById.get(id)!);
+  return fetchSelectedFredSeries(env, selected);
 }
