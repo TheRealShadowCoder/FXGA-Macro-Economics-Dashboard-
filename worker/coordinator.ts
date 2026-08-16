@@ -43,8 +43,18 @@ export class FxgaCoordinator extends DurableObject<Env> {
   }
 
   private async schedulerView(bootstrap = false) {
-    const scheduler = await getSchedulerView(this.env, this.ctx.storage, bootstrap);
-    const calendarSourceStatus = await getCalendarSourceStatus(this.ctx.storage);
+    let scheduler = await getSchedulerView(this.env, this.ctx.storage, bootstrap);
+    let calendarSourceStatus = await getCalendarSourceStatus(this.ctx.storage);
+
+    // Older v2 scheduler state may predate per-source status persistence. Bootstrap
+    // requests perform one safe resync to initialize that metadata, then normal reads
+    // return to the event-driven/no-polling path.
+    if (bootstrap && scheduler.initialized && !calendarSourceStatus) {
+      try { await syncCalendarSchedule(this.env, this.ctx.storage); } catch { /* source status is persisted even when all sources fail */ }
+      scheduler = await getSchedulerView(this.env, this.ctx.storage, false);
+      calendarSourceStatus = await getCalendarSourceStatus(this.ctx.storage);
+    }
+
     return { ...scheduler, calendarSourceStatus };
   }
 

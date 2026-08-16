@@ -47,7 +47,6 @@ jobs:
         run: |
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
-
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
           async function getJson(path) {
@@ -61,7 +60,7 @@ jobs:
           for (let attempt = 1; attempt <= 8; attempt += 1) {
             try {
               health = await getJson('/api/health');
-              if (health?.configured?.fred && health?.configured?.browserRun && health?.configured?.durableCoordinator) break;
+              if (health?.configured?.fred && health?.configured?.browserRun && health?.configured?.durableCoordinator && health?.configured?.calendarScraping) break;
             } catch (error) {
               if (attempt === 8) throw error;
             }
@@ -71,17 +70,17 @@ jobs:
           if (!health?.configured?.fred) throw new Error('Live Worker does not report FRED as configured after rollout polling');
           if (!health?.configured?.browserRun) throw new Error('Browser Run binding is not live after rollout polling');
           if (!health?.configured?.durableCoordinator) throw new Error('Durable Object coordinator is not live after rollout polling');
+          if (!health?.configured?.calendarScraping) throw new Error('Scraped calendar mode is not enabled');
+          if (!Array.isArray(health?.configured?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => health.configured.calendarSources.includes(name))) {
+            throw new Error('Expected Myfxbook, FXStreet and CNBC calendar source configuration');
+          }
           if (health?.safety?.workerSubrequestCeiling > 45) throw new Error('FXGA subrequest safety target exceeds 45');
           if (health?.safety?.collectorMaxConcurrentConnections > 5) throw new Error('FXGA collector concurrency exceeds five connections');
           if (health?.safety?.browserSoftBudgetSecondsPerUtcDay > 480) throw new Error('FXGA browser budget exceeds 480 seconds/day');
 
           const catalog = await getJson('/api/fred/catalog');
-          if (!Array.isArray(catalog?.series) || catalog.series.length < 90) {
-            throw new Error(`FRED catalog is unexpectedly small: ${catalog?.series?.length ?? 0}`);
-          }
-          if (!Array.isArray(catalog?.categories) || catalog.categories.length < 17) {
-            throw new Error(`FRED category catalog is unexpectedly small: ${catalog?.categories?.length ?? 0}`);
-          }
+          if (!Array.isArray(catalog?.series) || catalog.series.length < 90) throw new Error(`FRED catalog is unexpectedly small: ${catalog?.series?.length ?? 0}`);
+          if (!Array.isArray(catalog?.categories) || catalog.categories.length < 17) throw new Error(`FRED category catalog is unexpectedly small: ${catalog?.categories?.length ?? 0}`);
 
           const sampleCategories = [
             'inflation', 'labour', 'growth', 'liquidity', 'credit', 'housing',
@@ -89,26 +88,41 @@ jobs:
             'recession-risk', 'financial-conditions', 'usd-fx', 'volatility',
             'consumption', 'business-activity', 'leading-indicators',
           ];
-
           for (const category of sampleCategories) {
             const payload = await getJson(`/api/fred?category=${encodeURIComponent(category)}&limit=1`);
             const first = payload?.series?.[0];
-            if (!first || first.value === null || !first.date) {
-              throw new Error(`Live FRED category ${category} returned no current observation`);
-            }
+            if (!first || first.value === null || !first.date) throw new Error(`Live FRED category ${category} returned no current observation`);
           }
 
           const analysis = await getJson('/api/analysis');
-          if (!analysis?.regime?.name || !Array.isArray(analysis?.dimensions) || analysis.dimensions.length < 7) {
-            throw new Error('Macro analysis endpoint is incomplete');
+          if (!analysis?.regime?.name || !Array.isArray(analysis?.dimensions) || analysis.dimensions.length < 7) throw new Error('Macro analysis endpoint is incomplete');
+          if (!Array.isArray(analysis?.assets) || analysis.assets.length < 4 || analysis?.coverage?.observed < 20) throw new Error('Macro analysis coverage is unexpectedly low');
+
+          const releaseState = await getJson('/api/release-state');
+          if (!releaseState?.initialized) throw new Error('Event-driven release scheduler is not initialized');
+          if (releaseState?.mode !== 'scraped-calendar-consensus') throw new Error(`Unexpected calendar scheduler mode: ${releaseState?.mode}`);
+          if (!Array.isArray(releaseState?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => releaseState.calendarSources.includes(name))) {
+            throw new Error('Release scheduler does not advertise all three requested calendar sources');
           }
-          if (!Array.isArray(analysis?.assets) || analysis.assets.length < 4 || analysis?.coverage?.observed < 20) {
-            throw new Error('Macro analysis coverage is unexpectedly low');
+          const sourceStatus = releaseState?.calendarSourceStatus;
+          if (!sourceStatus?.sources?.myfxbook || !sourceStatus?.sources?.fxstreet || !sourceStatus?.sources?.cnbc) {
+            throw new Error('Per-source calendar scrape status is incomplete');
           }
+          if (!(sourceStatus.sources.myfxbook.ok || sourceStatus.sources.fxstreet.ok)) {
+            throw new Error(`Neither primary calendar source returned events: ${JSON.stringify(sourceStatus.sources)}`);
+          }
+          if (!(sourceStatus.mergedEvents > 0)) throw new Error('Scraped calendar consensus produced no merged events');
+
+          const calendar = await getJson('/api/calendar?days=7&importance=1');
+          if (!Array.isArray(calendar?.events) || calendar.events.length < 1) throw new Error('Cached scraped economic calendar returned no upcoming events');
+          if (calendar?.mode !== 'scraped-calendar-consensus') throw new Error('Public calendar endpoint is not serving scraped consensus state');
 
           const acquisition = await getJson('/api/acquisition/catalog');
           if (!Array.isArray(acquisition?.methods) || acquisition.methods.length < 10) throw new Error('Acquisition method stack is incomplete');
-          if (!Array.isArray(acquisition?.sources) || acquisition.sources.length < 10) throw new Error('Acquisition source registry is incomplete');
+          const requiredSources = ['myfxbook-calendar', 'fxstreet-calendar', 'cnbc-economy'];
+          if (!Array.isArray(acquisition?.sources) || !requiredSources.every((id) => acquisition.sources.some((source) => source.id === id))) {
+            throw new Error('Acquisition source registry is missing one of the requested calendar scrapers');
+          }
           if (acquisition?.limits?.externalSubrequestsPerInvocation > 45) throw new Error('Acquisition subrequest guard exceeds safety target');
           if (acquisition?.limits?.collectorMaxConcurrentConnections > 5) throw new Error('Acquisition connection guard exceeds five');
           if (acquisition?.status?.browserBudget?.softLimitSeconds > 480) throw new Error('Browser Run safety budget exceeds 480 seconds/day');
@@ -120,15 +134,11 @@ jobs:
             ws.addEventListener('message', (event) => {
               try {
                 const payload = JSON.parse(String(event.data));
-                if (payload?.type === 'connected') {
-                  clearTimeout(timer);
-                  ws.close(1000, 'CI verification complete');
-                  resolve();
-                }
+                if (payload?.type === 'connected') { clearTimeout(timer); ws.close(1000, 'CI verification complete'); resolve(); }
               } catch {}
             });
             ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket verification failed')); });
           });
 
-          console.log(`FXGA live verification passed: ${catalog.total} FRED series, ${analysis.regime.name}, ${acquisition.methods.length} acquisition methods.`);
+          console.log(`FXGA verification passed: ${catalog.total} FRED series, ${calendar.events.length} cached calendar events, calendar sources=${JSON.stringify(sourceStatus.sources)}.`);
           NODE
