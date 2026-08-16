@@ -4,6 +4,7 @@ import type { CalendarEvent, Env } from '../types';
 
 const MAJOR_CURRENCIES = ['AUD', 'CAD', 'CHF', 'CNY', 'EUR', 'GBP', 'JPY', 'NZD', 'USD', 'ZAR'];
 const SOURCE_PRIORITY: ScrapedEvent['provider'][] = ['myfxbook', 'fxstreet', 'cnbc'];
+const SOURCE_STATUS_KEY = 'calendar:scrape-source-status:v1';
 
 interface ScrapedEvent extends CalendarEvent {
   provider: 'myfxbook' | 'fxstreet' | 'cnbc';
@@ -18,6 +19,19 @@ interface AcquisitionDocument {
   fetchedAt?: string;
   browserUsed?: boolean;
   warnings?: string[];
+}
+
+export interface CalendarSourceStatus {
+  syncedAt: string;
+  horizonDays: number;
+  sources: Record<string, {
+    name: string;
+    ok: boolean;
+    events: number;
+    error?: string;
+  }>;
+  rawEvents: number;
+  mergedEvents: number;
 }
 
 function csvRows(text: string): string[][] {
@@ -56,10 +70,35 @@ function normalizeTitle(value: string): string {
   return value
     .toLowerCase()
     .replace(/&/g, ' and ')
-    .replace(/\b(final|preliminary|prelim|flash)\b/g, '')
+    .replace(/\bconsumer price index\b/g, 'cpi')
+    .replace(/\bproducer price index\b/g, 'ppi')
+    .replace(/\bgross domestic product\b/g, 'gdp')
+    .replace(/\bnon[- ]?farm payrolls?\b/g, 'nfp')
+    .replace(/\bpurchasing managers'? index\b/g, 'pmi')
+    .replace(/\b(final|preliminary|prelim|flash|seasonally adjusted)\b/g, '')
+    .replace(/\bmonth[- ]on[- ]month\b/g, 'mom')
+    .replace(/\byear[- ]on[- ]year\b/g, 'yoy')
     .replace(/[^a-z0-9%]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function tokenSimilarity(a: string, b: string): number {
+  const left = new Set(normalizeTitle(a).split(' ').filter(Boolean));
+  const right = new Set(normalizeTitle(b).split(' ').filter(Boolean));
+  if (!left.size || !right.size) return 0;
+  let intersection = 0;
+  for (const token of left) if (right.has(token)) intersection += 1;
+  const union = new Set([...left, ...right]).size;
+  return union ? intersection / union : 0;
+}
+
+function titlesEquivalent(a: string, b: string): boolean {
+  const aa = normalizeTitle(a);
+  const bb = normalizeTitle(b);
+  if (aa === bb) return true;
+  if (aa.length >= 8 && bb.length >= 8 && (aa.includes(bb) || bb.includes(aa))) return true;
+  return tokenSimilarity(aa, bb) >= 0.78;
 }
 
 function stableHash(value: string): string {
@@ -197,7 +236,7 @@ async function scrapeMyfxbook(env: Env, storage: DurableObjectStorage, from: Dat
       }
     }
   } catch {
-    // Fall through to the public HTML table extraction path.
+    // Fall through to public HTML table extraction.
   }
 
   const source = getAcquisitionSource('myfxbook-calendar');
@@ -298,30 +337,36 @@ function parseCnbcText(document: AcquisitionDocument, from: Date, to: Date): Scr
 async function scrapeCnbc(env: Env, storage: DurableObjectStorage, from: Date, to: Date): Promise<ScrapedEvent[]> {
   const source = getAcquisitionSource('cnbc-economy');
   if (!source) return [];
-  try {
-    const document = await acquireSource(env, storage, source) as AcquisitionDocument;
-    return parseCnbcText(document, from, to);
-  } catch {
-    return [];
-  }
+  const document = await acquireSource(env, storage, source) as AcquisitionDocument;
+  return parseCnbcText(document, from, to);
+}
+
+function sameConsensusGroup(a: ScrapedEvent, b: ScrapedEvent): boolean {
+  if (a.currency !== b.currency) return false;
+  const timeDiff = Math.abs(Date.parse(a.date) - Date.parse(b.date));
+  if (!Number.isFinite(timeDiff) || timeDiff > 90_000) return false;
+  return titlesEquivalent(a.event, b.event);
 }
 
 function mergeEvents(events: ScrapedEvent[]): CalendarEvent[] {
-  const groups = new Map<string, ScrapedEvent[]>();
-  for (const event of events) {
-    const key = canonicalKey(event);
-    const group = groups.get(key) ?? [];
-    group.push(event);
-    groups.set(key, group);
+  const groups: ScrapedEvent[][] = [];
+  const ordered = [...events].sort((a, b) => Date.parse(a.date) - Date.parse(b.date) || SOURCE_PRIORITY.indexOf(a.provider) - SOURCE_PRIORITY.indexOf(b.provider));
+
+  for (const event of ordered) {
+    const group = groups.find((candidate) => candidate.some((member) => sameConsensusGroup(member, event)));
+    if (group) group.push(event);
+    else groups.push([event]);
   }
 
   const merged: CalendarEvent[] = [];
-  for (const [key, group] of groups.entries()) {
+  for (const group of groups) {
     group.sort((a, b) => SOURCE_PRIORITY.indexOf(a.provider) - SOURCE_PRIORITY.indexOf(b.provider));
     const primary = group[0];
     if (!primary) continue;
     const providers = [...new Set(group.map((item) => item.provider))];
     const first = (field: keyof CalendarEvent) => clean(group.find((item) => clean(item[field]))?.[field]);
+    const confidence = Math.min(100, 55 + (providers.includes('myfxbook') ? 20 : 0) + (providers.includes('fxstreet') ? 20 : 0) + (providers.includes('cnbc') ? 5 : 0));
+    const key = canonicalKey(primary);
     merged.push({
       ...primary,
       id: `fxga-cal-${stableHash(key)}`,
@@ -331,27 +376,62 @@ function mergeEvents(events: ScrapedEvent[]): CalendarEvent[] {
       revised: first('revised'),
       importance: Math.max(...group.map((item) => item.importance)),
       source: `FXGA Calendar Consensus: ${providers.map((provider) => provider === 'myfxbook' ? 'Myfxbook' : provider === 'fxstreet' ? 'FXStreet' : 'CNBC').join(' + ')}`,
+      providers,
+      sourceCount: providers.length,
+      confidence,
+      canonicalKey: key,
       lastUpdate: new Date().toISOString(),
     });
   }
   return merged.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
 }
 
+function sourceError(reason: unknown): string {
+  return reason instanceof Error ? reason.message.slice(0, 300) : String(reason ?? 'Unknown scrape failure').slice(0, 300);
+}
+
+export async function getCalendarSourceStatus(storage: DurableObjectStorage): Promise<CalendarSourceStatus | null> {
+  return (await storage.get<CalendarSourceStatus>(SOURCE_STATUS_KEY)) ?? null;
+}
+
 export async function getScrapedEconomicCalendar(env: Env, storage: DurableObjectStorage, days = 14): Promise<CalendarEvent[]> {
+  const horizonDays = Math.min(Math.max(days, 1), 21);
   const from = new Date();
   from.setUTCHours(0, 0, 0, 0);
   const to = new Date(from);
-  to.setUTCDate(to.getUTCDate() + Math.min(Math.max(days, 1), 21));
+  to.setUTCDate(to.getUTCDate() + horizonDays);
   to.setUTCHours(23, 59, 59, 999);
 
-  const results = await Promise.allSettled([
-    scrapeMyfxbook(env, storage, from, to),
-    scrapeFxstreet(env, storage),
-    scrapeCnbc(env, storage, from, to),
-  ]);
+  const definitions = [
+    { id: 'myfxbook', name: 'Myfxbook', task: scrapeMyfxbook(env, storage, from, to) },
+    { id: 'fxstreet', name: 'FXStreet', task: scrapeFxstreet(env, storage) },
+    { id: 'cnbc', name: 'CNBC', task: scrapeCnbc(env, storage, from, to) },
+  ];
+  const results = await Promise.allSettled(definitions.map((definition) => definition.task));
   const events: ScrapedEvent[] = [];
-  for (const result of results) {
-    if (result.status === 'fulfilled') events.push(...result.value);
+  const sourceStatus: CalendarSourceStatus = {
+    syncedAt: new Date().toISOString(),
+    horizonDays,
+    sources: {},
+    rawEvents: 0,
+    mergedEvents: 0,
+  };
+
+  for (let index = 0; index < results.length; index += 1) {
+    const definition = definitions[index];
+    const result = results[index];
+    if (!definition || !result) continue;
+    if (result.status === 'fulfilled') {
+      events.push(...result.value);
+      sourceStatus.sources[definition.id] = {
+        name: definition.name,
+        ok: result.value.length > 0,
+        events: result.value.length,
+        ...(result.value.length ? {} : { error: 'No parseable calendar events returned.' }),
+      };
+    } else {
+      sourceStatus.sources[definition.id] = { name: definition.name, ok: false, events: 0, error: sourceError(result.reason) };
+    }
   }
 
   const filtered = events.filter((event) => {
@@ -359,6 +439,10 @@ export async function getScrapedEconomicCalendar(env: Env, storage: DurableObjec
     return Number.isFinite(time) && time >= from.getTime() - 10 * 60_000 && time <= to.getTime();
   });
   const merged = mergeEvents(filtered);
+  sourceStatus.rawEvents = filtered.length;
+  sourceStatus.mergedEvents = merged.length;
+  await storage.put(SOURCE_STATUS_KEY, sourceStatus);
+
   if (!merged.length) throw new Error('All scraped economic calendar sources returned no parseable events');
   return merged;
 }
@@ -373,13 +457,11 @@ export async function refreshScrapedReleaseWindow(env: Env, storage: DurableObje
   const merged = mergeEvents(myfxbook);
 
   return scheduled.map((event) => {
-    const key = canonicalKey(event);
-    const exact = merged.find((candidate) => canonicalKey(candidate) === key);
+    const exact = merged.find((candidate) => canonicalKey(candidate) === canonicalKey(event));
     if (exact) return { ...event, ...exact, id: event.id, source: event.source };
-    const title = normalizeTitle(event.event);
     const near = merged.find((candidate) => candidate.currency === event.currency
       && Math.abs(Date.parse(candidate.date) - Date.parse(event.date)) <= 2 * 60_000
-      && normalizeTitle(candidate.event) === title);
+      && titlesEquivalent(candidate.event, event.event));
     return near ? { ...event, ...near, id: event.id, source: event.source } : event;
   });
 }
