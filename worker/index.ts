@@ -7,6 +7,7 @@ import type { Env, MacroObservation } from './types';
 
 export { FxgaCoordinator };
 
+const CALENDAR_ENGINE_VERSION = 'scraped-consensus-v3';
 const securityHeaders = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
@@ -43,7 +44,7 @@ async function cached(request: Request, env: Env, handler: () => Promise<Respons
 }
 
 function coordinator(env: Env) {
-  return env.FXGA_COORDINATOR.getByName('global');
+  return env.FXGA_COORDINATOR.getByName('global-calendar-v3');
 }
 
 async function getSchedulerState(env: Env, bootstrap = false) {
@@ -122,6 +123,7 @@ export default {
         return json({
           ok: true,
           app: env.APP_NAME || 'FXGA Macro Intelligence',
+          calendarEngineVersion: CALENDAR_ENGINE_VERSION,
           timestamp: new Date().toISOString(),
           configured: {
             fred: Boolean(env.FRED_API_KEY),
