@@ -1,6 +1,8 @@
 import { RSS_SOURCES } from '../sources';
 import type { NewsItem } from '../types';
 
+const MAX_CONCURRENT_FEEDS = 5;
+
 function decode(value: string): string {
   return value
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
@@ -38,40 +40,45 @@ function stableId(value: string): string {
   return (hash >>> 0).toString(16);
 }
 
+async function fetchFeed(source: (typeof RSS_SOURCES)[number]): Promise<NewsItem[]> {
+  const response = await fetch(source.url, {
+    headers: { 'User-Agent': 'FXGA-Macro-Intelligence/1.0', Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' },
+  });
+  if (!response.ok) throw new Error(`${source.name} returned ${response.status}`);
+  const xml = await response.text();
+  const blocks = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map((match) => match[2]);
+  return blocks.slice(0, 20).map((block) => {
+    const title = tag(block, ['title']) || 'Untitled update';
+    const itemLink = link(block);
+    const publishedAt = tag(block, ['pubDate', 'published', 'updated', 'dc:date']);
+    const summary = tag(block, ['description', 'summary', 'content:encoded', 'content']);
+    return {
+      id: `${source.id}-${stableId(`${title}|${itemLink}|${publishedAt}`)}`,
+      sourceId: source.id,
+      sourceName: source.name,
+      title,
+      link: itemLink,
+      publishedAt,
+      summary: summary.slice(0, 360),
+      category: source.category,
+      region: source.region,
+    } satisfies NewsItem;
+  });
+}
+
 export async function getOfficialNews(sourceId?: string): Promise<NewsItem[]> {
-  const selected = sourceId ? RSS_SOURCES.filter((source) => source.id === sourceId) : RSS_SOURCES;
+  const selected = sourceId ? RSS_SOURCES.filter((source) => source.id === sourceId) : [...RSS_SOURCES];
   if (!selected.length) throw new Error('Unknown news source');
 
-  const settled = await Promise.allSettled(selected.map(async (source) => {
-    const response = await fetch(source.url, {
-      headers: { 'User-Agent': 'FXGA-Macro-Intelligence/1.0', Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' },
-    });
-    if (!response.ok) throw new Error(`${source.name} returned ${response.status}`);
-    const xml = await response.text();
-    const blocks = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map((match) => match[2]);
-    return blocks.slice(0, 20).map((block) => {
-      const title = tag(block, ['title']) || 'Untitled update';
-      const itemLink = link(block);
-      const publishedAt = tag(block, ['pubDate', 'published', 'updated', 'dc:date']);
-      const summary = tag(block, ['description', 'summary', 'content:encoded', 'content']);
-      return {
-        id: `${source.id}-${stableId(`${title}|${itemLink}|${publishedAt}`)}`,
-        sourceId: source.id,
-        sourceName: source.name,
-        title,
-        link: itemLink,
-        publishedAt,
-        summary: summary.slice(0, 360),
-        category: source.category,
-        region: source.region,
-      } satisfies NewsItem;
-    });
-  }));
-
   const batches: NewsItem[][] = [];
-  for (const result of settled) {
-    if (result.status === 'fulfilled') batches.push(result.value as NewsItem[]);
+  for (let index = 0; index < selected.length; index += MAX_CONCURRENT_FEEDS) {
+    const group = selected.slice(index, index + MAX_CONCURRENT_FEEDS);
+    const settled = await Promise.allSettled(group.map(fetchFeed));
+    for (const result of settled) {
+      if (result.status === 'fulfilled') batches.push(result.value);
+    }
   }
+
   if (!batches.length) throw new Error('All selected official feeds failed');
 
   return batches.flat().sort((a, b) => {
