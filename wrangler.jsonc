@@ -26,6 +26,9 @@
       "new_sqlite_classes": ["FxgaCoordinator"]
     }
   ],
+  "triggers": {
+    "crons": ["5 0 * * *"]
+  },
   "observability": {
     "enabled": true
   },
