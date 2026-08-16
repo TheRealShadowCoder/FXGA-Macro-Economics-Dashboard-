@@ -6,7 +6,7 @@ import type { Env } from '../types';
 const DAILY_SOFT_CAP_SECONDS = 480;
 const RESERVATION_SECONDS = 45;
 const MIN_LAUNCH_GAP_MS = 22_000;
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const DOCUMENT_TTL_MS = 6 * 60 * 60 * 1000;
 
 export interface RenderedCalendarDocument {
@@ -47,6 +47,73 @@ function documentKey(sourceId: string) {
 
 function debugKey(sourceId: string) {
   return `calendar-browser-debug:${sourceId}`;
+}
+
+function closestYearDate(month: number, day: number, hour: number, minute: number) {
+  const now = Date.now();
+  const year = new Date(now).getUTCFullYear();
+  const candidates = [year - 1, year, year + 1].map((candidateYear) => new Date(Date.UTC(candidateYear, month, day, hour, minute)));
+  candidates.sort((a, b) => Math.abs(a.getTime() - now) - Math.abs(b.getTime() - now));
+  return candidates[0];
+}
+
+function parseFxstreetRenderedText(text: string) {
+  const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+  const events: Array<Record<string, unknown>> = [];
+  let month = -1;
+  let day = -1;
+
+  for (const rawBlock of text.split(/\n{2,}/)) {
+    const block = rawBlock.trim();
+    if (!block) continue;
+
+    const heading = block.match(/^(?:MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY),\s+([A-Z]+)\s+(\d{1,2})$/i);
+    if (heading) {
+      month = months.indexOf(heading[1].toLowerCase());
+      day = Number(heading[2]);
+      continue;
+    }
+    if (month < 0 || day < 1) continue;
+
+    const tokens = block
+      .split(/[\t\n]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (tokens.length < 3) continue;
+
+    const timeIndex = tokens.findIndex((value) => /^\d{1,2}:\d{2}\s*(?:AM|PM)$/i.test(value));
+    if (timeIndex < 0) continue;
+    const currency = tokens[timeIndex + 1];
+    const name = tokens[timeIndex + 2];
+    if (!/^[A-Z]{3}$/.test(currency ?? '') || !name) continue;
+
+    const time = tokens[timeIndex].match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (!time) continue;
+    let hour = Number(time[1]);
+    const minute = Number(time[2]);
+    const period = time[3].toUpperCase();
+    if (period === 'AM' && hour === 12) hour = 0;
+    else if (period === 'PM' && hour !== 12) hour += 12;
+    const date = closestYearDate(month, day, hour, minute);
+
+    const values = tokens.slice(timeIndex + 3);
+    const actual = values[0] && values[0] !== '-' ? values[0] : undefined;
+    const consensus = values[2] && values[2] !== '-' ? values[2] : undefined;
+    const previous = values[3] && values[3] !== '-' ? values[3] : undefined;
+
+    events.push({
+      dateUtc: date.toISOString(),
+      name,
+      currency,
+      actual,
+      consensus,
+      previous,
+      impact: 1,
+      source: 'FXStreet rendered calendar',
+    });
+  }
+
+  return events;
 }
 
 async function cachedDocument(storage: DurableObjectStorage, sourceId: string) {
@@ -134,7 +201,12 @@ async function renderPage(
     const html = await page.content();
     const bodyText = await page.evaluate(() => document.body?.innerText ?? '');
     const extracted = await extractDocument(html.slice(0, 2_000_000), source.url, bodyText.slice(0, 150_000));
-    const embeddedJson = [...extracted.embeddedJson, ...captured];
+    const renderedEvents = sourceId === 'fxstreet-calendar' ? parseFxstreetRenderedText(extracted.text) : [];
+    const embeddedJson = [
+      ...extracted.embeddedJson,
+      ...(renderedEvents.length ? [{ kind: 'fxstreet-rendered-text-events', value: renderedEvents }] : []),
+      ...captured,
+    ];
 
     return {
       sourceId,
@@ -164,6 +236,9 @@ async function persistDebug(storage: DurableObjectStorage, sourceId: string, doc
     tables: document.extraction.tables,
     embeddedPayloads: document.extraction.embeddedPayloads,
     embeddedKinds: document.embeddedJson.map((payload) => payload.kind).slice(0, 30),
+    renderedEventCount: document.embeddedJson.find((payload) => payload.kind === 'fxstreet-rendered-text-events' && Array.isArray(payload.value))
+      ? (document.embeddedJson.find((payload) => payload.kind === 'fxstreet-rendered-text-events')!.value as unknown[]).length
+      : 0,
     networkTrace: document.networkTrace.slice(0, 60),
   } : {
     fetchedAt: new Date().toISOString(),
