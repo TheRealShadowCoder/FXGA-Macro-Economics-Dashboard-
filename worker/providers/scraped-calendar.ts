@@ -322,7 +322,6 @@ function mergeEvents(events: ScrapedEvent[]): CalendarEvent[] {
     if (!primary) continue;
     const providers = [...new Set(group.map((item) => item.provider))];
     const first = (field: keyof CalendarEvent) => clean(group.find((item) => clean(item[field]))?.[field]);
-    const confidence = Math.min(1, 0.55 + (providers.includes('myfxbook') ? 0.2 : 0) + (providers.includes('fxstreet') ? 0.2 : 0) + (providers.includes('cnbc') ? 0.05 : 0));
     merged.push({
       ...primary,
       id: `fxga-cal-${stableHash(key)}`,
@@ -345,7 +344,7 @@ export async function getScrapedEconomicCalendar(env: Env, storage: DurableObjec
   to.setUTCDate(to.getUTCDate() + Math.min(Math.max(days, 1), 21));
   to.setUTCHours(23, 59, 59, 999);
 
-  const results = await Promise.allSettled<[ScrapedEvent[], ScrapedEvent[], ScrapedEvent[]]>([
+  const results = await Promise.allSettled([
     scrapeMyfxbook(env, storage, from, to),
     scrapeFxstreet(env, storage),
     scrapeCnbc(env, storage, from, to),
