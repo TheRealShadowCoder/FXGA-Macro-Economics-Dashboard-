@@ -29,7 +29,8 @@ jobs:
           if [ -n "$FRED_API_KEY" ]; then
             printf '%s' "$FRED_API_KEY" | npx wrangler secret put FRED_API_KEY
           else
-            echo "::warning::FRED_API_KEY repository secret is not configured; FRED collection will remain disabled."
+            echo "::error::FRED_API_KEY repository secret is not configured."
+            exit 1
           fi
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4
@@ -38,3 +39,40 @@ jobs:
           accountId: 4f260a0775a3df407e08512610c9898b
           wranglerVersion: '4.118.0'
           command: deploy
+      - name: Verify live FRED collector
+        run: |
+          node <<'NODE'
+          const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+
+          async function getJson(path) {
+            const response = await fetch(`${base}${path}`, {
+              headers: { Accept: 'application/json' },
+            });
+            const text = await response.text();
+            if (!response.ok) {
+              throw new Error(`${path} returned ${response.status}: ${text.slice(0, 500)}`);
+            }
+            try {
+              return JSON.parse(text);
+            } catch {
+              throw new Error(`${path} did not return valid JSON`);
+            }
+          }
+
+          const health = await getJson('/api/health');
+          if (!health?.configured?.fred) {
+            throw new Error('Live Worker does not report FRED as configured');
+          }
+
+          const fred = await getJson('/api/fred?series=FEDFUNDS');
+          if (!Array.isArray(fred?.series) || fred.series.length < 1) {
+            throw new Error('Live FRED endpoint returned no series');
+          }
+
+          const series = fred.series[0];
+          if (series.seriesId !== 'FEDFUNDS' || series.value === null || !series.date) {
+            throw new Error(`FEDFUNDS response is incomplete: ${JSON.stringify(series)}`);
+          }
+
+          console.log(`FRED live verification passed: ${series.seriesId}=${series.value} as of ${series.date}`);
+          NODE
