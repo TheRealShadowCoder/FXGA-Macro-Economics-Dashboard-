@@ -3,16 +3,38 @@
   "name": "fxga-macro-intelligence-dashboard",
   "account_id": "4f260a0775a3df407e08512610c9898b",
   "compatibility_date": "2026-08-16",
+  "compatibility_flags": ["nodejs_compat"],
   "main": "./worker/index.ts",
   "workers_dev": true,
   "assets": {
     "not_found_handling": "single-page-application"
+  },
+  "browser": {
+    "binding": "BROWSER"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FXGA_COORDINATOR",
+        "class_name": "FxgaCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["FxgaCoordinator"]
+    }
+  ],
+  "limits": {
+    "subrequests": 45
   },
   "observability": {
     "enabled": true
   },
   "vars": {
     "APP_NAME": "FXGA Macro Intelligence",
-    "CACHE_TTL_SECONDS": "300"
+    "CACHE_TTL_SECONDS": "300",
+    "BROWSER_SOFT_BUDGET_SECONDS": "480"
   }
 }
