@@ -121,6 +121,15 @@ function parseDate(value: string, fallbackYear = new Date().getUTCFullYear()): s
   const trimmed = value.trim();
   const direct = Date.parse(trimmed);
   if (Number.isFinite(direct)) return new Date(direct).toISOString();
+
+  // Myfxbook CSV format: "2026, August 17, 12:30"
+  const myfx = trimmed.match(/^(\d{4}),\s*([A-Za-z]+)\s+(\d{1,2}),\s*([0-2]?\d):([0-5]\d)$/i);
+  if (myfx) {
+    const month = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+      .indexOf(myfx[2].toLowerCase());
+    if (month >= 0) return new Date(Date.UTC(Number(myfx[1]), month, Number(myfx[3]), Number(myfx[4]), Number(myfx[5]))).toISOString();
+  }
+
   const match = trimmed.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?\w*,?\s*([A-Za-z]{3})\s+(\d{1,2})(?:,\s*(\d{4}))?[, ]+([0-2]?\d):([0-5]\d)/i)
     ?? trimmed.match(/([A-Za-z]{3})\s+(\d{1,2})(?:,\s*(\d{4}))?[, ]+([0-2]?\d):([0-5]\d)/i);
   if (!match) return null;
@@ -181,7 +190,66 @@ function tableEvents(document: AcquisitionDocument, provider: ScrapedEvent['prov
   return events;
 }
 
-async function scrapeMyfxbook(env: Env, storage: DurableObjectStorage, from: Date, to: Date): Promise<ScrapedEvent[]> {
+function myfxbookPreferenceHeaders(): Headers {
+  const loggedOffCalendar = encodeURIComponent(JSON.stringify({
+    importances: [3, 2, 1, 0],
+    countries: [],
+    currencies: MAJOR_CURRENCIES,
+  }));
+  return new Headers({
+    Accept: 'text/csv,text/plain;q=0.9,*/*;q=0.5',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'User-Agent': 'FXGA-Macro-Intelligence/1.0 (+public economic research collector)',
+    Referer: 'https://www.myfxbook.com/forex-economic-calendar',
+    Cookie: `timezone=0; locale=en; loggedOffCalendar=${loggedOffCalendar}`,
+  });
+}
+
+function parseMyfxbookCsv(text: string): ScrapedEvent[] {
+  const rows = csvRows(text);
+  if (rows.length <= 1) return [];
+  const header = rows[0].map((cell) => cell.trim().toLowerCase());
+  const indexOf = (names: string[]) => header.findIndex((cell) => names.some((name) => cell === name || cell.includes(name)));
+  const dateIdx = indexOf(['date']);
+  const currencyIdx = indexOf(['currency']);
+  const eventIdx = indexOf(['event', 'name']);
+  const impactIdx = indexOf(['impact']);
+  const previousIdx = indexOf(['previous']);
+  const consensusIdx = indexOf(['consensus', 'forecast']);
+  const actualIdx = indexOf(['actual']);
+  if (dateIdx < 0 || currencyIdx < 0 || eventIdx < 0) return [];
+
+  const parsed: ScrapedEvent[] = [];
+  for (const row of rows.slice(1)) {
+    const date = parseDate(row[dateIdx] ?? '');
+    const currency = clean(row[currencyIdx])?.toUpperCase();
+    const title = clean(row[eventIdx]);
+    if (!date || !currency || !title) continue;
+    parsed.push({
+      id: `myfxbook-${stableHash(`${date}|${currency}|${title}`)}`,
+      provider: 'myfxbook',
+      date,
+      country: currency,
+      currency,
+      event: title,
+      category: 'Economic Calendar',
+      importance: impactIdx >= 0 ? importance(row[impactIdx]) : 1,
+      previous: previousIdx >= 0 ? clean(row[previousIdx]) : undefined,
+      forecast: consensusIdx >= 0 ? clean(row[consensusIdx]) : undefined,
+      actual: actualIdx >= 0 ? clean(row[actualIdx]) : undefined,
+      source: 'Myfxbook',
+    });
+  }
+  return parsed;
+}
+
+async function scrapeMyfxbook(
+  env: Env,
+  storage: DurableObjectStorage,
+  from: Date,
+  to: Date,
+  allowRenderedFallback = true,
+): Promise<ScrapedEvent[]> {
   const start = from.toISOString().replace('T', ' ').replace('Z', '');
   const end = to.toISOString().replace('T', ' ').replace('Z', '');
   const filter = `0-1-2-3_${MAJOR_CURRENCIES.join('-')}`;
@@ -194,51 +262,19 @@ async function scrapeMyfxbook(env: Env, storage: DurableObjectStorage, from: Dat
 
   try {
     const response = await fetch(exportUrl, {
-      headers: { Accept: 'text/csv,text/plain;q=0.9,*/*;q=0.5', 'User-Agent': 'FXGA-Macro-Intelligence/1.0' },
+      headers: myfxbookPreferenceHeaders(),
+      redirect: 'follow',
     });
     if (response.ok) {
-      const rows = csvRows(await response.text());
-      if (rows.length > 1) {
-        const header = rows[0].map((cell) => cell.toLowerCase());
-        const idx = (names: string[]) => header.findIndex((cell) => names.some((name) => cell.includes(name)));
-        const dateIdx = idx(['date', 'time']);
-        const currencyIdx = idx(['currency']);
-        const eventIdx = idx(['event', 'name']);
-        const impactIdx = idx(['impact']);
-        const previousIdx = idx(['previous']);
-        const consensusIdx = idx(['consensus', 'forecast']);
-        const actualIdx = idx(['actual']);
-        const parsed: ScrapedEvent[] = [];
-
-        if (dateIdx >= 0 && currencyIdx >= 0 && eventIdx >= 0) {
-          for (const row of rows.slice(1)) {
-            const date = parseDate(row[dateIdx] ?? '');
-            const currency = clean(row[currencyIdx])?.toUpperCase();
-            const title = clean(row[eventIdx]);
-            if (!date || !currency || !title) continue;
-            parsed.push({
-              id: `myfxbook-${stableHash(`${date}|${currency}|${title}`)}`,
-              provider: 'myfxbook',
-              date,
-              country: currency,
-              currency,
-              event: title,
-              category: 'Economic Calendar',
-              importance: impactIdx >= 0 ? importance(row[impactIdx]) : 1,
-              previous: previousIdx >= 0 ? clean(row[previousIdx]) : undefined,
-              forecast: consensusIdx >= 0 ? clean(row[consensusIdx]) : undefined,
-              actual: actualIdx >= 0 ? clean(row[actualIdx]) : undefined,
-              source: 'Myfxbook',
-            });
-          }
-        }
-        if (parsed.length) return parsed;
-      }
+      const parsed = parseMyfxbookCsv(await response.text());
+      if (parsed.length) return parsed;
     }
   } catch {
-    // Fall through to public HTML table extraction.
+    // The daily schedule path can fall through to rendered public HTML. The rapid
+    // release-window path deliberately returns no update rather than launching Chromium.
   }
 
+  if (!allowRenderedFallback) return [];
   const source = getAcquisitionSource('myfxbook-calendar');
   if (!source) return [];
   const document = await acquireSource(env, storage, source) as AcquisitionDocument;
@@ -403,7 +439,7 @@ export async function getScrapedEconomicCalendar(env: Env, storage: DurableObjec
   to.setUTCHours(23, 59, 59, 999);
 
   const definitions = [
-    { id: 'myfxbook', name: 'Myfxbook', task: scrapeMyfxbook(env, storage, from, to) },
+    { id: 'myfxbook', name: 'Myfxbook', task: scrapeMyfxbook(env, storage, from, to, true) },
     { id: 'fxstreet', name: 'FXStreet', task: scrapeFxstreet(env, storage) },
     { id: 'cnbc', name: 'CNBC', task: scrapeCnbc(env, storage, from, to) },
   ];
@@ -453,7 +489,11 @@ export async function refreshScrapedReleaseWindow(env: Env, storage: DurableObje
   if (!times.length) return scheduled;
   const from = new Date(Math.min(...times) - 10 * 60_000);
   const to = new Date(Math.max(...times) + 10 * 60_000);
-  const myfxbook: ScrapedEvent[] = await scrapeMyfxbook(env, storage, from, to).catch(() => [] as ScrapedEvent[]);
+
+  // Rapid release checks use CSV only. If the lightweight export is temporarily empty,
+  // retain the scheduled state and try again at the next event-window checkpoint rather
+  // than launching Chromium repeatedly.
+  const myfxbook = await scrapeMyfxbook(env, storage, from, to, false).catch(() => [] as ScrapedEvent[]);
   const merged = mergeEvents(myfxbook);
 
   return scheduled.map((event) => {
