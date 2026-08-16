@@ -47,6 +47,7 @@ jobs:
         run: |
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          const expectedEngine = 'scraped-consensus-v3';
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
           async function getJson(path) {
@@ -57,16 +58,23 @@ jobs:
           }
 
           let health = null;
-          for (let attempt = 1; attempt <= 8; attempt += 1) {
+          for (let attempt = 1; attempt <= 12; attempt += 1) {
             try {
               health = await getJson('/api/health');
-              if (health?.configured?.fred && health?.configured?.browserRun && health?.configured?.durableCoordinator && health?.configured?.calendarScraping) break;
+              if (
+                health?.calendarEngineVersion === expectedEngine &&
+                health?.configured?.fred &&
+                health?.configured?.browserRun &&
+                health?.configured?.durableCoordinator &&
+                health?.configured?.calendarScraping
+              ) break;
             } catch (error) {
-              if (attempt === 8) throw error;
+              if (attempt === 12) throw error;
             }
-            if (attempt < 8) await sleep(2000);
+            if (attempt < 12) await sleep(2000);
           }
 
+          if (health?.calendarEngineVersion !== expectedEngine) throw new Error(`Live Worker is stale: expected ${expectedEngine}, got ${health?.calendarEngineVersion ?? 'none'}`);
           if (!health?.configured?.fred) throw new Error('Live Worker does not report FRED as configured after rollout polling');
           if (!health?.configured?.browserRun) throw new Error('Browser Run binding is not live after rollout polling');
           if (!health?.configured?.durableCoordinator) throw new Error('Durable Object coordinator is not live after rollout polling');
@@ -105,7 +113,7 @@ jobs:
           if (!Array.isArray(releaseState?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => releaseState.calendarSources.includes(name))) throw new Error('Release scheduler does not advertise all three requested calendar sources');
           const sourceStatus = releaseState?.calendarSourceStatus;
           if (!sourceStatus?.sources?.myfxbook || !sourceStatus?.sources?.fxstreet || !sourceStatus?.sources?.cnbc) throw new Error('Per-source calendar scrape status is incomplete');
-          if (!(sourceStatus.sources.myfxbook.ok || sourceStatus.sources.fxstreet.ok)) throw new Error(`Neither primary calendar source returned events: ${JSON.stringify(sourceStatus.sources)}`);
+          if (!(sourceStatus.sources.myfxbook.ok || sourceStatus.sources.fxstreet.ok)) throw new Error(`Neither primary calendar source returned events: ${JSON.stringify(sourceStatus)}`);
           if (!(sourceStatus.mergedEvents > 0)) throw new Error('Scraped calendar consensus produced no merged events');
 
           const calendar = await getJson('/api/calendar?days=7&importance=1');
