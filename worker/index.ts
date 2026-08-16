@@ -2,7 +2,7 @@ import { ACQUISITION_METHODS, ACQUISITION_SOURCES, getAcquisitionSource } from '
 import { ANALYSIS_SERIES, buildMacroAnalysis } from './analysis/macro';
 import { FxgaCoordinator } from './coordinator';
 import { getEconomicCalendar } from './providers/calendar';
-import { DEFAULT_DASHBOARD_SERIES, getFredCatalog, getFredSeries, resolveFredSeries } from './providers/fred';
+import { DEFAULT_DASHBOARD_SERIES, getFredCatalog, getFredInternalSeries, getFredSeries, resolveFredSeries } from './providers/fred';
 import { getOfficialNews } from './providers/rss';
 import { sourceRegistry } from './sources';
 import type { Env } from './types';
@@ -87,7 +87,9 @@ async function dashboard(env: Env) {
 }
 
 async function macroAnalysis(env: Env) {
-  const observations = await getFredSeries(env, [...ANALYSIS_SERIES]);
+  // Dedicated internal path is capped at 40 series and still batches at five
+  // concurrent FRED connections. The public /api/fred endpoint remains capped at 16.
+  const observations = await getFredInternalSeries(env, [...ANALYSIS_SERIES]);
   return buildMacroAnalysis(observations);
 }
 
