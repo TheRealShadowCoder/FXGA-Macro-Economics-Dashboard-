@@ -1,8 +1,13 @@
+import { ACQUISITION_METHODS, ACQUISITION_SOURCES, getAcquisitionSource } from './acquisition/registry';
+import { ANALYSIS_SERIES, buildMacroAnalysis } from './analysis/macro';
+import { FxgaCoordinator } from './coordinator';
 import { getEconomicCalendar } from './providers/calendar';
 import { DEFAULT_DASHBOARD_SERIES, getFredCatalog, getFredSeries, resolveFredSeries } from './providers/fred';
 import { getOfficialNews } from './providers/rss';
 import { sourceRegistry } from './sources';
 import type { Env } from './types';
+
+export { FxgaCoordinator };
 
 const securityHeaders = {
   'X-Content-Type-Options': 'nosniff',
@@ -21,9 +26,10 @@ function error(message: string, status = 400) {
   return json({ error: message }, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
-async function cached(request: Request, env: Env, handler: () => Promise<Response>): Promise<Response> {
+async function cached(request: Request, env: Env, handler: () => Promise<Response>, ttlOverride?: number): Promise<Response> {
   if (request.method !== 'GET') return handler();
-  const ttl = Math.min(Math.max(Number(env.CACHE_TTL_SECONDS || 300), 30), 3600);
+  const configured = Number(env.CACHE_TTL_SECONDS || 300);
+  const ttl = Math.min(Math.max(ttlOverride ?? configured, 30), 3600);
   const cache = (caches as CacheStorage & { default: Cache }).default;
   const key = new Request(request.url, { method: 'GET' });
   const hit = await cache.match(key);
@@ -36,6 +42,10 @@ async function cached(request: Request, env: Env, handler: () => Promise<Respons
     return copy;
   }
   return response;
+}
+
+function coordinator(env: Env) {
+  return env.FXGA_COORDINATOR.getByName('global');
 }
 
 async function dashboard(env: Env) {
@@ -60,14 +70,28 @@ async function dashboard(env: Env) {
   };
 }
 
+async function macroAnalysis(env: Env) {
+  const observations = await getFredSeries(env, [...ANALYSIS_SERIES]);
+  return buildMacroAnalysis(observations);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return new Response(null, { status: 404 });
+
+    if (url.pathname === '/api/live') {
+      if (request.method !== 'GET') return error('Method not allowed', 405);
+      const upstream = new Request('https://fxga-coordinator.internal/ws', request);
+      return coordinator(env).fetch(upstream);
+    }
+
     if (request.method !== 'GET') return error('Method not allowed', 405);
 
     try {
       if (url.pathname === '/api/health') {
+        const statusResponse = await coordinator(env).fetch('https://fxga-coordinator.internal/status');
+        const acquisition = statusResponse.ok ? await statusResponse.json() : null;
         return json({
           ok: true,
           app: env.APP_NAME || 'FXGA Macro Intelligence',
@@ -75,8 +99,17 @@ export default {
           configured: {
             fred: Boolean(env.FRED_API_KEY),
             tradingEconomics: Boolean(env.TRADING_ECONOMICS_API_KEY),
+            browserRun: Boolean(env.BROWSER),
+            durableCoordinator: Boolean(env.FXGA_COORDINATOR),
           },
           fredUniverse: getFredCatalog().total,
+          acquisition,
+          safety: {
+            workerSubrequestCeiling: 45,
+            browserSoftBudgetSecondsPerUtcDay: Math.min(Number(env.BROWSER_SOFT_BUDGET_SECONDS || 480), 480),
+            browserSessionReuse: false,
+            websocketMode: 'Durable Object Hibernation',
+          },
         }, { headers: { 'Cache-Control': 'no-store' } });
       }
 
@@ -85,7 +118,11 @@ export default {
       }
 
       if (url.pathname === '/api/dashboard') {
-        return cached(request, env, async () => json(await dashboard(env)));
+        return cached(request, env, async () => json(await dashboard(env)), 300);
+      }
+
+      if (url.pathname === '/api/analysis') {
+        return cached(request, env, async () => json(await macroAnalysis(env)), 600);
       }
 
       if (url.pathname === '/api/fred/catalog') {
@@ -109,7 +146,42 @@ export default {
               count: series.length,
             },
           });
-        });
+        }, 300);
+      }
+
+      if (url.pathname === '/api/acquisition/catalog') {
+        const statusResponse = await coordinator(env).fetch('https://fxga-coordinator.internal/status');
+        const status = statusResponse.ok ? await statusResponse.json() : null;
+        return json({
+          methods: ACQUISITION_METHODS,
+          sources: ACQUISITION_SOURCES,
+          status,
+          limits: {
+            externalSubrequestsPerInvocation: 45,
+            simultaneousOutgoingConnections: 6,
+            browserSoftBudgetSecondsPerUtcDay: Math.min(Number(env.BROWSER_SOFT_BUDGET_SECONDS || 480), 480),
+            browserConcurrentJobsInFxga: 1,
+            minBrowserLaunchGapSeconds: 22,
+          },
+          policy: {
+            publicPagesOnly: true,
+            robotsAware: true,
+            bypassLogin: false,
+            bypassCaptcha: false,
+            bypassPaywall: false,
+            botEvasion: false,
+          },
+        }, { headers: { 'Cache-Control': 'no-store' } });
+      }
+
+      if (url.pathname === '/api/acquire') {
+        const sourceId = url.searchParams.get('source')?.trim() ?? '';
+        const source = getAcquisitionSource(sourceId);
+        if (!source) return error('Unknown or missing acquisition source', 404);
+        const upstream = await coordinator(env).fetch(`https://fxga-coordinator.internal/acquire?source=${encodeURIComponent(sourceId)}`);
+        const headers = new Headers(upstream.headers);
+        for (const [key, value] of Object.entries(securityHeaders)) headers.set(key, value);
+        return new Response(upstream.body, { status: upstream.status, headers });
       }
 
       if (url.pathname === '/api/calendar') {
@@ -117,14 +189,14 @@ export default {
           const days = Number(url.searchParams.get('days') || 7);
           const importance = Number(url.searchParams.get('importance') || 1);
           return json({ events: await getEconomicCalendar(env, days, importance) });
-        });
+        }, 120);
       }
 
       if (url.pathname === '/api/news') {
         return cached(request, env, async () => {
           const source = url.searchParams.get('source') || undefined;
           return json({ items: await getOfficialNews(source) });
-        });
+        }, 300);
       }
 
       return error('API route not found', 404);
