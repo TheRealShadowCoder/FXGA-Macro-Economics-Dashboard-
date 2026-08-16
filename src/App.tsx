@@ -1,15 +1,28 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AcquisitionView } from './components/AcquisitionView';
+import { AnalysisView } from './components/AnalysisView';
 import { MetricCard } from './components/MetricCard';
-import { fetchDashboard, fetchFredCatalog, fetchFredCategory } from './lib/api';
-import type { CalendarEvent, DashboardPayload, FredCatalogPayload, MacroObservation, NewsItem } from './lib/types';
+import { fetchAcquisitionCatalog, fetchDashboard, fetchFredCatalog, fetchFredCategory, fetchMacroAnalysis } from './lib/api';
+import type {
+  AcquisitionCatalogPayload,
+  CalendarEvent,
+  DashboardPayload,
+  FredCatalogPayload,
+  MacroAnalysisPayload,
+  MacroObservation,
+  NewsItem,
+} from './lib/types';
 
-type View = 'overview' | 'calendar' | 'indicators' | 'universe' | 'news' | 'sources';
+type View = 'overview' | 'analysis' | 'calendar' | 'indicators' | 'universe' | 'acquisition' | 'news' | 'sources';
+type LiveStatus = 'connecting' | 'connected' | 'offline';
 
 const NAV: Array<{ id: View; label: string }> = [
   { id: 'overview', label: 'Macro Pulse' },
+  { id: 'analysis', label: 'Macro Analysis' },
   { id: 'calendar', label: 'Economic Calendar' },
   { id: 'indicators', label: 'Core Indicators' },
   { id: 'universe', label: 'Macro Universe' },
+  { id: 'acquisition', label: 'Acquisition Engine' },
   { id: 'news', label: 'Central Bank News' },
   { id: 'sources', label: 'Source Health' },
 ];
@@ -57,6 +70,11 @@ export default function App() {
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
+
+  const [analysis, setAnalysis] = useState<MacroAnalysisPayload | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
+
   const [catalog, setCatalog] = useState<FredCatalogPayload | null>(null);
   const [catalogError, setCatalogError] = useState('');
   const [catalogLoading, setCatalogLoading] = useState(false);
@@ -64,6 +82,14 @@ export default function App() {
   const [universeSeries, setUniverseSeries] = useState<MacroObservation[]>([]);
   const [universeLoading, setUniverseLoading] = useState(false);
   const [universeError, setUniverseError] = useState('');
+
+  const [acquisitionCatalog, setAcquisitionCatalog] = useState<AcquisitionCatalogPayload | null>(null);
+  const [acquisitionLoading, setAcquisitionLoading] = useState(false);
+  const [acquisitionError, setAcquisitionError] = useState('');
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>('connecting');
+  const [lastLiveEvent, setLastLiveEvent] = useState('');
+  const reconnectTimer = useRef<number | null>(null);
+  const reconnectAttempt = useRef(0);
 
   const load = async () => {
     setLoading(true);
@@ -78,6 +104,60 @@ export default function App() {
   };
 
   useEffect(() => { void load(); }, []);
+
+  useEffect(() => {
+    let stopped = false;
+    let socket: WebSocket | null = null;
+
+    const connect = () => {
+      if (stopped) return;
+      setLiveStatus('connecting');
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(`${protocol}//${window.location.host}/api/live`);
+      socket.onopen = () => {
+        reconnectAttempt.current = 0;
+        setLiveStatus('connected');
+      };
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(String(event.data)) as { type?: string; sourceId?: string; fetchedAt?: string };
+          if (payload.type === 'source-update') {
+            setLastLiveEvent(`${payload.sourceId || 'Source'} updated ${payload.fetchedAt ? new Date(payload.fetchedAt).toLocaleTimeString() : 'now'}`);
+            setAcquisitionCatalog(null);
+          }
+        } catch {
+          // Ignore non-JSON WebSocket messages.
+        }
+      };
+      socket.onerror = () => socket?.close();
+      socket.onclose = () => {
+        if (stopped) return;
+        setLiveStatus('offline');
+        reconnectAttempt.current += 1;
+        const delay = Math.min(30_000, 3_000 * (2 ** Math.min(reconnectAttempt.current - 1, 3)));
+        reconnectTimer.current = window.setTimeout(connect, delay);
+      };
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      if (reconnectTimer.current !== null) window.clearTimeout(reconnectTimer.current);
+      socket?.close(1000, 'Page closed');
+    };
+  }, []);
+
+  useEffect(() => {
+    if (view !== 'analysis' || analysis || analysisLoading) return;
+    let cancelled = false;
+    setAnalysisLoading(true);
+    setAnalysisError('');
+    void fetchMacroAnalysis()
+      .then((payload) => { if (!cancelled) setAnalysis(payload); })
+      .catch((err) => { if (!cancelled) setAnalysisError(err instanceof Error ? err.message : 'Unable to calculate macro analysis'); })
+      .finally(() => { if (!cancelled) setAnalysisLoading(false); });
+    return () => { cancelled = true; };
+  }, [view, analysis, analysisLoading]);
 
   useEffect(() => {
     if (view !== 'universe' || catalog || catalogLoading) return;
@@ -103,6 +183,18 @@ export default function App() {
     return () => { cancelled = true; };
   }, [view, catalog, universeCategory]);
 
+  useEffect(() => {
+    if (view !== 'acquisition' || acquisitionCatalog || acquisitionLoading) return;
+    let cancelled = false;
+    setAcquisitionLoading(true);
+    setAcquisitionError('');
+    void fetchAcquisitionCatalog()
+      .then((payload) => { if (!cancelled) setAcquisitionCatalog(payload); })
+      .catch((err) => { if (!cancelled) setAcquisitionError(err instanceof Error ? err.message : 'Unable to load acquisition engine'); })
+      .finally(() => { if (!cancelled) setAcquisitionLoading(false); });
+    return () => { cancelled = true; };
+  }, [view, acquisitionCatalog, acquisitionLoading]);
+
   const filteredNews = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!data || !q) return data?.news ?? [];
@@ -126,6 +218,15 @@ export default function App() {
   const configuredSources = data?.sources.length ?? 0;
   const activeCategory = catalog?.categories.find((category) => category.id === universeCategory);
 
+  const refreshCurrent = () => {
+    if (view === 'analysis') setAnalysis(null);
+    else if (view === 'acquisition') setAcquisitionCatalog(null);
+    else if (view === 'universe') {
+      setCatalog(null);
+      setUniverseSeries([]);
+    } else void load();
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -141,8 +242,8 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-foot">
-          <span className="system-light"></span>
-          <div><strong>Collection Engine</strong><small>{liveSources}/{configuredSources || '—'} sources live</small></div>
+          <span className={`system-light ${liveStatus}`}></span>
+          <div><strong>Collection Engine</strong><small>{liveSources}/{configuredSources || '—'} sources live · WS {liveStatus}</small></div>
         </div>
       </aside>
 
@@ -153,8 +254,9 @@ export default function App() {
             <h1>{NAV.find((item) => item.id === view)?.label}</h1>
           </div>
           <div className="top-actions">
+            <span className={`live-pill ${liveStatus}`}>Live {liveStatus}</span>
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search intelligence…" />
-            <button className="refresh" onClick={() => void load()} disabled={loading}>{loading ? 'Syncing…' : 'Refresh'}</button>
+            <button className="refresh" onClick={refreshCurrent} disabled={loading}>{loading ? 'Syncing…' : 'Refresh'}</button>
           </div>
         </header>
 
@@ -196,6 +298,8 @@ export default function App() {
           </>
         )}
 
+        {view === 'analysis' && <AnalysisView data={analysis} loading={analysisLoading} error={analysisError} />}
+
         {data && view === 'calendar' && <section className="panel full"><div className="panel-title"><div><span className="eyebrow">Actual · Forecast · Previous</span><h2>Economic calendar</h2></div><span>{filteredCalendar.length} events</span></div>{filteredCalendar.length ? filteredCalendar.map((event) => <CalendarRow key={event.id} event={event} />) : <div className="empty">No calendar events returned. Configure the Trading Economics secret to enable the live calendar.</div>}</section>}
         {data && view === 'indicators' && <section className="metrics-grid wide">{data.macro.map((item) => <MetricCard key={item.seriesId} item={item} />)}</section>}
 
@@ -230,6 +334,8 @@ export default function App() {
             )}
           </>
         )}
+
+        {view === 'acquisition' && <AcquisitionView catalog={acquisitionCatalog} loading={acquisitionLoading} error={acquisitionError} liveStatus={liveStatus} lastLiveEvent={lastLiveEvent} />}
 
         {data && view === 'news' && <section className="panel full"><div className="panel-title"><div><span className="eyebrow">Primary-source intelligence</span><h2>Official releases and speeches</h2></div><span>{filteredNews.length} items</span></div>{filteredNews.map((item) => <NewsRow key={item.id} item={item} />)}</section>}
         {data && view === 'sources' && <section className="source-grid">{data.sources.map((source) => <article className="source-card" key={source.id}><div className="source-status"><span className={`status ${source.status}`}></span>{source.status.replace('_', ' ')}</div><h3>{source.name}</h3><p>{source.category} · {source.region}</p>{source.note && <small>{source.note}</small>}</article>)}</section>}
