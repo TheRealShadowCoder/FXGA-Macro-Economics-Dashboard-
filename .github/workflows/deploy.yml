@@ -52,7 +52,7 @@ jobs:
           async function getJson(path) {
             const response = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' } });
             const text = await response.text();
-            if (!response.ok) throw new Error(`${path} returned ${response.status}: ${text.slice(0, 500)}`);
+            if (!response.ok) throw new Error(`${path} returned ${response.status}: ${text.slice(0, 1000)}`);
             try { return JSON.parse(text); } catch { throw new Error(`${path} did not return valid JSON`); }
           }
 
@@ -71,9 +71,7 @@ jobs:
           if (!health?.configured?.browserRun) throw new Error('Browser Run binding is not live after rollout polling');
           if (!health?.configured?.durableCoordinator) throw new Error('Durable Object coordinator is not live after rollout polling');
           if (!health?.configured?.calendarScraping) throw new Error('Scraped calendar mode is not enabled');
-          if (!Array.isArray(health?.configured?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => health.configured.calendarSources.includes(name))) {
-            throw new Error('Expected Myfxbook, FXStreet and CNBC calendar source configuration');
-          }
+          if (!Array.isArray(health?.configured?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => health.configured.calendarSources.includes(name))) throw new Error('Expected Myfxbook, FXStreet and CNBC calendar source configuration');
           if (health?.safety?.workerSubrequestCeiling > 45) throw new Error('FXGA subrequest safety target exceeds 45');
           if (health?.safety?.collectorMaxConcurrentConnections > 5) throw new Error('FXGA collector concurrency exceeds five connections');
           if (health?.safety?.browserSoftBudgetSecondsPerUtcDay > 480) throw new Error('FXGA browser budget exceeds 480 seconds/day');
@@ -82,12 +80,7 @@ jobs:
           if (!Array.isArray(catalog?.series) || catalog.series.length < 90) throw new Error(`FRED catalog is unexpectedly small: ${catalog?.series?.length ?? 0}`);
           if (!Array.isArray(catalog?.categories) || catalog.categories.length < 17) throw new Error(`FRED category catalog is unexpectedly small: ${catalog?.categories?.length ?? 0}`);
 
-          const sampleCategories = [
-            'inflation', 'labour', 'growth', 'liquidity', 'credit', 'housing',
-            'manufacturing', 'policy-rates', 'treasury-yields', 'yield-spreads',
-            'recession-risk', 'financial-conditions', 'usd-fx', 'volatility',
-            'consumption', 'business-activity', 'leading-indicators',
-          ];
+          const sampleCategories = ['inflation','labour','growth','liquidity','credit','housing','manufacturing','policy-rates','treasury-yields','yield-spreads','recession-risk','financial-conditions','usd-fx','volatility','consumption','business-activity','leading-indicators'];
           for (const category of sampleCategories) {
             const payload = await getJson(`/api/fred?category=${encodeURIComponent(category)}&limit=1`);
             const first = payload?.series?.[0];
@@ -99,18 +92,20 @@ jobs:
           if (!Array.isArray(analysis?.assets) || analysis.assets.length < 4 || analysis?.coverage?.observed < 20) throw new Error('Macro analysis coverage is unexpectedly low');
 
           const releaseState = await getJson('/api/release-state');
-          if (!releaseState?.initialized) throw new Error('Event-driven release scheduler is not initialized');
+          console.log('SCRAPED_CALENDAR_DIAGNOSTICS=' + JSON.stringify({
+            initialized: releaseState?.initialized,
+            reason: releaseState?.reason,
+            mode: releaseState?.mode,
+            sourceStatus: releaseState?.calendarSourceStatus,
+            upcoming: releaseState?.upcoming?.length ?? 0,
+            active: releaseState?.active?.length ?? 0,
+          }));
+          if (!releaseState?.initialized) throw new Error(`Event-driven release scheduler is not initialized. Diagnostics=${JSON.stringify(releaseState?.calendarSourceStatus ?? null)}`);
           if (releaseState?.mode !== 'scraped-calendar-consensus') throw new Error(`Unexpected calendar scheduler mode: ${releaseState?.mode}`);
-          if (!Array.isArray(releaseState?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => releaseState.calendarSources.includes(name))) {
-            throw new Error('Release scheduler does not advertise all three requested calendar sources');
-          }
+          if (!Array.isArray(releaseState?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => releaseState.calendarSources.includes(name))) throw new Error('Release scheduler does not advertise all three requested calendar sources');
           const sourceStatus = releaseState?.calendarSourceStatus;
-          if (!sourceStatus?.sources?.myfxbook || !sourceStatus?.sources?.fxstreet || !sourceStatus?.sources?.cnbc) {
-            throw new Error('Per-source calendar scrape status is incomplete');
-          }
-          if (!(sourceStatus.sources.myfxbook.ok || sourceStatus.sources.fxstreet.ok)) {
-            throw new Error(`Neither primary calendar source returned events: ${JSON.stringify(sourceStatus.sources)}`);
-          }
+          if (!sourceStatus?.sources?.myfxbook || !sourceStatus?.sources?.fxstreet || !sourceStatus?.sources?.cnbc) throw new Error('Per-source calendar scrape status is incomplete');
+          if (!(sourceStatus.sources.myfxbook.ok || sourceStatus.sources.fxstreet.ok)) throw new Error(`Neither primary calendar source returned events: ${JSON.stringify(sourceStatus.sources)}`);
           if (!(sourceStatus.mergedEvents > 0)) throw new Error('Scraped calendar consensus produced no merged events');
 
           const calendar = await getJson('/api/calendar?days=7&importance=1');
@@ -120,9 +115,7 @@ jobs:
           const acquisition = await getJson('/api/acquisition/catalog');
           if (!Array.isArray(acquisition?.methods) || acquisition.methods.length < 10) throw new Error('Acquisition method stack is incomplete');
           const requiredSources = ['myfxbook-calendar', 'fxstreet-calendar', 'cnbc-economy'];
-          if (!Array.isArray(acquisition?.sources) || !requiredSources.every((id) => acquisition.sources.some((source) => source.id === id))) {
-            throw new Error('Acquisition source registry is missing one of the requested calendar scrapers');
-          }
+          if (!Array.isArray(acquisition?.sources) || !requiredSources.every((id) => acquisition.sources.some((source) => source.id === id))) throw new Error('Acquisition source registry is missing one of the requested calendar scrapers');
           if (acquisition?.limits?.externalSubrequestsPerInvocation > 45) throw new Error('Acquisition subrequest guard exceeds safety target');
           if (acquisition?.limits?.collectorMaxConcurrentConnections > 5) throw new Error('Acquisition connection guard exceeds five');
           if (acquisition?.status?.browserBudget?.softLimitSeconds > 480) throw new Error('Browser Run safety budget exceeds 480 seconds/day');
@@ -131,12 +124,7 @@ jobs:
             if (typeof WebSocket === 'undefined') return reject(new Error('Node runner has no WebSocket implementation'));
             const ws = new WebSocket(base.replace('https://', 'wss://') + '/api/live');
             const timer = setTimeout(() => { try { ws.close(); } catch {} reject(new Error('WebSocket verification timed out')); }, 8000);
-            ws.addEventListener('message', (event) => {
-              try {
-                const payload = JSON.parse(String(event.data));
-                if (payload?.type === 'connected') { clearTimeout(timer); ws.close(1000, 'CI verification complete'); resolve(); }
-              } catch {}
-            });
+            ws.addEventListener('message', (event) => { try { const payload = JSON.parse(String(event.data)); if (payload?.type === 'connected') { clearTimeout(timer); ws.close(1000, 'CI verification complete'); resolve(); } } catch {} });
             ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket verification failed')); });
           });
 
