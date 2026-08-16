@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { acquireSource, getBrowserBudgetStatus } from './acquisition/engine';
 import { ACQUISITION_SOURCES, getAcquisitionSource } from './acquisition/registry';
+import { bootstrapScheduler, getReleaseSnapshots, getSchedulerView, processSchedulerAlarm, syncCalendarSchedule } from './scheduler';
 import type { Env } from './types';
 
 export class FxgaCoordinator extends DurableObject<Env> {
@@ -61,12 +62,49 @@ export class FxgaCoordinator extends DurableObject<Env> {
 
     if (url.pathname === '/status') {
       const browserBudget = await getBrowserBudgetStatus(this.ctx.storage, this.env);
+      const scheduler = await getSchedulerView(this.env, this.ctx.storage, false);
       return Response.json({
         websocketClients: this.ctx.getWebSockets().length,
         inFlightSources: this.inflight.size,
         browserBudget,
         sources: ACQUISITION_SOURCES.length,
+        scheduler,
       });
+    }
+
+    if (url.pathname === '/scheduler/state') {
+      const shouldBootstrap = url.searchParams.get('bootstrap') === '1';
+      try {
+        return Response.json(await getSchedulerView(this.env, this.ctx.storage, shouldBootstrap));
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : 'Scheduler state failed' }, { status: 502 });
+      }
+    }
+
+    if (url.pathname === '/scheduler/bootstrap') {
+      try {
+        const state = await bootstrapScheduler(this.env, this.ctx.storage, url.searchParams.get('force') === '1');
+        this.broadcast({ type: 'scheduler-bootstrap', timestamp: new Date().toISOString(), events: state.events.length });
+        return Response.json(await getSchedulerView(this.env, this.ctx.storage, false));
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : 'Scheduler bootstrap failed' }, { status: 502 });
+      }
+    }
+
+    if (url.pathname === '/scheduler/sync') {
+      try {
+        const state = await syncCalendarSchedule(this.env, this.ctx.storage);
+        this.broadcast({ type: 'calendar-synced', timestamp: new Date().toISOString(), events: state.events.length });
+        return Response.json(await getSchedulerView(this.env, this.ctx.storage, false));
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : 'Calendar sync failed' }, { status: 502 });
+      }
+    }
+
+    if (url.pathname === '/scheduler/release') {
+      const id = url.searchParams.get('id')?.trim() ?? '';
+      if (!id) return Response.json({ error: 'id is required' }, { status: 400 });
+      return Response.json({ id, snapshots: await getReleaseSnapshots(this.ctx.storage, id) });
     }
 
     if (url.pathname === '/acquire') {
@@ -83,15 +121,33 @@ export class FxgaCoordinator extends DurableObject<Env> {
     return new Response('Not found', { status: 404 });
   }
 
+  async alarm() {
+    const before = await getSchedulerView(this.env, this.ctx.storage, false);
+    const state = await processSchedulerAlarm(this.env, this.ctx.storage);
+    const after = await getSchedulerView(this.env, this.ctx.storage, false);
+    this.broadcast({
+      type: 'release-scheduler-update',
+      timestamp: new Date().toISOString(),
+      checks: state.stats.releaseChecks,
+      changes: state.stats.releaseChanges,
+      nextReleaseAt: 'nextReleaseAt' in after ? after.nextReleaseAt : null,
+      active: 'active' in after ? after.active : [],
+      recent: 'recent' in after ? after.recent : [],
+      previousNextReleaseAt: 'nextReleaseAt' in before ? before.nextReleaseAt : null,
+    });
+  }
+
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
     if (typeof message !== 'string') return;
     if (message === 'status') {
       const browserBudget = await getBrowserBudgetStatus(this.ctx.storage, this.env);
+      const scheduler = await getSchedulerView(this.env, this.ctx.storage, false);
       socket.send(JSON.stringify({
         type: 'status',
         timestamp: new Date().toISOString(),
         websocketClients: this.ctx.getWebSockets().length,
         browserBudget,
+        scheduler,
       }));
     }
   }
