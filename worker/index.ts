@@ -49,22 +49,38 @@ function coordinator(env: Env) {
 }
 
 async function dashboard(env: Env) {
-  const [macroResult, calendarResult, newsResult] = await Promise.allSettled([
-    getFredSeries(env, [...DEFAULT_DASHBOARD_SERIES]),
-    getEconomicCalendar(env, 7, 1),
-    getOfficialNews(),
-  ]);
-
   const errors: Array<{ provider: string; message: string }> = [];
-  if (macroResult.status === 'rejected') errors.push({ provider: 'FRED', message: macroResult.reason instanceof Error ? macroResult.reason.message : 'Collector failed' });
-  if (calendarResult.status === 'rejected') errors.push({ provider: 'Trading Economics', message: calendarResult.reason instanceof Error ? calendarResult.reason.message : 'Collector failed' });
-  if (newsResult.status === 'rejected') errors.push({ provider: 'Official RSS', message: newsResult.reason instanceof Error ? newsResult.reason.message : 'Collector failed' });
+
+  // Collector groups are intentionally serialized. Individual FRED/RSS providers
+  // use <=5 concurrent upstream connections, leaving one connection of headroom
+  // below Cloudflare Free's six simultaneous outgoing-connection ceiling.
+  let macro: Awaited<ReturnType<typeof getFredSeries>> = [];
+  let calendar: Awaited<ReturnType<typeof getEconomicCalendar>> = [];
+  let news: Awaited<ReturnType<typeof getOfficialNews>> = [];
+
+  try {
+    macro = await getFredSeries(env, [...DEFAULT_DASHBOARD_SERIES]);
+  } catch (caught) {
+    errors.push({ provider: 'FRED', message: caught instanceof Error ? caught.message : 'Collector failed' });
+  }
+
+  try {
+    calendar = await getEconomicCalendar(env, 7, 1);
+  } catch (caught) {
+    errors.push({ provider: 'Trading Economics', message: caught instanceof Error ? caught.message : 'Collector failed' });
+  }
+
+  try {
+    news = await getOfficialNews();
+  } catch (caught) {
+    errors.push({ provider: 'Official RSS', message: caught instanceof Error ? caught.message : 'Collector failed' });
+  }
 
   return {
     generatedAt: new Date().toISOString(),
-    macro: macroResult.status === 'fulfilled' ? macroResult.value : [],
-    calendar: calendarResult.status === 'fulfilled' ? calendarResult.value : [],
-    news: newsResult.status === 'fulfilled' ? newsResult.value : [],
+    macro,
+    calendar,
+    news,
     sources: sourceRegistry(env),
     errors,
   };
@@ -106,6 +122,9 @@ export default {
           acquisition,
           safety: {
             workerSubrequestCeiling: 45,
+            platformSubrequestLimitFree: 50,
+            collectorMaxConcurrentConnections: 5,
+            platformOutgoingConnectionLimit: 6,
             browserSoftBudgetSecondsPerUtcDay: Math.min(Number(env.BROWSER_SOFT_BUDGET_SECONDS || 480), 480),
             browserSessionReuse: false,
             websocketMode: 'Durable Object Hibernation',
@@ -159,6 +178,7 @@ export default {
           limits: {
             externalSubrequestsPerInvocation: 45,
             simultaneousOutgoingConnections: 6,
+            collectorMaxConcurrentConnections: 5,
             browserSoftBudgetSecondsPerUtcDay: Math.min(Number(env.BROWSER_SOFT_BUDGET_SECONDS || 480), 480),
             browserConcurrentJobsInFxga: 1,
             minBrowserLaunchGapSeconds: 22,
