@@ -2,8 +2,8 @@ import { acquireSource } from '../acquisition/engine';
 import { getAcquisitionSource } from '../acquisition/registry';
 import type { CalendarEvent, Env } from '../types';
 
-const MAJOR_CURRENCIES = ['AUD','CAD','CHF','CNY','EUR','GBP','JPY','NZD','USD','ZAR'];
-const SOURCE_PRIORITY = ['myfxbook', 'fxstreet', 'cnbc'];
+const MAJOR_CURRENCIES = ['AUD', 'CAD', 'CHF', 'CNY', 'EUR', 'GBP', 'JPY', 'NZD', 'USD', 'ZAR'];
+const SOURCE_PRIORITY: ScrapedEvent['provider'][] = ['myfxbook', 'fxstreet', 'cnbc'];
 
 interface ScrapedEvent extends CalendarEvent {
   provider: 'myfxbook' | 'fxstreet' | 'cnbc';
@@ -20,7 +20,7 @@ interface AcquisitionDocument {
   warnings?: string[];
 }
 
-function csvRows(text: string) {
+function csvRows(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = '';
@@ -40,19 +40,19 @@ function csvRows(text: string) {
   return rows;
 }
 
-function importance(value: unknown) {
+function importance(value: unknown): number {
   const raw = String(value ?? '').toLowerCase();
   if (raw.includes('high') || raw === '3') return 3;
   if (raw.includes('medium') || raw.includes('moderate') || raw === '2') return 2;
   return 1;
 }
 
-function clean(value: unknown) {
+function clean(value: unknown): string | undefined {
   const text = String(value ?? '').trim();
   return text && text !== '-' && text !== '—' && text.toLowerCase() !== 'null' ? text : undefined;
 }
 
-function normalizeTitle(value: string) {
+function normalizeTitle(value: string): string {
   return value
     .toLowerCase()
     .replace(/&/g, ' and ')
@@ -62,7 +62,7 @@ function normalizeTitle(value: string) {
     .trim();
 }
 
-function stableHash(value: string) {
+function stableHash(value: string): string {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i += 1) {
     hash ^= value.charCodeAt(i);
@@ -71,27 +71,27 @@ function stableHash(value: string) {
   return (hash >>> 0).toString(16);
 }
 
-function canonicalKey(event: Pick<CalendarEvent, 'date' | 'currency' | 'event'>) {
+function canonicalKey(event: Pick<CalendarEvent, 'date' | 'currency' | 'event'>): string {
   const date = new Date(event.date);
   if (!Number.isFinite(date.getTime())) return `${event.currency ?? 'UNK'}|invalid|${normalizeTitle(event.event)}`;
   date.setUTCSeconds(0, 0);
   return `${event.currency ?? 'UNK'}|${date.toISOString()}|${normalizeTitle(event.event)}`;
 }
 
-function parseDate(value: string, fallbackYear = new Date().getUTCFullYear()) {
+function parseDate(value: string, fallbackYear = new Date().getUTCFullYear()): string | null {
   const trimmed = value.trim();
   const direct = Date.parse(trimmed);
   if (Number.isFinite(direct)) return new Date(direct).toISOString();
   const match = trimmed.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?\w*,?\s*([A-Za-z]{3})\s+(\d{1,2})(?:,\s*(\d{4}))?[, ]+([0-2]?\d):([0-5]\d)/i)
     ?? trimmed.match(/([A-Za-z]{3})\s+(\d{1,2})(?:,\s*(\d{4}))?[, ]+([0-2]?\d):([0-5]\d)/i);
   if (!match) return null;
-  const month = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'].indexOf(match[1].toLowerCase());
+  const month = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(match[1].toLowerCase());
   if (month < 0) return null;
   const year = Number(match[3] || fallbackYear);
   return new Date(Date.UTC(year, month, Number(match[2]), Number(match[4]), Number(match[5]))).toISOString();
 }
 
-function inferCurrency(countryOrCurrency: unknown, text = '') {
+function inferCurrency(countryOrCurrency: unknown, text = ''): string | undefined {
   const raw = `${String(countryOrCurrency ?? '')} ${text}`.toUpperCase();
   const direct = MAJOR_CURRENCIES.find((code) => new RegExp(`\\b${code}\\b`).test(raw));
   if (direct) return direct;
@@ -111,12 +111,8 @@ function eventFromTableRow(row: string[], provider: ScrapedEvent['provider'], ye
   if (currencyIndex < 0 || impactIndex < 0 || dateIndex < 0) return null;
   const date = parseDate(row[dateIndex], year);
   if (!date) return null;
-  const eventIndex = currencyIndex + 1;
-  const title = clean(row[eventIndex]);
+  const title = clean(row[currencyIndex + 1]);
   if (!title) return null;
-  const previous = clean(row[impactIndex + 1]);
-  const forecast = clean(row[impactIndex + 2]);
-  const actual = clean(row[impactIndex + 3]);
   const currency = row[currencyIndex].trim().toUpperCase();
   return {
     id: `${provider}-${stableHash(`${date}|${currency}|${title}`)}`,
@@ -127,21 +123,26 @@ function eventFromTableRow(row: string[], provider: ScrapedEvent['provider'], ye
     event: title,
     category: 'Economic Calendar',
     importance: importance(row[impactIndex]),
-    previous,
-    forecast,
-    actual,
+    previous: clean(row[impactIndex + 1]),
+    forecast: clean(row[impactIndex + 2]),
+    actual: clean(row[impactIndex + 3]),
     source: provider === 'myfxbook' ? 'Myfxbook' : provider === 'fxstreet' ? 'FXStreet' : 'CNBC',
   };
 }
 
-function parseMyfxbookTables(document: AcquisitionDocument) {
+function tableEvents(document: AcquisitionDocument, provider: ScrapedEvent['provider']): ScrapedEvent[] {
   const year = new Date().getUTCFullYear();
-  return (document.tables ?? []).flatMap((table) => table.map((row) => eventFromTableRow(row, 'myfxbook', year)).filter((event): event is ScrapedEvent => Boolean(event)));
+  const events: ScrapedEvent[] = [];
+  for (const table of document.tables ?? []) {
+    for (const row of table) {
+      const event = eventFromTableRow(row, provider, year);
+      if (event) events.push(event);
+    }
+  }
+  return events;
 }
 
-async function scrapeMyfxbook(env: Env, storage: DurableObjectStorage, from: Date, to: Date) {
-  // Myfxbook's own calendar exposes an Export function. Prefer the lightweight CSV export,
-  // then fall back to the public HTML table if the export layout changes.
+async function scrapeMyfxbook(env: Env, storage: DurableObjectStorage, from: Date, to: Date): Promise<ScrapedEvent[]> {
   const start = from.toISOString().replace('T', ' ').replace('Z', '');
   const end = to.toISOString().replace('T', ' ').replace('Z', '');
   const filter = `0-1-2-3_${MAJOR_CURRENCIES.join('-')}`;
@@ -153,7 +154,9 @@ async function scrapeMyfxbook(env: Env, storage: DurableObjectStorage, from: Dat
   exportUrl.searchParams.set('tabType', '0');
 
   try {
-    const response = await fetch(exportUrl, { headers: { Accept: 'text/csv,text/plain;q=0.9,*/*;q=0.5', 'User-Agent': 'FXGA-Macro-Intelligence/1.0' } });
+    const response = await fetch(exportUrl, {
+      headers: { Accept: 'text/csv,text/plain;q=0.9,*/*;q=0.5', 'User-Agent': 'FXGA-Macro-Intelligence/1.0' },
+    });
     if (response.ok) {
       const rows = csvRows(await response.text());
       if (rows.length > 1) {
@@ -166,41 +169,44 @@ async function scrapeMyfxbook(env: Env, storage: DurableObjectStorage, from: Dat
         const previousIdx = idx(['previous']);
         const consensusIdx = idx(['consensus', 'forecast']);
         const actualIdx = idx(['actual']);
-        const parsed = rows.slice(1).map((row) => {
-          if (dateIdx < 0 || currencyIdx < 0 || eventIdx < 0) return null;
-          const date = parseDate(row[dateIdx] ?? '');
-          const currency = clean(row[currencyIdx])?.toUpperCase();
-          const title = clean(row[eventIdx]);
-          if (!date || !currency || !title) return null;
-          return {
-            id: `myfxbook-${stableHash(`${date}|${currency}|${title}`)}`,
-            provider: 'myfxbook' as const,
-            date,
-            country: currency,
-            currency,
-            event: title,
-            category: 'Economic Calendar',
-            importance: impactIdx >= 0 ? importance(row[impactIdx]) : 1,
-            previous: previousIdx >= 0 ? clean(row[previousIdx]) : undefined,
-            forecast: consensusIdx >= 0 ? clean(row[consensusIdx]) : undefined,
-            actual: actualIdx >= 0 ? clean(row[actualIdx]) : undefined,
-            source: 'Myfxbook',
-          } satisfies ScrapedEvent;
-        }).filter((event): event is ScrapedEvent => Boolean(event));
+        const parsed: ScrapedEvent[] = [];
+
+        if (dateIdx >= 0 && currencyIdx >= 0 && eventIdx >= 0) {
+          for (const row of rows.slice(1)) {
+            const date = parseDate(row[dateIdx] ?? '');
+            const currency = clean(row[currencyIdx])?.toUpperCase();
+            const title = clean(row[eventIdx]);
+            if (!date || !currency || !title) continue;
+            parsed.push({
+              id: `myfxbook-${stableHash(`${date}|${currency}|${title}`)}`,
+              provider: 'myfxbook',
+              date,
+              country: currency,
+              currency,
+              event: title,
+              category: 'Economic Calendar',
+              importance: impactIdx >= 0 ? importance(row[impactIdx]) : 1,
+              previous: previousIdx >= 0 ? clean(row[previousIdx]) : undefined,
+              forecast: consensusIdx >= 0 ? clean(row[consensusIdx]) : undefined,
+              actual: actualIdx >= 0 ? clean(row[actualIdx]) : undefined,
+              source: 'Myfxbook',
+            });
+          }
+        }
         if (parsed.length) return parsed;
       }
     }
   } catch {
-    // Fall through to public page extraction.
+    // Fall through to the public HTML table extraction path.
   }
 
   const source = getAcquisitionSource('myfxbook-calendar');
   if (!source) return [];
   const document = await acquireSource(env, storage, source) as AcquisitionDocument;
-  return parseMyfxbookTables(document);
+  return tableEvents(document, 'myfxbook');
 }
 
-function walkObjects(value: unknown, out: Record<string, unknown>[], depth = 0) {
+function walkObjects(value: unknown, out: Record<string, unknown>[], depth = 0): void {
   if (depth > 10 || out.length > 5000 || value == null) return;
   if (Array.isArray(value)) {
     for (const item of value) walkObjects(item, out, depth + 1);
@@ -212,7 +218,7 @@ function walkObjects(value: unknown, out: Record<string, unknown>[], depth = 0) 
   for (const child of Object.values(object)) walkObjects(child, out, depth + 1);
 }
 
-function parseFxstreetEmbedded(document: AcquisitionDocument) {
+function parseFxstreetEmbedded(document: AcquisitionDocument): ScrapedEvent[] {
   const objects: Record<string, unknown>[] = [];
   for (const payload of document.embeddedJson ?? []) walkObjects(payload.value, objects);
   const events: ScrapedEvent[] = [];
@@ -247,19 +253,15 @@ function parseFxstreetEmbedded(document: AcquisitionDocument) {
   return events;
 }
 
-async function scrapeFxstreet(env: Env, storage: DurableObjectStorage) {
+async function scrapeFxstreet(env: Env, storage: DurableObjectStorage): Promise<ScrapedEvent[]> {
   const source = getAcquisitionSource('fxstreet-calendar');
   if (!source) return [];
   const document = await acquireSource(env, storage, source) as AcquisitionDocument;
   const embedded = parseFxstreetEmbedded(document);
-  if (embedded.length) return embedded;
-  const year = new Date().getUTCFullYear();
-  return (document.tables ?? []).flatMap((table) => table.map((row) => eventFromTableRow(row, 'fxstreet', year)).filter((event): event is ScrapedEvent => Boolean(event)));
+  return embedded.length ? embedded : tableEvents(document, 'fxstreet');
 }
 
-function parseCnbcText(document: AcquisitionDocument, from: Date, to: Date) {
-  // CNBC does not expose a stable public calendar grid. This parser only accepts explicit
-  // future schedule statements with a date and clock time; it never manufactures times.
+function parseCnbcText(document: AcquisitionDocument, from: Date, to: Date): ScrapedEvent[] {
   const text = document.text ?? '';
   const events: ScrapedEvent[] = [];
   const months = 'Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?';
@@ -267,11 +269,12 @@ function parseCnbcText(document: AcquisitionDocument, from: Date, to: Date) {
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) && events.length < 80) {
     const year = Number(match[3] || from.getUTCFullYear());
-    const month = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'].findIndex((m) => match![1].toLowerCase().startsWith(m));
+    const month = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+      .findIndex((name) => match![1].toLowerCase().startsWith(name));
+    if (month < 0) continue;
     let hour = Number(match[4]);
     if (/p/i.test(match[6]) && hour < 12) hour += 12;
     if (/a/i.test(match[6]) && hour === 12) hour = 0;
-    // CNBC U.S. economic schedule references are Eastern Time. EDT=UTC-4, EST=UTC-5.
     const offset = match[7].toUpperCase() === 'EST' ? 5 : 4;
     const date = new Date(Date.UTC(year, month, Number(match[2]), hour + offset, Number(match[5])));
     if (date < from || date > to) continue;
@@ -292,7 +295,7 @@ function parseCnbcText(document: AcquisitionDocument, from: Date, to: Date) {
   return events;
 }
 
-async function scrapeCnbc(env: Env, storage: DurableObjectStorage, from: Date, to: Date) {
+async function scrapeCnbc(env: Env, storage: DurableObjectStorage, from: Date, to: Date): Promise<ScrapedEvent[]> {
   const source = getAcquisitionSource('cnbc-economy');
   if (!source) return [];
   try {
@@ -303,7 +306,7 @@ async function scrapeCnbc(env: Env, storage: DurableObjectStorage, from: Date, t
   }
 }
 
-function mergeEvents(events: ScrapedEvent[]) {
+function mergeEvents(events: ScrapedEvent[]): CalendarEvent[] {
   const groups = new Map<string, ScrapedEvent[]>();
   for (const event of events) {
     const key = canonicalKey(event);
@@ -312,13 +315,15 @@ function mergeEvents(events: ScrapedEvent[]) {
     groups.set(key, group);
   }
 
-  const merged = [...groups.entries()].map(([key, group]) => {
+  const merged: CalendarEvent[] = [];
+  for (const [key, group] of groups.entries()) {
     group.sort((a, b) => SOURCE_PRIORITY.indexOf(a.provider) - SOURCE_PRIORITY.indexOf(b.provider));
     const primary = group[0];
+    if (!primary) continue;
     const providers = [...new Set(group.map((item) => item.provider))];
     const first = (field: keyof CalendarEvent) => clean(group.find((item) => clean(item[field]))?.[field]);
     const confidence = Math.min(1, 0.55 + (providers.includes('myfxbook') ? 0.2 : 0) + (providers.includes('fxstreet') ? 0.2 : 0) + (providers.includes('cnbc') ? 0.05 : 0));
-    return {
+    merged.push({
       ...primary,
       id: `fxga-cal-${stableHash(key)}`,
       actual: first('actual'),
@@ -326,31 +331,30 @@ function mergeEvents(events: ScrapedEvent[]) {
       forecast: first('forecast'),
       revised: first('revised'),
       importance: Math.max(...group.map((item) => item.importance)),
-      source: `FXGA Calendar Consensus: ${providers.map((p) => p === 'myfxbook' ? 'Myfxbook' : p === 'fxstreet' ? 'FXStreet' : 'CNBC').join(' + ')}`,
-      providers,
-      sourceCount: providers.length,
-      confidence: Math.round(confidence * 100),
-      canonicalKey: key,
+      source: `FXGA Calendar Consensus: ${providers.map((provider) => provider === 'myfxbook' ? 'Myfxbook' : provider === 'fxstreet' ? 'FXStreet' : 'CNBC').join(' + ')}`,
       lastUpdate: new Date().toISOString(),
-    } as CalendarEvent & { providers: string[]; sourceCount: number; confidence: number; canonicalKey: string };
-  });
-
+    });
+  }
   return merged.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
 }
 
-export async function getScrapedEconomicCalendar(env: Env, storage: DurableObjectStorage, days = 14) {
+export async function getScrapedEconomicCalendar(env: Env, storage: DurableObjectStorage, days = 14): Promise<CalendarEvent[]> {
   const from = new Date();
   from.setUTCHours(0, 0, 0, 0);
   const to = new Date(from);
   to.setUTCDate(to.getUTCDate() + Math.min(Math.max(days, 1), 21));
   to.setUTCHours(23, 59, 59, 999);
 
-  const results = await Promise.allSettled([
+  const results = await Promise.allSettled<[ScrapedEvent[], ScrapedEvent[], ScrapedEvent[]]>([
     scrapeMyfxbook(env, storage, from, to),
     scrapeFxstreet(env, storage),
     scrapeCnbc(env, storage, from, to),
   ]);
-  const events = results.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+  const events: ScrapedEvent[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') events.push(...result.value);
+  }
+
   const filtered = events.filter((event) => {
     const time = Date.parse(event.date);
     return Number.isFinite(time) && time >= from.getTime() - 10 * 60_000 && time <= to.getTime();
@@ -360,15 +364,13 @@ export async function getScrapedEconomicCalendar(env: Env, storage: DurableObjec
   return merged;
 }
 
-export async function refreshScrapedReleaseWindow(env: Env, storage: DurableObjectStorage, scheduled: CalendarEvent[]) {
-  // Release-window checks stay cheap: Myfxbook is the primary real-time actual source.
-  // FXStreet/CNBC remain schedule/corroboration sources and are not forced through Chromium
-  // every few seconds, preserving Browser Run quota.
-  const earliest = Math.min(...scheduled.map((event) => Date.parse(event.date)).filter(Number.isFinite));
-  const latest = Math.max(...scheduled.map((event) => Date.parse(event.date)).filter(Number.isFinite));
-  const from = new Date(earliest - 10 * 60_000);
-  const to = new Date(latest + 10 * 60_000);
-  const myfxbook = await scrapeMyfxbook(env, storage, from, to).catch(() => []);
+export async function refreshScrapedReleaseWindow(env: Env, storage: DurableObjectStorage, scheduled: CalendarEvent[]): Promise<CalendarEvent[]> {
+  if (!scheduled.length) return [];
+  const times = scheduled.map((event) => Date.parse(event.date)).filter(Number.isFinite);
+  if (!times.length) return scheduled;
+  const from = new Date(Math.min(...times) - 10 * 60_000);
+  const to = new Date(Math.max(...times) + 10 * 60_000);
+  const myfxbook: ScrapedEvent[] = await scrapeMyfxbook(env, storage, from, to).catch(() => [] as ScrapedEvent[]);
   const merged = mergeEvents(myfxbook);
 
   return scheduled.map((event) => {
@@ -376,8 +378,9 @@ export async function refreshScrapedReleaseWindow(env: Env, storage: DurableObje
     const exact = merged.find((candidate) => canonicalKey(candidate) === key);
     if (exact) return { ...event, ...exact, id: event.id, source: event.source };
     const title = normalizeTitle(event.event);
-    const currency = event.currency;
-    const near = merged.find((candidate) => candidate.currency === currency && Math.abs(Date.parse(candidate.date) - Date.parse(event.date)) <= 2 * 60_000 && normalizeTitle(candidate.event) === title);
+    const near = merged.find((candidate) => candidate.currency === event.currency
+      && Math.abs(Date.parse(candidate.date) - Date.parse(event.date)) <= 2 * 60_000
+      && normalizeTitle(candidate.event) === title);
     return near ? { ...event, ...near, id: event.id, source: event.source } : event;
   });
 }
