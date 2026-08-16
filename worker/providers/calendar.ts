@@ -19,6 +19,9 @@ function normalizeCalendarRow(row: Record<string, unknown>, index = 0): Calendar
     currency: row.Currency == null || row.Currency === '' ? undefined : String(row.Currency),
     unit: row.Unit == null || row.Unit === '' ? undefined : String(row.Unit),
     source: row.Source == null || row.Source === '' ? undefined : String(row.Source),
+    lastUpdate: row.LastUpdate == null || row.LastUpdate === '' ? undefined : String(row.LastUpdate),
+    ticker: row.Ticker == null || row.Ticker === '' ? undefined : String(row.Ticker),
+    symbol: row.Symbol == null || row.Symbol === '' ? undefined : String(row.Symbol),
   };
 }
 
