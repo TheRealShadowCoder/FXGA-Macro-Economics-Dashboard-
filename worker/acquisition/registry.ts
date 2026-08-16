@@ -16,7 +16,7 @@ export interface AcquisitionSource {
   url: string;
   category: string;
   region: string;
-  methods: AcquisitionMethod[];
+  methods: string[];
   cacheTtlSeconds: number;
   minIntervalSeconds: number;
   allowBrowser: boolean;
