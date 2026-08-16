@@ -23,9 +23,10 @@ const USER_AGENT = 'FXGA-Macro-Intelligence/1.0 (+public economic research colle
 const BROWSER_RESERVATION_SECONDS = 30;
 const HARD_BROWSER_SOFT_CAP_SECONDS = 480;
 const MIN_BROWSER_LAUNCH_GAP_MS = 22_000;
+const ACQUISITION_CACHE_VERSION = 'v2';
 
 function cacheKey(source: AcquisitionSource) {
-  return new Request(`https://fxga-cache.internal/acquisition/${encodeURIComponent(source.id)}`);
+  return new Request(`https://fxga-cache.internal/acquisition/${ACQUISITION_CACHE_VERSION}/${encodeURIComponent(source.id)}`);
 }
 
 function stateKey(source: AcquisitionSource) {
@@ -156,7 +157,14 @@ async function renderWithBrowser(env: Env, storage: DurableObjectStorage, source
     browser = await launch(env.BROWSER);
     const page = await browser.newPage();
     await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: 15_000 });
-    await page.waitForTimeout(750);
+
+    // Economic-calendar widgets continue rendering after DOMContentLoaded. Waiting a
+    // bounded source-specific interval makes the browser fallback useful while still
+    // staying inside the daily Browser Run safety budget. It is only used on scheduled
+    // broad calendar syncs, never for rapid release-window polling.
+    const settleMs = source.id === 'fxstreet-calendar' ? 4_000 : source.id === 'myfxbook-calendar' ? 2_500 : 750;
+    await page.waitForTimeout(settleMs);
+
     const html = await page.content();
     const bodyText = await page.evaluate(() => document.body?.innerText ?? '');
     const extracted = await extractDocument(html.slice(0, 2_000_000), source.url, bodyText.slice(0, 100_000));
@@ -187,7 +195,7 @@ export async function acquireSource(env: Env, storage: DurableObjectStorage, sou
   if (state.cooldownUntil && state.cooldownUntil > now) {
     throw new Error(`Source cooldown active for ${source.name} until ${new Date(state.cooldownUntil).toISOString()}`);
   }
-  if (state.lastFetchAt && now - state.lastFetchAt < source.minIntervalSeconds * 1000) {
+  if (state.lastFetchAt && source.minIntervalSeconds > 0 && now - state.lastFetchAt < source.minIntervalSeconds * 1000) {
     throw new Error(`Source refresh guard active for ${source.name}`);
   }
 
