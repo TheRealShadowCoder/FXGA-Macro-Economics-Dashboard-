@@ -1,9 +1,9 @@
 import { ANALYSIS_SERIES, buildMacroAnalysis } from './analysis/macro';
-import { getCalendarEventsByIds, getEconomicCalendar } from './providers/calendar';
 import { DEFAULT_DASHBOARD_SERIES, getFredInternalSeries } from './providers/fred';
+import { getScrapedEconomicCalendar, refreshScrapedReleaseWindow } from './providers/scraped-calendar';
 import type { CalendarEvent, Env, MacroObservation } from './types';
 
-const SCHEDULER_KEY = 'scheduler:state:v1';
+const SCHEDULER_KEY = 'scheduler:state:v2';
 const BASELINE_KEY = 'macro:baseline:v1';
 const SNAPSHOT_PREFIX = 'release:snapshots:';
 const CALENDAR_HORIZON_DAYS = 14;
@@ -29,7 +29,7 @@ export interface ReleaseRuntime {
 }
 
 export interface SchedulerState {
-  version: 1;
+  version: 2;
   initializedAt: number;
   calendarSyncedAt: number;
   nextCalendarSyncAt: number;
@@ -68,9 +68,9 @@ function eventSignature(event: CalendarEvent) {
     event.actual ?? '',
     event.previous ?? '',
     event.forecast ?? '',
-    event.teForecast ?? '',
     event.revised ?? '',
     event.lastUpdate ?? '',
+    event.source ?? '',
   ]);
 }
 
@@ -194,9 +194,9 @@ export async function bootstrapScheduler(env: Env, storage: DurableObjectStorage
   let baseline = await getBaseline(storage);
   if (!baseline && env.FRED_API_KEY) baseline = await refreshMacroBaseline(env, storage, null);
 
-  const calendar = await getEconomicCalendar(env, CALENDAR_HORIZON_DAYS, 1);
+  const calendar = await getScrapedEconomicCalendar(env, storage, CALENDAR_HORIZON_DAYS);
   const state: SchedulerState = {
-    version: 1,
+    version: 2,
     initializedAt: existing?.initializedAt ?? now,
     calendarSyncedAt: now,
     nextCalendarSyncAt: nextUtcCalendarSync(now),
@@ -216,7 +216,7 @@ export async function syncCalendarSchedule(env: Env, storage: DurableObjectStora
   const state = (await getState(storage)) ?? await bootstrapScheduler(env, storage, true);
   const now = Date.now();
   const baseline = await getBaseline(storage);
-  const calendar = await getEconomicCalendar(env, CALENDAR_HORIZON_DAYS, 1);
+  const calendar = await getScrapedEconomicCalendar(env, storage, CALENDAR_HORIZON_DAYS);
   const previousById = new Map(state.events.map((event) => [event.id, event]));
   const refreshed = calendar.map((event) => runtimeFromCalendar(event, previousById.get(event.id), now, baseline?.id));
 
@@ -259,13 +259,11 @@ export async function processSchedulerAlarm(env: Env, storage: DurableObjectStor
   if (!state) state = await bootstrapScheduler(env, storage, true);
   const now = Date.now();
 
-  if (now >= state.nextCalendarSyncAt - 1000) {
-    state = await syncCalendarSchedule(env, storage);
-  }
+  if (now >= state.nextCalendarSyncAt - 1000) state = await syncCalendarSchedule(env, storage);
 
   const due = state.events.filter((event) => event.nextPollAt !== null && event.nextPollAt <= now + 1000).slice(0, 40);
   if (due.length) {
-    const refreshed = await getCalendarEventsByIds(env, due.map((event) => event.id));
+    const refreshed = await refreshScrapedReleaseWindow(env, storage, due.map((runtime) => runtime.event));
     const byId = new Map(refreshed.map((event) => [event.id, event]));
 
     for (const runtime of due) {
@@ -307,12 +305,14 @@ export async function processSchedulerAlarm(env: Env, storage: DurableObjectStor
 
 export async function getSchedulerView(env: Env, storage: DurableObjectStorage, bootstrap = false) {
   let state = await getState(storage);
-  if (!state && bootstrap && env.TRADING_ECONOMICS_API_KEY) state = await bootstrapScheduler(env, storage, true);
+  if (!state && bootstrap) {
+    try { state = await bootstrapScheduler(env, storage, true); } catch { /* surfaced below */ }
+  }
   const baseline = await getBaseline(storage);
   if (!state) {
     return {
       initialized: false,
-      reason: env.TRADING_ECONOMICS_API_KEY ? 'Scheduler has not been bootstrapped yet.' : 'TRADING_ECONOMICS_API_KEY is not configured.',
+      reason: 'Scraped calendar consensus has not been bootstrapped yet or all calendar sources were temporarily unavailable.',
       baseline,
       upcoming: [],
       active: [],
@@ -330,6 +330,8 @@ export async function getSchedulerView(env: Env, storage: DurableObjectStorage, 
 
   return {
     initialized: true,
+    mode: 'scraped-calendar-consensus',
+    calendarSources: ['Myfxbook', 'FXStreet', 'CNBC'],
     initializedAt: new Date(state.initializedAt).toISOString(),
     calendarSyncedAt: new Date(state.calendarSyncedAt).toISOString(),
     nextCalendarSyncAt: new Date(state.nextCalendarSyncAt).toISOString(),
