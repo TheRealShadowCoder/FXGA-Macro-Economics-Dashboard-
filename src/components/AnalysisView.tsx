@@ -1,4 +1,5 @@
 import type { MacroAnalysisPayload } from '../lib/types';
+import { EconomyAnalysisView } from './EconomyAnalysisView';
 
 function scoreClass(score: number) {
   return score > 15 ? 'positive' : score < -15 ? 'negative' : 'neutral';
@@ -44,7 +45,7 @@ export function AnalysisView({ data, loading, error }: { data: MacroAnalysisPayl
         </div>
       </section>
 
-      <section className="section-head"><div><span className="eyebrow">Causal Macro Engine</span><h2>Normalized economic dimensions</h2></div></section>
+      <section className="section-head"><div><span className="eyebrow">Causal Macro Engine</span><h2>Normalized U.S. economic dimensions</h2></div></section>
       <section className="analysis-grid">
         {data.dimensions.map((dimension) => (
           <article className="analysis-card" key={dimension.id}>
@@ -74,9 +75,11 @@ export function AnalysisView({ data, loading, error }: { data: MacroAnalysisPayl
         ))}
       </section>
 
+      <EconomyAnalysisView />
+
       <section className="two-col analysis-bottom">
         <div className="panel">
-          <div className="panel-title"><div><span className="eyebrow">Largest Changes</span><h2>Top macro impulses</h2></div></div>
+          <div className="panel-title"><div><span className="eyebrow">Largest Changes</span><h2>Top U.S. macro impulses</h2></div></div>
           {data.topSignals.map((signal) => (
             <div className="signal-row" key={signal.seriesId}><div><strong>{signal.seriesId}</strong><span>{signal.title}</span></div><b className={scoreClass(signal.score)}>{signal.score}</b></div>
           ))}
