@@ -76,16 +76,17 @@ jobs:
           if (health?.safety?.workerSubrequestCeiling > 45 || health?.safety?.collectorMaxConcurrentConnections > 5 || health?.safety?.browserSoftBudgetSecondsPerUtcDay > 480) throw new Error('Safety budget regression');
 
           const catalog = await getJson('/api/fred/catalog');
-          if (catalog?.policy?.importantOnly !== true) throw new Error('FRED catalog is not marked important-only');
-          if (!Array.isArray(catalog?.series) || catalog.series.length < 35 || catalog.series.length > 40) throw new Error(`Important FRED set should be 35-40 series, got ${catalog?.series?.length ?? 0}`);
-          if (!Array.isArray(catalog?.categories) || catalog.categories.length < 12 || catalog.categories.length > 15) throw new Error(`Unexpected important FRED category count: ${catalog?.categories?.length ?? 0}`);
+          if (catalog?.policy?.importantOnly !== true) throw new Error('FRED catalog is not marked curated/important-only');
+          if (!Array.isArray(catalog?.series) || catalog.series.length !== 109) throw new Error(`Expected 109-series curated FRED base, got ${catalog?.series?.length ?? 0}`);
+          if (!Array.isArray(catalog?.categories) || catalog.categories.length !== 17) throw new Error(`Expected 17 FRED categories, got ${catalog?.categories?.length ?? 0}`);
+          if (!Array.isArray(catalog?.policy?.globalCoverage) || !['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN'].every((name) => catalog.policy.globalCoverage.includes(name))) throw new Error('Global FRED coverage policy is incomplete');
           if (catalog.series.some((series) => !['critical','high'].includes(series.importance))) throw new Error('FRED catalog contains a non-important series');
 
-          const sampleCategories = ['inflation','labour','growth','liquidity','credit','policy-rates','treasury-yields','yield-spreads','recession-risk','financial-conditions','usd-fx','volatility','consumption','leading-indicators'];
+          const sampleCategories = ['inflation','labour','growth','liquidity','credit','housing','manufacturing','policy-rates','treasury-yields','yield-spreads','recession-risk','financial-conditions','usd-fx','volatility','consumption','business-activity','leading-indicators'];
           for (const category of sampleCategories) {
             const payload = await getJson(`/api/fred?category=${encodeURIComponent(category)}&limit=1`);
             const first = payload?.series?.[0];
-            if (!first || first.value === null || !first.date) throw new Error(`Live important FRED category ${category} returned no observation`);
+            if (!first || first.value === null || !first.date) throw new Error(`Live curated FRED category ${category} returned no observation`);
           }
 
           const analysis = await getJson('/api/analysis');
@@ -135,5 +136,5 @@ jobs:
             ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket verification failed')); });
           });
 
-          console.log(`FXGA verification passed: ${catalog.total} important FRED series, ${calendar.events.length} calendar events, ${impact.assets.length} release-impact assets, ${signals.sessions.length} session signal blocks.`);
+          console.log(`FXGA verification passed: ${catalog.total} curated FRED series across ${catalog.categories.length} categories, ${calendar.events.length} calendar events, ${impact.assets.length} release-impact assets, ${signals.sessions.length} session signal blocks.`);
           NODE
