@@ -1,0 +1,53 @@
+name: Verify FXGA Global Economies
+
+on:
+  workflow_run:
+    workflows: ["Deploy FXGA Macro Intelligence"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify live five-economy macro contract
+        run: |
+          node <<'NODE'
+          const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          async function json(path) {
+            const response = await fetch(base + path, { headers: { Accept: 'application/json' } });
+            const text = await response.text();
+            if (!response.ok) throw new Error(`${path} returned ${response.status}: ${text.slice(0,500)}`);
+            return JSON.parse(text);
+          }
+
+          const catalog = await json('/api/fred/catalog');
+          if (catalog.total !== 109 || catalog.categories?.length !== 17) throw new Error(`FRED contract regression: ${catalog.total}/${catalog.categories?.length}`);
+          for (const economy of ['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN']) {
+            if (!catalog.policy?.globalCoverage?.includes(economy)) throw new Error(`Missing global coverage policy for ${economy}`);
+          }
+
+          const global = await json('/api/global-macro');
+          if (!Array.isArray(global.targetEconomies) || global.targetEconomies.length !== 5) throw new Error('Global macro target economy list is incomplete');
+
+          const analysis = await json('/api/economy-analysis');
+          if (!Array.isArray(analysis.economies) || analysis.economies.length !== 5) throw new Error(`Expected five economy states, got ${analysis.economies?.length ?? 0}`);
+          const expected = {
+            USA: ['USD','Federal Reserve'],
+            EUROPE: ['EUR','European Central Bank'],
+            UK: ['GBP','Bank of England'],
+            SOUTH_AFRICA: ['ZAR','South African Reserve Bank'],
+            JAPAN: ['JPY','Bank of Japan'],
+          };
+          for (const [id,[currency,centralBank]] of Object.entries(expected)) {
+            const economy = analysis.economies.find((item) => item.id === id);
+            if (!economy) throw new Error(`Missing ${id} economy state`);
+            if (economy.currency !== currency || economy.centralBank !== centralBank) throw new Error(`Incorrect mapping for ${id}`);
+            if (!Array.isArray(economy.dimensions) || economy.dimensions.length !== 5) throw new Error(`Expected five dimensions for ${id}`);
+            if (typeof economy.currencyScore !== 'number' || typeof economy.confidence !== 'number') throw new Error(`Missing scoring fields for ${id}`);
+          }
+          console.log(`Global-economy contract passed: ${catalog.total} curated FRED series, ${analysis.economies.length} economy engines, collector=${analysis.collectorMode}.`);
+          NODE
