@@ -28,6 +28,13 @@ function clean(value: string | undefined) {
   return trimmed && trimmed !== '-' && trimmed !== '—' ? trimmed : undefined;
 }
 
+function numberFrom(value: string | undefined) {
+  const cleaned = clean(value)?.replace(/,/g, '').replace(/%/g, '');
+  if (!cleaned) return undefined;
+  const numeric = Number(cleaned);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
 function parseTime(value: string) {
   const match = value.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
   if (!match) return null;
@@ -40,10 +47,7 @@ function parseTime(value: string) {
 }
 
 function tokenizeChunk(chunk: string) {
-  return chunk
-    .split(/[\t\n]+/)
-    .map((value) => value.trim())
-    .filter(Boolean);
+  return chunk.split(/[\t\n]+/).map((value) => value.trim()).filter(Boolean);
 }
 
 export function parseFxstreetVisibleCalendar(text: string): CalendarEvent[] {
@@ -57,32 +61,25 @@ export function parseFxstreetVisibleCalendar(text: string): CalendarEvent[] {
     const month = MONTHS.indexOf(heading[2].toLowerCase());
     const day = Number(heading[3]);
     if (month < 0 || !Number.isFinite(day)) continue;
-
     const start = (heading.index ?? 0) + heading[0].length;
     const end = headingIndex + 1 < headings.length ? (headings[headingIndex + 1].index ?? text.length) : text.length;
     const segment = text.slice(start, end);
+    const times = [...segment.matchAll(/\b(\d{1,2}:\d{2}\s*(?:AM|PM))\b/gi)];
 
-    const timeRegex = /\b(\d{1,2}:\d{2}\s*(?:AM|PM))\b/gi;
-    const times = [...segment.matchAll(timeRegex)];
     for (let timeIndex = 0; timeIndex < times.length; timeIndex += 1) {
       const timeMatch = times[timeIndex];
       const parsedTime = parseTime(timeMatch[1]);
       if (!parsedTime) continue;
-
       const chunkStart = timeMatch.index ?? 0;
       const chunkEnd = timeIndex + 1 < times.length ? (times[timeIndex + 1].index ?? segment.length) : segment.length;
       const tokens = tokenizeChunk(segment.slice(chunkStart, chunkEnd));
-      if (tokens.length < 3) continue;
-
       const currencyIndex = tokens.findIndex((value, index) => index > 0 && /^[A-Z]{3}$/.test(value));
       if (currencyIndex < 1 || !tokens[currencyIndex + 1]) continue;
       const currency = tokens[currencyIndex];
       const event = tokens[currencyIndex + 1];
-
-      // FXStreet's visible grid columns are: Actual, Dev, Consensus, Previous.
-      // Impact is rendered as an icon and may not appear in innerText.
       const values = tokens.slice(currencyIndex + 2, currencyIndex + 6);
       const actual = clean(values[0]);
+      const deviation = numberFrom(values[1]);
       const consensus = clean(values[2]);
       const previous = clean(values[3]);
       const date = nearestUtcDate(month, day, parsedTime.hour, parsedTime.minute);
@@ -92,20 +89,13 @@ export function parseFxstreetVisibleCalendar(text: string): CalendarEvent[] {
 
       events.push({
         id: `fxstreet-visible-${hash(identity)}`,
-        date: date.toISOString(),
-        country: currency,
-        currency,
-        event,
-        category: 'Economic Calendar',
-        importance: 1,
-        actual,
-        previous,
-        forecast: consensus,
-        source: 'FXStreet',
+        date: date.toISOString(), country: currency, currency, event,
+        category: 'Economic Calendar', importance: 1,
+        actual, deviation, previous, forecast: consensus,
+        source: 'FXStreet', providers: ['fxstreet'], sourceCount: 1,
         lastUpdate: new Date().toISOString(),
       });
     }
   }
-
   return events.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
 }
