@@ -34,7 +34,7 @@ jobs:
         run: |
           node --check cloud-run-collector/src/technical-engine.js
           node --check cloud-run-collector/src/server-v2.js
-          npm ci
+          npm install --no-audit --no-fund
           npm run build
 
       - name: Commit integrated upgrade
