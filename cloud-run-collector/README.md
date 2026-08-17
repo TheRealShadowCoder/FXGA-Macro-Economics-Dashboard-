@@ -18,9 +18,9 @@ Deployment authentication is provided by GitHub Actions through Workload Identit
 4. A narrow FXStreet public calendar request refreshes Actual/Consensus/Previous/Revised/Deviation for the whole release cluster.
 5. If the release fingerprint did not change, no webhook is sent.
 6. If state changed, one HMAC-signed webhook is sent to Cloudflare.
-7. A second Cloud Scheduler job calls `/macro-sync` hourly. Only the decision-relevant FRED set is fetched, and Cloudflare is notified only when the stored macro snapshot changes.
+7. The fast macro job refreshes market-sensitive FRED/rates/FX/risk series hourly, while the full global 109+ universe is rebuilt daily.
 
-Firestore uses a few aggregate state documents rather than one document per poll to reduce reads/writes. Cloud Tasks use deterministic task IDs so repeated calendar bootstraps do not create duplicate release tasks.
+Firestore uses aggregate state documents rather than one document per poll to reduce reads/writes. Cloud Tasks use deterministic task IDs so repeated calendar bootstraps do not create duplicate release tasks.
 
 ## Required Google Cloud services
 
@@ -36,18 +36,20 @@ Run `infra/bootstrap-gcp.sh` once from Google Cloud Shell after setting `PROJECT
 
 ## GitHub configuration
 
-Repository variables:
+The deployment workflow is pinned to project `fxglobalavengerstradingacademy` and derives these service-account emails automatically:
 
-- `GCP_PROJECT_ID`
-- `GCP_REGION` (recommended initial value: `us-central1`)
+- `fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com`
+- `fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com`
 
-Repository secrets:
+Optional repository variable:
 
-- `GCP_WIF_PROVIDER`
-- `GCP_DEPLOY_SERVICE_ACCOUNT`
-- `GCP_RUNTIME_SERVICE_ACCOUNT`
-- `COLLECTOR_WEBHOOK_SECRET`
-- `FRED_API_KEY`
+- `GCP_REGION` (defaults to `us-central1`)
+
+Required Actions values:
+
+- `GCP_WIF_PROVIDER` — may be stored as an Actions Variable or Secret
+- `COLLECTOR_WEBHOOK_SECRET` — store as an Actions Secret
+- `FRED_API_KEY` — store as an Actions Secret
 
 Do not put API keys, service-account JSON, or webhook secrets in source files.
 
