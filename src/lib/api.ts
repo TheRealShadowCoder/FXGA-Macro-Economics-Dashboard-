@@ -5,6 +5,7 @@ import type {
   FredCatalogPayload,
   MacroAnalysisPayload,
   MacroObservation,
+  SessionSignalsPayload,
 } from './types';
 
 async function getJson<T>(path: string): Promise<T> {
@@ -28,6 +29,10 @@ export function fetchDashboard(): Promise<DashboardPayload> {
 
 export function fetchMacroAnalysis(): Promise<MacroAnalysisPayload> {
   return getJson<MacroAnalysisPayload>('/api/analysis');
+}
+
+export function fetchSessionSignals(): Promise<SessionSignalsPayload> {
+  return getJson<SessionSignalsPayload>('/api/session-signals');
 }
 
 export function fetchFredCatalog(): Promise<FredCatalogPayload> {
