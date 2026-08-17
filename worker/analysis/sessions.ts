@@ -2,6 +2,7 @@ import { analyzeCalendarEvent } from './calendar';
 import type { CalendarEvent } from '../types';
 
 type Direction = 'BUY' | 'SELL' | 'WAIT';
+type SessionId = 'sydney' | 'tokyo' | 'london' | 'new-york' | 'overlap';
 
 type MacroAnalysisLike = {
   regime?: { name?: string };
@@ -9,8 +10,18 @@ type MacroAnalysisLike = {
   assets?: Array<{ id: string; score: number; bias?: string }>;
 };
 
+interface BaseSessionDef {
+  id: Exclude<SessionId, 'overlap'>;
+  label: string;
+  timeZone: string;
+  localStart: number;
+  localEnd: number;
+  focusCurrencies: string[];
+  symbols: string[];
+}
+
 interface SessionDef {
-  id: 'asia' | 'london' | 'new-york' | 'overlap';
+  id: SessionId;
   label: string;
   start: number;
   end: number;
@@ -18,15 +29,57 @@ interface SessionDef {
   symbols: string[];
 }
 
-const SESSIONS: SessionDef[] = [
-  { id: 'asia', label: 'Asia Session', start: 0, end: 9 * 60, focusCurrencies: ['JPY', 'AUD', 'NZD', 'CNY', 'USD'], symbols: ['USDJPY', 'AUDUSD', 'NZDUSD', 'AUDJPY', 'XAUUSD'] },
-  { id: 'london', label: 'London Session', start: 7 * 60, end: 16 * 60, focusCurrencies: ['EUR', 'GBP', 'CHF', 'USD'], symbols: ['EURUSD', 'GBPUSD', 'USDCHF', 'EURGBP', 'XAUUSD'] },
-  { id: 'new-york', label: 'New York Session', start: 12 * 60, end: 21 * 60, focusCurrencies: ['USD', 'CAD', 'EUR', 'GBP', 'JPY'], symbols: ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'XAUUSD', 'SPX500', 'BTCUSD'] },
-  { id: 'overlap', label: 'London / New York Overlap', start: 12 * 60, end: 16 * 60, focusCurrencies: ['USD', 'EUR', 'GBP', 'CAD', 'JPY'], symbols: ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'XAUUSD'] },
+const BASE_SESSIONS: BaseSessionDef[] = [
+  { id: 'sydney', label: 'Sydney Session', timeZone: 'Australia/Sydney', localStart: 8 * 60, localEnd: 17 * 60, focusCurrencies: ['AUD', 'NZD', 'JPY', 'USD'], symbols: ['AUDUSD', 'NZDUSD', 'AUDJPY', 'NZDJPY', 'XAUUSD'] },
+  { id: 'tokyo', label: 'Tokyo Session', timeZone: 'Asia/Tokyo', localStart: 9 * 60, localEnd: 18 * 60, focusCurrencies: ['JPY', 'CNY', 'AUD', 'NZD', 'USD'], symbols: ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'XAUUSD'] },
+  { id: 'london', label: 'London Session', timeZone: 'Europe/London', localStart: 8 * 60, localEnd: 17 * 60, focusCurrencies: ['EUR', 'GBP', 'CHF', 'USD'], symbols: ['EURUSD', 'GBPUSD', 'USDCHF', 'EURGBP', 'XAUUSD'] },
+  { id: 'new-york', label: 'New York Session', timeZone: 'America/New_York', localStart: 8 * 60, localEnd: 17 * 60, focusCurrencies: ['USD', 'CAD', 'EUR', 'GBP', 'JPY'], symbols: ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'XAUUSD', 'SPX500', 'BTCUSD'] },
 ];
 
 function clamp(value: number, min = -100, max = 100) {
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizeMinute(value: number) {
+  return ((value % 1440) + 1440) % 1440;
+}
+
+function timeZoneOffsetMinutes(timeZone: string, date: Date) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(date).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  const representedUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+  return Math.round((representedUtc - date.getTime()) / 60_000);
+}
+
+function resolveBaseSession(def: BaseSessionDef, now: Date): SessionDef {
+  const offset = timeZoneOffsetMinutes(def.timeZone, now);
+  return {
+    id: def.id,
+    label: def.label,
+    start: normalizeMinute(def.localStart - offset),
+    end: normalizeMinute(def.localEnd - offset),
+    focusCurrencies: def.focusCurrencies,
+    symbols: def.symbols,
+  };
+}
+
+function resolveSessions(now: Date): SessionDef[] {
+  const resolved = BASE_SESSIONS.map((def) => resolveBaseSession(def, now));
+  const london = resolved.find((session) => session.id === 'london')!;
+  const newYork = resolved.find((session) => session.id === 'new-york')!;
+  const overlap: SessionDef = {
+    id: 'overlap',
+    label: 'London / New York Overlap',
+    start: Math.max(london.start, newYork.start),
+    end: Math.min(london.end, newYork.end),
+    focusCurrencies: ['USD', 'EUR', 'GBP', 'CAD', 'JPY'],
+    symbols: ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'XAUUSD'],
+  };
+  return [...resolved, overlap];
 }
 
 function minuteOfDay(date: Date) {
@@ -35,9 +88,11 @@ function minuteOfDay(date: Date) {
 
 function sessionState(def: SessionDef, now: Date) {
   const minute = minuteOfDay(now);
-  if (minute >= def.start && minute < def.end) return 'active' as const;
-  if (minute < def.start) return 'upcoming' as const;
-  return 'closed' as const;
+  const wraps = def.start > def.end;
+  const active = wraps ? minute >= def.start || minute < def.end : minute >= def.start && minute < def.end;
+  if (active) return 'active' as const;
+  if (wraps) return minute < def.start && minute >= def.end ? 'upcoming' as const : 'closed' as const;
+  return minute < def.start ? 'upcoming' as const : 'closed' as const;
 }
 
 function formatWindow(def: SessionDef) {
@@ -106,8 +161,7 @@ export function buildSessionSignals(analysis: MacroAnalysisLike, rawEvents: Cale
   const events = rawEvents.map(analyzeCalendarEvent).filter((event) => Number.isFinite(Date.parse(event.date)));
   const macroConfidence = analysis.confidence ?? 50;
   const usdMacro = assetScore(analysis, 'usd');
-
-  const sessions = SESSIONS.map((def) => {
+  const sessions = resolveSessions(now).map((def) => {
     const state = sessionState(def, now);
     const relevant = events.filter((event) => def.focusCurrencies.includes(event.currency ?? '') && Math.abs(Date.parse(event.date) - nowMs) <= 18 * 60 * 60_000);
     const catalyst = nextCatalyst(events, def.focusCurrencies, nowMs);
@@ -133,36 +187,24 @@ export function buildSessionSignals(analysis: MacroAnalysisLike, rawEvents: Cale
         ...(locked && symbolCatalyst ? [`High-impact lockout before ${symbolCatalyst.event}`] : []),
       ];
       return {
-        symbol,
-        direction: finalDirection,
-        score,
-        confidence,
-        rationale,
+        symbol, direction: finalDirection, score, confidence, rationale,
         invalidation: 'Invalidate on an opposite high-impact macro surprise or when the underlying macro score crosses back through neutral. Require technical execution confirmation before entry.',
         catalyst: symbolCatalyst ? `${symbolCatalyst.currency ?? ''} ${symbolCatalyst.event} · ${new Date(symbolCatalyst.date).toISOString()}` : undefined,
       };
     });
 
     return {
-      id: def.id,
-      label: def.label,
-      windowUtc: formatWindow(def),
-      active: state === 'active',
-      state,
-      risk,
+      id: def.id, label: def.label, windowUtc: formatWindow(def), active: state === 'active', state, risk,
       focusCurrencies: def.focusCurrencies,
       nextCatalyst: catalyst ? `${catalyst.currency ?? ''} ${catalyst.event} · ${new Date(catalyst.date).toISOString()}` : undefined,
-      eventCount: relevant.length,
-      signals,
+      eventCount: relevant.length, signals,
     };
   });
 
   return {
     generatedAt: now.toISOString(),
-    methodology: 'Session signal = macro regime + USD/risk-asset bias + released FXStreet surprise/deviation impulses + scheduled catalyst lockouts. Signals are recalculated from persisted event state; no continuous polling is required.',
+    methodology: 'Session signal = macro regime + USD/risk-asset bias + released FXStreet surprise/deviation impulses + scheduled catalyst lockouts. Sydney, Tokyo, London and New York windows are converted from their local market clocks to UTC using current timezone offsets, so seasonal daylight-saving changes are reflected automatically.',
     caution: 'These are report-based directional biases, not standalone entries. Technical structure, liquidity, invalidation and risk controls remain mandatory before execution.',
-    macroRegime: analysis.regime?.name ?? 'Unknown',
-    macroConfidence,
-    sessions,
+    macroRegime: analysis.regime?.name ?? 'Unknown', macroConfidence, sessions,
   };
 }
