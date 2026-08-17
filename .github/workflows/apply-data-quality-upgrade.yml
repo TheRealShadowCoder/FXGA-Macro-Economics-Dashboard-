@@ -1,0 +1,41 @@
+name: Apply FXGA Data Quality Upgrade
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-data-quality-upgrade.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fxga-data-quality-upgrade
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply macro data-quality integration
+        run: python3 scripts/apply_data_quality_upgrade.py
+      - name: Validate data service and application
+        run: |
+          node --check cloud-run-collector/src/super-runtime.js
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Commit data-quality integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then exit 0; fi
+          git add cloud-run-collector/src/super-runtime.js worker/index-v3.ts
+          git commit -m "Integrate macro data-quality diagnostics"
+          git pull --rebase origin main
+          git push origin HEAD:main
