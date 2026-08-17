@@ -1,6 +1,6 @@
 name: Integrate Institutional Research Platform
 
-# Integration revision 2
+# Integration revision 3
 on:
   push:
     paths:
@@ -41,7 +41,7 @@ jobs:
 
       - name: Validate frontend build
         run: |
-          npm ci
+          npm install --progress=false
           npm run build
 
       - name: Commit integrated platform
