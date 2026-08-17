@@ -1,0 +1,131 @@
+name: Canary FXGA Firestore 9
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/firestore-v9-canary.trigger'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  CANARY_SERVICE: fxga-macro-collector-firestore9
+  GAR_REPOSITORY: fxga-containers
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: config
+        name: Resolve production authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Prepare Firestore 9 canary source
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const path='cloud-run-collector/package.json';
+          const pkg=JSON.parse(fs.readFileSync(path,'utf8'));
+          pkg.version='4.6.1-firestore9-canary';
+          pkg.dependencies['@google-cloud/firestore']='9.0.0';
+          fs.writeFileSync(path,JSON.stringify(pkg,null,2)+'\n');
+          NODE
+          cd cloud-run-collector
+          npm install --ignore-scripts --no-fund --no-audit
+          npm run check
+          npm audit --omit=dev --json > /tmp/canary-audit.json || true
+          node <<'NODE'
+          const fs=require('fs'),x=JSON.parse(fs.readFileSync('/tmp/canary-audit.json','utf8')),v=x?.metadata?.vulnerabilities||{};
+          console.log('CANARY DEPENDENCY AUDIT',JSON.stringify(v));
+          if((v.moderate||0)+(v.high||0)+(v.critical||0)>0)throw new Error('Firestore 9 canary dependency tree is not clean');
+          NODE
+
+      - name: Build and push canary image
+        run: |
+          gcloud config set project "$GCP_PROJECT_ID"
+          IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/firestore9-canary:${GITHUB_SHA}"
+          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+          docker build -t "$IMAGE" cloud-run-collector
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy private read-only canary
+        run: |
+          gcloud run deploy "$CANARY_SERVICE" \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --no-allow-unauthenticated \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --cpu 1 \
+            --memory 1Gi \
+            --concurrency 5 \
+            --min 0 \
+            --max 1 \
+            --timeout 120 \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,CALENDAR_DAYS=14,MAX_BROWSER_SECONDS=25,GLOBAL_FRED_TARGET=180"
+          CANARY_URL=$(gcloud run services describe "$CANARY_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          test -n "$CANARY_URL" || { echo '::error::Canary URL missing'; exit 1; }
+          echo "url=$CANARY_URL" >> "$GITHUB_OUTPUT"
+          echo "CANARY_URL=$CANARY_URL" >> "$GITHUB_ENV"
+          gcloud run services add-iam-policy-binding "$CANARY_SERVICE" --region "$GCP_REGION" --member="serviceAccount:$DEPLOY_SERVICE_ACCOUNT" --role=roles/run.invoker >/dev/null
+        id: deploy_canary
+
+      - id: invoke
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.deploy_canary.outputs.url }}
+          id_token_include_email: true
+
+      - name: Read real production state through Firestore 9
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          curl --max-time 60 -fsS -H "Authorization: Bearer $TOKEN" "$CANARY_URL/health" > /tmp/health.json
+          curl --max-time 60 -fsS -H "Authorization: Bearer $TOKEN" "$CANARY_URL/state" > /tmp/state.json
+          node <<'NODE'
+          const fs=require('fs'),h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8')),s=JSON.parse(fs.readFileSync('/tmp/state.json','utf8'));
+          const events=s?.calendar?.payload?.events||[];
+          const observations=s?.macro?.payload?.observations||[];
+          const technical=s?.technical?.payload?.assets||{};
+          const intelligence=s?.intelligence?.payload;
+          if(!h.ok)throw new Error('Firestore 9 canary health is not OK');
+          if(events.length<1)throw new Error('Firestore 9 canary cannot read calendar state');
+          if(observations.length<100)throw new Error(`Firestore 9 canary macro read too small: ${observations.length}`);
+          if(Object.keys(technical).length<5)throw new Error('Firestore 9 canary cannot read technical state');
+          if(Number(intelligence?.schemaVersion)!==4)throw new Error('Firestore 9 canary cannot read intelligence state');
+          console.log(JSON.stringify({events:events.length,observations:observations.length,technicalAssets:Object.keys(technical).length,schemaVersion:intelligence.schemaVersion}));
+          NODE
+
+      - name: Delete canary service
+        if: always()
+        run: |
+          gcloud run services delete "$CANARY_SERVICE" --region "$GCP_REGION" --quiet >/dev/null 2>&1 || true
