@@ -100,12 +100,35 @@ export interface ReleaseProbabilities {
   method: 'empirical-bayesian';
 }
 
+export interface FxstreetStyleAnalytics {
+  expectedImpact: 'none' | 'low' | 'medium' | 'high';
+  expectedImpactScore: number;
+  nativeDeviation?: number;
+  deviationPercentile?: number;
+  consensusErrorZ?: number;
+  revisionZ?: number;
+  revisionAdjustedScore?: number;
+  surpriseMomentum: 'accelerating' | 'decelerating' | 'stable' | 'insufficient-history';
+  directionalConsistency?: number;
+  historicalReliability: number;
+  historicalMeanDeviation?: number;
+  historicalDeviationStd?: number;
+  sampleSize: number;
+  methodology: 'fxga-transparent-fxstreet-style';
+  marketImpactAvailability: {
+    trueRange: 'requires-market-price-history';
+    volatilityRatio: 'requires-market-price-history';
+    trueRangeVsDeviation: 'requires-market-price-history';
+  };
+}
+
 export interface CalendarEvent {
   id: string; date: string; country: string; event: string; category: string; importance: number;
   actual?: string; previous?: string; forecast?: string; teForecast?: string; revised?: string; currency?: string; unit?: string;
   source?: string; providers?: string[]; sourceCount?: number; confidence?: number;
   deviation?: number; normalizedSurprise?: number; standardizedSurprise?: number; surprisePercent?: number;
   revisionDelta?: number; releaseScore?: number; outcome?: ReleaseOutcome; probabilities?: ReleaseProbabilities;
+  fxstreetAnalytics?: FxstreetStyleAnalytics;
   relation?: boolean | null; betterThanExpected?: boolean; worseThanExpected?: boolean;
   analysisConfidence?: number; analysisNote?: string;
 }
