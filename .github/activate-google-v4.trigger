@@ -1,2 +1,2 @@
-activate=2026-08-17T15:14:00Z
-reason=Verify Google acquisition resilience, operational health, critical intelligence matrix v4, and passive Cloudflare replay.
+activate=2026-08-17T15:20:00Z
+reason=Retry schema-v4 replay after fixing Node async signed webhook execution.
