@@ -129,8 +129,10 @@ jobs:
             --max 1 \
             --timeout 60 \
             --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION"
-          CANARY_URL=$(gcloud run services describe "$CANARY_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
-          test -n "$CANARY_URL" || { echo '::error::Canary URL missing'; exit 1; }
+          PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')
+          test -n "$PROJECT_NUMBER" || { echo '::error::Project number missing'; exit 1; }
+          CANARY_URL="https://${CANARY_SERVICE}-${PROJECT_NUMBER}.${GCP_REGION}.run.app"
+          echo "Deterministic canary URL: $CANARY_URL"
           echo "url=$CANARY_URL" >> "$GITHUB_OUTPUT"
           echo "CANARY_URL=$CANARY_URL" >> "$GITHUB_ENV"
           gcloud run services add-iam-policy-binding "$CANARY_SERVICE" --region "$GCP_REGION" --member="serviceAccount:$DEPLOY_SERVICE_ACCOUNT" --role=roles/run.invoker >/dev/null
