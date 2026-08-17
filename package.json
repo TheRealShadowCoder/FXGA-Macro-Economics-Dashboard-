@@ -1,11 +1,12 @@
 {
   "name": "fxga-macro-intelligence-dashboard",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "check:public-copy": "node scripts/check-public-copy.mjs",
+    "build": "npm run check:public-copy && tsc -b && vite build",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler deploy",
     "cf-typegen": "wrangler types"
