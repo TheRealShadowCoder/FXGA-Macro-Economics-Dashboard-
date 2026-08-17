@@ -1,0 +1,40 @@
+name: Apply FXGA Event Study Workspace
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-event-study-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fxga-event-study-ui
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply event-study workspace
+        run: python3 scripts/apply_event_study_ui.py
+      - name: Validate dashboard
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Commit event-study workspace
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then exit 0; fi
+          git add src/App.tsx
+          git commit -m "Expose economic release reaction studies"
+          git pull --rebase origin main
+          git push origin HEAD:main
