@@ -1,7 +1,7 @@
 {
   "name": "fxga-macro-intelligence-dashboard",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,13 +17,13 @@
   },
   "devDependencies": {
     "@cloudflare/playwright": "1.3.0",
-    "@cloudflare/vite-plugin": "1.50.0",
+    "@cloudflare/vite-plugin": "1.52.1",
     "@cloudflare/workers-types": "5.20260801.1",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "6.0.4",
     "typescript": "^5.9.0",
     "vite": "8.2.0",
-    "wrangler": "4.118.0"
+    "wrangler": "4.123.0"
   }
 }
