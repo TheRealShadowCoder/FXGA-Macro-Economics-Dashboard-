@@ -1,135 +1,19 @@
 import { FX_GLOBAL_AVENGERS_LOGO } from './brand';
 
 const replacements: Array<[RegExp, string]> = [
-  [/FXGA Google Cloud Ingestion Matrix/gi, 'Institutional Data Operations'],
-  [/Google Cloud Sources/gi, 'Primary Data Sources'],
-  [/Google Cloud Run/gi, 'primary compute network'],
-  [/Google Cloud state update/gi, 'data update'],
-  [/Google Cloud update/gi, 'data update'],
-  [/Google-side feeds/gi, 'source feeds'],
-  [/Google source groups/gi, 'source groups'],
-  [/Google collection/gi, 'data collection'],
-  [/Google Cloud/gi, 'primary infrastructure'],
-  [/\bGoogle\b/gi, 'primary'],
-  [/FXGA 9705/gi, ''],
-  [/\b9705\b/gi, ''],
-  [/FXGA Critical Intelligence Matrix/gi, 'Decision Intelligence'],
-  [/FXGA Causal Chain/gi, 'Macro Transmission Chain'],
-  [/FXGA macro regime/gi, 'macro regime'],
-  [/FXGA decision pipeline/gi, 'decision framework'],
-  [/FXGA Macro Intelligence/gi, 'Macro Intelligence'],
-  [/\bFXGA\b/gi, ''],
-  [/Super Economist/gi, 'Macro Research'],
-  [/AI[- ]generated/gi, 'system generated'],
-  [/Artificial Intelligence/gi, 'Quantitative Research'],
-  [/\bLLM\b/gi, 'research model'],
-  [/Signed Webhook Transport/gi, 'Secure Live Data Channel'],
-  [/signed webhooks/gi, 'authenticated live updates'],
-  [/webhooks/gi, 'live updates'],
-  [/Architecture Contract/gi, 'Operating Controls'],
-  [/Cloudflare acquisition/gi, 'edge acquisition'],
-  [/Cloudflare browser/gi, 'edge browser collection'],
-  [/Cloudflare FRED\/news\/calendar requests/gi, 'edge upstream collection'],
-  [/\bCloudflare\b/gi, 'edge network'],
-  [/Causal Macro Engine/gi, 'Macro Framework'],
-  [/Research engine/gi, 'Research framework'],
-  [/Acquisition Engine/gi, 'Data Operations'],
-  [/Decision Relevant FRED Set/gi, 'Decision Relevant Macro Library'],
-  [/important FRED indicators/gi, 'important macro indicators'],
-  [/Important FRED Data/gi, 'Core Macro Data'],
-  [/live FRED observations/gi, 'live macro observations'],
-  [/FRED catalog/gi, 'macro data catalog'],
-  [/\bWS\s+/g, 'Live '],
+  [/FXGA Google Cloud Ingestion Matrix/gi, 'Institutional Data Operations'],[/Google Cloud Sources/gi, 'Primary Data Sources'],[/Google Cloud Run/gi, 'primary compute network'],[/Google Cloud state update/gi, 'data update'],[/Google Cloud update/gi, 'data update'],[/Google-side feeds/gi, 'source feeds'],[/Google source groups/gi, 'source groups'],[/Google collection/gi, 'data collection'],[/Google Cloud/gi, 'primary infrastructure'],[/\bGoogle\b/gi, 'primary'],[/FXGA 9705/gi, ''],[/\b9705\b/gi, ''],[/FXGA Critical Intelligence Matrix/gi, 'Decision Intelligence'],[/FXGA Causal Chain/gi, 'Macro Transmission Chain'],[/FXGA macro regime/gi, 'macro regime'],[/FXGA decision pipeline/gi, 'decision framework'],[/FXGA Macro Intelligence/gi, 'Macro Intelligence'],[/\bFXGA\b/gi, ''],[/Super Economist/gi, 'Macro Research'],[/AI[- ]generated/gi, 'system generated'],[/Artificial Intelligence/gi, 'Quantitative Research'],[/\bLLM\b/gi, 'research model'],[/Signed Webhook Transport/gi, 'Secure Live Data Channel'],[/signed webhooks/gi, 'authenticated live updates'],[/webhooks/gi, 'live updates'],[/Architecture Contract/gi, 'Operating Controls'],[/Cloudflare acquisition/gi, 'edge acquisition'],[/Cloudflare browser/gi, 'edge browser collection'],[/Cloudflare FRED\/news\/calendar requests/gi, 'edge upstream collection'],[/\bCloudflare\b/gi, 'edge network'],[/Causal Macro Engine/gi, 'Macro Framework'],[/Research engine/gi, 'Research framework'],[/Acquisition Engine/gi, 'Data Operations'],[/Decision Relevant FRED Set/gi, 'Decision Relevant Macro Library'],[/important FRED indicators/gi, 'important macro indicators'],[/Important FRED Data/gi, 'Core Macro Data'],[/live FRED observations/gi, 'live macro observations'],[/FRED catalog/gi, 'macro data catalog'],[/\bWS\s+/g, 'Live '],
 ];
-
-function clean(value: string) {
-  return replacements.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value)
-    .replace(/\s{2,}/g, ' ')
-    .replace(/\s+·/g, ' ·')
-    .replace(/·\s*·/g, '·')
-    .replace(/^\s*[·|:]\s*/g, '')
-    .trim();
+function clean(value:string){return replacements.reduce((text,[pattern,replacement])=>text.replace(pattern,replacement),value).replace(/\s{2,}/g,' ').replace(/\s+·/g,' ·').replace(/·\s*·/g,'·').replace(/^\s*[·|:]\s*/g,'').trim();}
+function sanitizeText(root:Node){if(root.nodeType===Node.TEXT_NODE){const node=root as Text,original=node.nodeValue??'';if(!original.trim())return;const next=clean(original);if(next!==original.trim())node.nodeValue=next;return;}const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let current:Node|null;while((current=walker.nextNode()))sanitizeText(current);}
+function sanitizeAttributes(root:ParentNode=document){root.querySelectorAll<HTMLElement>('[title],[aria-label]').forEach(element=>{for(const attribute of ['title','aria-label']){const value=element.getAttribute(attribute);if(value)element.setAttribute(attribute,clean(value));}});root.querySelectorAll<HTMLInputElement>('input[placeholder]').forEach(input=>{const value=input.getAttribute('placeholder');if(value)input.setAttribute('placeholder',clean(value));});}
+function brand(){const mark=document.querySelector<HTMLElement>('.brand-mark');if(!mark)return;mark.textContent='';let image=mark.querySelector<HTMLImageElement>('img');if(!image){image=document.createElement('img');image.alt='FX Global Avengers Trading Academy';image.className='brand-logo-image';image.decoding='async';mark.appendChild(image);}image.src=FX_GLOBAL_AVENGERS_LOGO;mark.dataset.branded='true';const copy=mark.nextElementSibling,strong=copy?.querySelector('strong'),small=copy?.querySelector('span');if(strong)strong.textContent='FX Global Avengers';if(small)small.textContent='Trading Academy · Global Macro Research';}
+function accessibility(){
+  document.documentElement.dataset.ui='institutional';
+  const main=document.querySelector<HTMLElement>('main');if(main&&!main.id)main.id='main-content';
+  if(main&&!document.querySelector('.skip-link')){const link=document.createElement('a');link.className='skip-link';link.href='#main-content';link.textContent='Skip to main content';document.body.prepend(link);}
+  document.querySelectorAll<HTMLButtonElement>('nav button').forEach(button=>{if(!button.getAttribute('aria-label'))button.setAttribute('aria-label',button.textContent?.trim()||'Navigation');if(button.classList.contains('active'))button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
+  const search=document.querySelector<HTMLInputElement>('.top-actions input');if(search){search.setAttribute('aria-label','Search global macro research');search.setAttribute('autocomplete','off');search.setAttribute('spellcheck','false');}
 }
-
-function sanitizeText(root: Node) {
-  if (root.nodeType === Node.TEXT_NODE) {
-    const node = root as Text;
-    const original = node.nodeValue ?? '';
-    if (!original.trim()) return;
-    const next = clean(original);
-    if (next !== original.trim()) node.nodeValue = next;
-    return;
-  }
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let current: Node | null;
-  while ((current = walker.nextNode())) sanitizeText(current);
-}
-
-function sanitizeAttributes(root: ParentNode = document) {
-  root.querySelectorAll<HTMLElement>('[title],[aria-label]').forEach((element) => {
-    for (const attribute of ['title', 'aria-label']) {
-      const value = element.getAttribute(attribute);
-      if (value) element.setAttribute(attribute, clean(value));
-    }
-  });
-  root.querySelectorAll<HTMLInputElement>('input[placeholder]').forEach((input) => {
-    const value = input.getAttribute('placeholder');
-    if (value) input.setAttribute('placeholder', clean(value));
-  });
-}
-
-function brand() {
-  const mark = document.querySelector<HTMLElement>('.brand-mark');
-  if (!mark) return;
-  mark.textContent = '';
-  let image = mark.querySelector<HTMLImageElement>('img');
-  if (!image) {
-    image = document.createElement('img');
-    image.alt = 'FX Global Avengers Trading Academy';
-    image.className = 'brand-logo-image';
-    image.decoding = 'async';
-    mark.appendChild(image);
-  }
-  image.src = FX_GLOBAL_AVENGERS_LOGO;
-  mark.dataset.branded = 'true';
-  const copy = mark.nextElementSibling;
-  const strong = copy?.querySelector('strong');
-  const small = copy?.querySelector('span');
-  if (strong) strong.textContent = 'FX Global Avengers';
-  if (small) small.textContent = 'Trading Academy · Global Macro Research';
-}
-
-function accessibility() {
-  document.documentElement.dataset.ui = 'institutional';
-  document.querySelectorAll<HTMLButtonElement>('nav button').forEach((button) => {
-    if (!button.getAttribute('aria-label')) button.setAttribute('aria-label', button.textContent?.trim() || 'Navigation');
-  });
-  const search = document.querySelector<HTMLInputElement>('.top-actions input');
-  if (search) {
-    search.setAttribute('aria-label', 'Search global macro research');
-    search.setAttribute('autocomplete', 'off');
-    search.setAttribute('spellcheck', 'false');
-  }
-}
-
-function finish(root: ParentNode = document) {
-  sanitizeText(root as unknown as Node);
-  sanitizeAttributes(root);
-  brand();
-  accessibility();
-}
-
-const observer = new MutationObserver((records) => {
-  for (const record of records) {
-    for (const node of record.addedNodes) {
-      if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) sanitizeText(node);
-    }
-  }
-  sanitizeAttributes();
-  brand();
-  accessibility();
-});
-
-observer.observe(document.documentElement, { childList: true, subtree: true, attributes: false });
-queueMicrotask(() => finish());
-window.addEventListener('load', () => finish(), { once: true });
+function finish(root:ParentNode=document){sanitizeText(root as unknown as Node);sanitizeAttributes(root);brand();accessibility();}
+const observer=new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node.nodeType===Node.ELEMENT_NODE||node.nodeType===Node.TEXT_NODE)sanitizeText(node);sanitizeAttributes();brand();accessibility();});
+observer.observe(document.documentElement,{childList:true,subtree:true,attributes:false});queueMicrotask(()=>finish());window.addEventListener('load',()=>finish(),{once:true});
