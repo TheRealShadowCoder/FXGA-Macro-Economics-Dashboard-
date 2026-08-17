@@ -21,7 +21,7 @@ const ATR_LENGTH = 14;
 const DISPLACEMENT_ATR = 1.15;
 const DISPLACEMENT_BODY = 0.60;
 const MAX_OVERLAP = 0.35;
-const HISTORY_BARS = 42;
+const HISTORY_BARS = 24;
 
 const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(value);
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));

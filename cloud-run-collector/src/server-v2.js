@@ -436,7 +436,7 @@ async function syncCnbcMarket() {
   const historyId = snapshot.generatedAt.slice(0,16).replace(/[-:T]/g,'');
   await marketSnapshots.doc(historyId).set({ capturedAt:snapshot.generatedAt, source:'CNBC', assets:assets.map(({error,...asset})=>asset) }, { merge:true });
   if (saved.changed) await signedWebhook('market-snapshot', snapshot);
-  const technical=await updateTechnicalMarket(snapshot).catch((error)=>({error:String(error?.message||error).slice(0,300)}));
+  const technical=await updateTechnicalMarket(snapshot);
   return { changed:saved.changed, requested:snapshot.requested, live:snapshot.live, staleRetained:snapshot.staleRetained, failed:snapshot.failed, durationMs:snapshot.durationMs, technical };
 }
 async function bootstrapCalendar() {
