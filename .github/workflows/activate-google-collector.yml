@@ -59,21 +59,22 @@ jobs:
           echo "$HEALTH" | node -e '
             let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
               const h=JSON.parse(s);
-              if(!h.ok || h.service!=="fxga-cloud-run-collector") throw new Error("Collector health check failed");
+              if(!h.ok || h.service!=="fxga-cloud-run-collector" || Number(h.version||0)<2) throw new Error("Collector v2 health check failed");
             });'
 
-          # Force one bootstrap and one macro sync so Cloudflare is never cut over to an empty source.
           curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' "$SERVICE_URL/bootstrap" >/tmp/bootstrap.json
-          curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' "$SERVICE_URL/macro-sync" >/tmp/macro.json
+          curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"mode":"full"}' "$SERVICE_URL/macro-sync?mode=full" >/tmp/macro.json
           STATE=$(curl -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state")
           echo "$STATE" | node -e '
             let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
               const state=JSON.parse(s);
               const events=state?.calendar?.payload?.events?.length||0;
               const observations=state?.macro?.payload?.observations?.length||0;
+              const universe=state?.fredUniverse?.payload?.summary;
               if(events<1) throw new Error("Collector calendar state is empty");
-              if(observations<20) throw new Error(`Collector macro state is too small: ${observations}`);
-              console.log(`Cloud Run ready: ${events} calendar events, ${observations} macro observations.`);
+              if(observations<100) throw new Error(`Collector full macro state is too small: ${observations}`);
+              if((universe?.curatedBase||0)<109) throw new Error(`Curated FRED base is below 109: ${universe?.curatedBase||0}`);
+              console.log(`Cloud Run v2 ready: ${events} calendar events, ${observations} macro observations, ${universe?.total||0} discovered series.`);
             });'
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
 
@@ -118,7 +119,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: 4f260a0775a3df407e08512610c9898b
         run: npx wrangler deploy --var COLLECTOR_MODE:external-webhook
 
-      - name: Verify passive Cloudflare mode with populated state
+      - name: Verify passive Cloudflare mode with populated global state
         run: |
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
@@ -134,6 +135,8 @@ jobs:
           if(health?.safety?.normalStateUpstreamCalendarRequests!==0 || health?.safety?.normalStateUpstreamFredRequests!==0) throw new Error('Passive-mode upstream request guard failed');
           if(health?.safety?.browserSoftBudgetSecondsPerUtcDay!==0) throw new Error('Cloudflare Browser Run was not disabled');
           const state=await (await fetch(base+'/api/release-state')).json();
-          if(!state?.initialized || !state?.baseline?.analysis || !(state?.upcoming?.length>0)) throw new Error('Cloudflare external state is not populated');
-          console.log('Cutover verified: Cloudflare is passive and serving populated Google collector state.');
+          if(!state?.initialized || !state?.baseline?.analysis || (state?.baseline?.observations?.length||0)<100 || !(state?.upcoming?.length>0)) throw new Error('Cloudflare external state is not fully populated');
+          const globalMacro=await (await fetch(base+'/api/global-macro')).json();
+          if((globalMacro?.totalObservations||0)<100 || !Array.isArray(globalMacro?.targetEconomies) || globalMacro.targetEconomies.length!==5) throw new Error('Global macro API is incomplete after cutover');
+          console.log('Cutover verified: Cloudflare is passive and serving 100+ Google collector observations across five target economies.');
           NODE
