@@ -98,6 +98,15 @@ jobs:
           gcloud secrets describe fxga-fred-api-key >/dev/null 2>&1 || gcloud secrets create fxga-fred-api-key --replication-policy=automatic
           printf '%s' "$FRED_API_KEY" | gcloud secrets versions add fxga-fred-api-key --data-file=-
 
+      - name: Grant runtime secret access before deploy
+        run: |
+          gcloud secrets add-iam-policy-binding fxga-collector-webhook-secret \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role=roles/secretmanager.secretAccessor >/dev/null
+          gcloud secrets add-iam-policy-binding fxga-fred-api-key \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role=roles/secretmanager.secretAccessor >/dev/null
+
       - name: Build and push container
         run: |
           IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/$SERVICE:${GITHUB_SHA}"
@@ -126,11 +135,12 @@ jobs:
           gcloud run services update "$SERVICE" --region "$GCP_REGION" --update-env-vars "CLOUD_RUN_SERVICE_URL=$SERVICE_URL"
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
 
-      - name: Configure IAM invocation and secret access
+      - name: Configure Cloud Run invocation IAM
         run: |
-          gcloud run services add-iam-policy-binding "$SERVICE" --region "$GCP_REGION" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/run.invoker >/dev/null
-          gcloud secrets add-iam-policy-binding fxga-collector-webhook-secret --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/secretmanager.secretAccessor >/dev/null
-          gcloud secrets add-iam-policy-binding fxga-fred-api-key --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/secretmanager.secretAccessor >/dev/null
+          gcloud run services add-iam-policy-binding "$SERVICE" \
+            --region "$GCP_REGION" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role=roles/run.invoker >/dev/null
 
       - name: Configure three free-tier scheduler jobs
         run: |
