@@ -528,8 +528,11 @@ async function releaseCheck({eventIds=[],releaseAt,offsetSeconds=0}) {
     await signedWebhook('release-delta',{releaseAt,offsetSeconds,events:changed});
   }
   const studyEvents=next.filter((event)=>eventIds.includes(event.id));
+  // A negative release offset is the strict pre-release baseline task. Persist the
+  // market snapshot before returning so scale-to-zero cannot interrupt the capture.
+  const preReleaseMarket=Number(offsetSeconds)<0?await syncCnbcMarket():null;
   const eventStudy=EVENT_STUDY_HORIZONS[Number(offsetSeconds)]?await captureEventStudies(studyEvents,releaseAt,Number(offsetSeconds)):null;
-  return {changed:changed.length,releaseAt,offsetSeconds,eventStudy};
+  return {changed:changed.length,releaseAt,offsetSeconds,preReleaseMarket,eventStudy};
 }
 
 async function getFredUniverse(force=false) {

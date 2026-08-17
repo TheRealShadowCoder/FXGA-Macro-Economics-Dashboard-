@@ -117,7 +117,8 @@ const server=http.createServer(async(req,res)=>{
     const status=await proxy(req,res,url);
     if(status>=200&&status<300&&req.method==='POST'&&['/bootstrap','/release-check','/macro-sync'].includes(url.pathname)){
       const forceNews=url.pathname==='/bootstrap';
-      if(url.pathname==='/release-check')fetch(`http://127.0.0.1:${internalPort}/market-sync`,{method:'POST'}).catch(e=>console.warn('Release-aligned market snapshot deferred',String(e?.message||e)));
+      // Release-aligned market persistence is awaited inside releaseCheck itself.
+      // Avoid a duplicate background market-sync after the HTTP response is sent.
       refreshSuperEconomist({forceNews}).then(x=>console.log('Intelligence refresh',JSON.stringify({trigger:url.pathname,...x}))).catch(e=>console.error('Intelligence refresh failed',e));
     }
   }catch(error){
