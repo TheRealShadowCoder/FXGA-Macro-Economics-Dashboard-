@@ -1,2 +1,2 @@
-activate=2026-08-17T15:24:00Z
-reason=Retry v4 replay and live verification after transient GitHub codeload 429/503.
+activate=2026-08-17T15:34:00Z
+reason=Refresh schema-v4 intelligence after eligible-family confidence recalibration and verify live BUY/SELL/WAIT decisions.
