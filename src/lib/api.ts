@@ -5,6 +5,7 @@ import type {
   FredCatalogPayload,
   MacroAnalysisPayload,
   MacroObservation,
+  ReleaseImpactPayload,
   SessionSignalsPayload,
 } from './types';
 
@@ -29,6 +30,10 @@ export function fetchDashboard(): Promise<DashboardPayload> {
 
 export function fetchMacroAnalysis(): Promise<MacroAnalysisPayload> {
   return getJson<MacroAnalysisPayload>('/api/analysis');
+}
+
+export function fetchReleaseImpact(): Promise<ReleaseImpactPayload> {
+  return getJson<ReleaseImpactPayload>('/api/release-impact');
 }
 
 export function fetchSessionSignals(): Promise<SessionSignalsPayload> {
