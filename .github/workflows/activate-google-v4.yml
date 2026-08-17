@@ -98,7 +98,7 @@ jobs:
           req intelligence POST "$SERVICE_URL/refresh-intelligence" '{"forceNews":true}'
           req state GET "$SERVICE_URL/state"
           node - <<'NODE'
-          const s=require('/tmp/state.json'),events=s?.calendar?.payload?.events||[],obs=s?.macro?.payload?.observations||[],i=s?.intelligence?.payload,h=i?.operationalHealth||{},d=i?.sessionSignals,t=s?.technical?.payload;
+          const s=require('/tmp/state.json'),events=s?.calendar?.payload?.events||[],obs=s?.macro?.payload?.observations||[],i=s?.intelligence?.payload,h=i?.operationalHealth||{},d=i?.sessionSignals,t=s?.technical?.payload,studies=s?.eventStudies?.payload;
           if(events.length<1)throw new Error('Economic calendar is empty');
           if(obs.length<100)throw new Error(`Macro state too small: ${obs.length}`);
           if(i?.schemaVersion!==4)throw new Error(`Expected schema v4, got ${i?.schemaVersion}`);
@@ -111,7 +111,8 @@ jobs:
           if(!t?.assets||typeof t.assets!=='object')throw new Error('Technical market structure snapshot missing');
           const technicalAssets=Object.keys(t.assets).length;
           if(technicalAssets<5)throw new Error(`Technical asset coverage too low: ${technicalAssets}`);
-          console.log(JSON.stringify({events:events.length,observations:obs.length,news:h.officialNewsItems,fredFailures:h.fredFailures,staleRetained:h.staleMacroRetained,technicalAssets,technical:t.counts}));
+          if(studies!=null&&(!Array.isArray(studies.studies)||!studies.summary))throw new Error('Release-reaction research state is malformed');
+          console.log(JSON.stringify({events:events.length,observations:obs.length,news:h.officialNewsItems,fredFailures:h.fredFailures,staleRetained:h.staleMacroRetained,technicalAssets,technical:t.counts,eventStudies:studies?.studies?.length||0,measuredHorizons:studies?.summary?.measuredHorizons||0}));
           NODE
 
       - id: replay_auth
@@ -133,7 +134,7 @@ jobs:
           node <<'NODE'
           const fs=require('fs'),crypto=require('crypto'),state=JSON.parse(fs.readFileSync('/tmp/production-state.json','utf8')),secret=process.env.WEBHOOK_SECRET,url='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook';
           async function send(type,payload){if(!payload)return;const body=JSON.stringify({version:1,type,generatedAt:new Date().toISOString(),payload}),timestamp=String(Date.now()),requestId=crypto.randomUUID(),signature=crypto.createHmac('sha256',secret).update(`${timestamp}.${requestId}.${body}`).digest('hex'),r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-FXGA-Timestamp':timestamp,'X-FXGA-Request-Id':requestId,'X-FXGA-Signature':`sha256=${signature}`},body}),text=await r.text();if(!r.ok)throw new Error(`${type} ${r.status}: ${text.slice(0,500)}`);console.log(`${type}: ${r.status}`);}
-          (async()=>{await send('calendar-snapshot',state.calendar?.payload);await send('macro-snapshot',state.macro?.payload);await send('market-snapshot',state.market?.payload);await send('technical-snapshot',state.technical?.payload);await send('intelligence-snapshot',state.intelligence?.payload);})().catch(err=>{console.error(err);process.exit(1);});
+          (async()=>{await send('calendar-snapshot',state.calendar?.payload);await send('macro-snapshot',state.macro?.payload);await send('market-snapshot',state.market?.payload);await send('technical-snapshot',state.technical?.payload);await send('event-study-snapshot',state.eventStudies?.payload);await send('intelligence-snapshot',state.intelligence?.payload);})().catch(err=>{console.error(err);process.exit(1);});
           NODE
 
       - name: Verify live production contracts
@@ -143,14 +144,15 @@ jobs:
           async function get(path){const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,700)}`);return JSON.parse(t);}
           (async()=>{
             const health=await get('/api/health');for(const k of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests'])if(Number(health.safety?.[k]??-1)!==0)throw new Error(`${k} must remain zero`);
-            const intel=await get('/api/super-economist'),signals=await get('/api/session-signals'),technical=await get('/api/technical');
+            const intel=await get('/api/super-economist'),signals=await get('/api/session-signals'),technical=await get('/api/technical'),eventStudies=await get('/api/event-studies?days=7');
             if(intel.schemaVersion!==4||intel.executionLocation!=='Google Cloud Run')throw new Error('Production intelligence is not live');
             if(signals.rankedOpportunities?.length!==8)throw new Error('Pair matrix is not live');
             if(!technical?.assets||Object.keys(technical.assets).length<5)throw new Error('Technical structure API is not live');
             const eurusd=technical.assets.EURUSD;
             if(!eurusd?.timeframes?.H1||!eurusd?.timeframes?.M5)throw new Error('EURUSD technical timeframe matrix is incomplete');
             if(eurusd?.timeframes?.M1?.ready===true)throw new Error('One-minute structure must remain unavailable until a verified one-minute OHLC source is installed');
+            if(!Array.isArray(eventStudies?.studies)||!eventStudies?.summary)throw new Error('Release-reaction research API is not live');
             const acq=await fetch(base+'/api/acquire?source=fred');if(acq.status!==409)throw new Error('Application edge acquisition unexpectedly enabled');
-            console.log(`PRODUCTION VERIFIED: ${Object.keys(technical.assets).length} technical assets, ${technical.counts?.confirmed||0} confirmed structures, passive application edge.`);
+            console.log(`PRODUCTION VERIFIED: ${Object.keys(technical.assets).length} technical assets, ${technical.counts?.confirmed||0} confirmed structures, ${eventStudies.studies.length} event studies, passive application edge.`);
           })().catch(err=>{console.error(err);process.exit(1);});
           NODE
