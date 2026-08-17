@@ -12,8 +12,7 @@ const CATEGORIES = [
 ];
 
 const COUNTRY_CURRENCY: Record<string, string> = {
-  US: 'USD', USA: 'USD',
-  UK: 'GBP', GB: 'GBP',
+  US: 'USD', USA: 'USD', UK: 'GBP', GB: 'GBP',
   EMU: 'EUR', DE: 'EUR', FR: 'EUR', IT: 'EUR', ES: 'EUR',
   JP: 'JPY', CA: 'CAD', AU: 'AUD', NZ: 'NZD', CH: 'CHF', CN: 'CNY', ZA: 'ZAR',
 };
@@ -26,6 +25,23 @@ function clean(value: unknown): string | undefined {
   }
   const text = String(value).trim();
   return text && text !== '-' && text !== '—' && text.toLowerCase() !== 'null' ? text : undefined;
+}
+
+function numberValue(value: unknown) {
+  const text = clean(value)?.replace(/,/g, '').replace(/%/g, '');
+  if (!text) return undefined;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function boolValue(value: unknown): boolean | null | undefined {
+  if (typeof value === 'boolean') return value;
+  if (value == null) return undefined;
+  const text = String(value).toLowerCase();
+  if (text === 'true' || text === '1') return true;
+  if (text === 'false' || text === '0') return false;
+  if (text === 'null') return null;
+  return undefined;
 }
 
 function normalizeTitle(value: string) {
@@ -104,7 +120,6 @@ function currencyFrom(object: Record<string, unknown>, event: Record<string, unk
     ?? country.currencyCode ?? country.CurrencyCode ?? country.currency ?? country.Currency,
   )?.toUpperCase();
   if (direct && /^[A-Z]{3}$/.test(direct)) return direct;
-
   const countryCode = clean(
     object.countryCode ?? object.CountryCode ?? event.countryCode ?? event.CountryCode
     ?? country.code ?? country.Code ?? country.id ?? country.Id,
@@ -130,52 +145,47 @@ function parsePayload(payload: unknown): CalendarEvent[] {
     const country = record(object.country ?? object.Country ?? event.country ?? event.Country);
     const name = clean(object.name ?? object.Name ?? object.title ?? object.Title ?? event.name ?? event.Name ?? event.title ?? event.Title);
     if (!name) continue;
-
     let date: string | null = null;
-    for (const candidate of [
-      object.dateUtc, object.DateUtc, object.date, object.Date, object.dateTime, object.DateTime,
-      object.eventDate, object.EventDate, object.releaseDate, object.ReleaseDate,
-    ]) {
+    for (const candidate of [object.dateUtc, object.DateUtc, object.date, object.Date, object.dateTime, object.DateTime, object.eventDate, object.EventDate, object.releaseDate, object.ReleaseDate]) {
       date = dateValue(candidate);
       if (date) break;
     }
     if (!date) continue;
-
     const currency = currencyFrom(object, event, country);
     if (!currency) continue;
-
     const identity = `${date}|${currency}|${normalizeTitle(name)}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
 
+    const eventDateId = clean(object.id ?? object.Id ?? object.idEcoCalendarDate ?? object.IdEcoCalendarDate);
+    const eventId = clean(event.id ?? event.Id ?? object.eventId ?? object.EventId ?? object.idEcoCalendar ?? object.IdEcoCalendar);
     events.push({
-      id: `fxstreet-feed-${clean(object.id ?? object.Id ?? object.idEcoCalendarDate ?? object.IdEcoCalendarDate) ?? identity}`,
-      date,
+      id: `fxstreet-feed-${eventDateId ?? identity}`,
+      eventDateId, eventId, date,
       country: clean(country.name ?? country.Name ?? object.countryName ?? object.CountryName) ?? currency,
-      currency,
-      event: name,
+      currency, event: name,
       category: clean(event.categoryName ?? event.CategoryName ?? object.categoryName ?? object.CategoryName) ?? 'Economic Calendar',
       importance: importance(object.volatility ?? object.Volatility ?? event.volatility ?? event.Volatility),
       actual: clean(object.actual ?? object.Actual ?? object.displayActual ?? object.DisplayActual),
       forecast: clean(object.consensus ?? object.Consensus ?? object.displayConsensus ?? object.DisplayConsensus),
       previous: clean(object.previous ?? object.Previous ?? object.displayPrevious ?? object.DisplayPrevious),
       revised: clean(object.revised ?? object.Revised ?? object.displayRevised ?? object.DisplayRevised),
+      deviation: numberValue(object.deviation ?? object.Deviation ?? object.dev ?? object.Dev ?? object.displayDeviation ?? object.DisplayDeviation),
+      relation: boolValue(object.relation ?? object.Relation),
+      betterThanExpected: boolValue(object.better ?? object.Better) ?? undefined,
+      worseThanExpected: boolValue(object.worst ?? object.Worst) ?? undefined,
+      preliminary: boolValue(object.preliminar ?? object.Preliminar ?? object.preliminary ?? object.Preliminary) ?? undefined,
       lastUpdate: clean(object.lastUpdated ?? object.LastUpdated ?? object.lastUpdate ?? object.LastUpdate) ?? new Date().toISOString(),
-      source: 'FXStreet public calendar feed',
+      source: 'FXStreet public calendar feed', providers: ['fxstreet'], sourceCount: 1,
     });
   }
-
   return events.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
 }
 
 export async function fetchFxstreetPublicWindow(from: Date, to: Date): Promise<CalendarEvent[]> {
   try {
     const response = await fetch(buildUrl(from, to), {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'FXGA-Macro-Intelligence/1.0 (+public economic research collector)',
-        Referer: 'https://www.fxstreet.com/economic-calendar',
-      },
+      headers: { Accept: 'application/json', 'User-Agent': 'FXGA-Macro-Intelligence/1.0 (+public economic research collector)', Referer: 'https://www.fxstreet.com/economic-calendar' },
       redirect: 'follow',
     });
     if (!response.ok) return [];
@@ -197,6 +207,13 @@ export function mergeFxstreetReleaseValues(scheduled: CalendarEvent[], fresh: Ca
       forecast: match.forecast ?? event.forecast,
       previous: match.previous ?? event.previous,
       revised: match.revised ?? event.revised,
+      deviation: match.deviation ?? event.deviation,
+      relation: match.relation ?? event.relation,
+      betterThanExpected: match.betterThanExpected ?? event.betterThanExpected,
+      worseThanExpected: match.worseThanExpected ?? event.worseThanExpected,
+      preliminary: match.preliminary ?? event.preliminary,
+      eventId: match.eventId ?? event.eventId,
+      eventDateId: match.eventDateId ?? event.eventDateId,
       importance: Math.max(event.importance, match.importance),
       lastUpdate: match.lastUpdate ?? new Date().toISOString(),
       providers: [...new Set([...(event.providers ?? []), 'fxstreet'])],
