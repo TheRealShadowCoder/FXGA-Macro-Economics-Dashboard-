@@ -1,12 +1,24 @@
 import { useEffect, useState } from 'react';
 import { fetchReleaseImpact } from '../lib/api';
-import type { ReleaseImpactPayload, SessionSignalsPayload } from '../lib/types';
+import type { ReleaseImpactPayload, SessionSignalsPayload, TechnicalBias, TechnicalGateStatus } from '../lib/types';
 import { DecisionDesk } from './DecisionDesk';
 import { DecisionIntelligence } from './DecisionIntelligence';
 import { ReleaseImpactView } from './ReleaseImpactView';
 
 function scoreClass(score: number) {
   return score > 0 ? 'positive' : score < 0 ? 'negative' : 'neutral';
+}
+
+function technicalLabel(status?: TechnicalGateStatus) {
+  if (status === 'confirmed') return 'Technical confirmation passed';
+  if (status === 'context-aligned') return 'Higher timeframe context aligned';
+  if (status === 'conflict') return 'Technical structure conflict';
+  if (status === 'awaiting-confirmation') return 'Awaiting technical confirmation';
+  return 'Technical history building';
+}
+
+function biasLabel(bias?: TechnicalBias) {
+  return bias === 'bullish' ? 'bullish' : bias === 'bearish' ? 'bearish' : 'balanced';
 }
 
 export function SignalsView({ data, loading, error }: { data: SessionSignalsPayload | null; loading: boolean; error: string }) {
@@ -66,6 +78,11 @@ export function SignalsView({ data, loading, error }: { data: SessionSignalsPayl
                   coverage?: string;
                   risk?: string;
                   executionGate?: string;
+                  technicalGate?: TechnicalGateStatus;
+                  technicalBias?: TechnicalBias;
+                  technicalConfidence?: number;
+                  technicalModel?: string | null;
+                  technicalReason?: string;
                   components?: { structuralDivergence: number; policyDivergence: number; releaseDivergence: number };
                 };
                 return (
@@ -77,7 +94,9 @@ export function SignalsView({ data, loading, error }: { data: SessionSignalsPayl
                       {enhanced.components && (
                         <span>Structure {enhanced.components.structuralDivergence >= 0 ? '+' : ''}{enhanced.components.structuralDivergence} · Policy {enhanced.components.policyDivergence >= 0 ? '+' : ''}{enhanced.components.policyDivergence} · Release {enhanced.components.releaseDivergence >= 0 ? '+' : ''}{enhanced.components.releaseDivergence}</span>
                       )}
+                      {enhanced.technicalGate ? <span>{technicalLabel(enhanced.technicalGate)} · {biasLabel(enhanced.technicalBias)}{typeof enhanced.technicalConfidence === 'number' ? ` · ${enhanced.technicalConfidence}%` : ''}{enhanced.technicalModel ? ` · ${enhanced.technicalModel}` : ''}</span> : null}
                       {signal.rationale.slice(0, 2).map((item) => <span key={item}>{item}</span>)}
+                      {enhanced.technicalReason ? <span>{enhanced.technicalReason}</span> : null}
                       <small>{enhanced.executionGate ? enhanced.executionGate.replaceAll('_', ' ').toLowerCase() : signal.invalidation}</small>
                     </div>
                   </div>
