@@ -1,0 +1,85 @@
+name: Verify FXGA Decision Intelligence
+
+on:
+  workflow_run:
+    workflows: ['Deploy FXGA Macro Intelligence']
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify live five-economy decision engine
+        run: |
+          node <<'NODE'
+          const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          async function getJson(path) {
+            let last;
+            for (let attempt = 1; attempt <= 8; attempt += 1) {
+              try {
+                const response = await fetch(base + path, { headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } });
+                const text = await response.text();
+                if (!response.ok) throw new Error(`${path} returned ${response.status}: ${text.slice(0, 800)}`);
+                return JSON.parse(text);
+              } catch (error) {
+                last = error;
+                if (attempt < 8) await sleep(1500);
+              }
+            }
+            throw last;
+          }
+
+          const economy = await getJson('/api/economy-analysis');
+          if (!Array.isArray(economy?.economies) || economy.economies.length !== 5) throw new Error(`Expected five economy states, got ${economy?.economies?.length ?? 0}`);
+          const expectedEconomies = new Map([
+            ['USA', ['USD', 'Federal Reserve']],
+            ['EUROPE', ['EUR', 'European Central Bank']],
+            ['UK', ['GBP', 'Bank of England']],
+            ['SOUTH_AFRICA', ['ZAR', 'South African Reserve Bank']],
+            ['JAPAN', ['JPY', 'Bank of Japan']],
+          ]);
+          for (const [id, [currency, bank]] of expectedEconomies) {
+            const state = economy.economies.find((item) => item.id === id);
+            if (!state || state.currency !== currency || state.centralBank !== bank) throw new Error(`Economy mapping failed for ${id}`);
+            if (!Array.isArray(state.dimensions) || state.dimensions.length !== 5) throw new Error(`${id} must have five macro dimensions`);
+            if (typeof state.currencyScore !== 'number' || typeof state.confidence !== 'number') throw new Error(`${id} missing score/confidence`);
+          }
+
+          const signals = await getJson('/api/session-signals');
+          if (!Array.isArray(signals?.currencyStates) || signals.currencyStates.length !== 5) throw new Error(`Expected five ranked currency states, got ${signals?.currencyStates?.length ?? 0}`);
+          const currencies = signals.currencyStates.map((item) => item.currency).sort().join(',');
+          if (currencies !== ['EUR','GBP','JPY','USD','ZAR'].sort().join(',')) throw new Error(`Unexpected structural currency set: ${currencies}`);
+          if (!signals?.decisionSummary || typeof signals.decisionSummary.actionableCount !== 'number') throw new Error('Decision summary missing');
+          if (!Array.isArray(signals?.rankedOpportunities) || signals.rankedOpportunities.length < 8) throw new Error('Ranked opportunity board is incomplete');
+
+          const allSignals = signals.sessions.flatMap((session) => session.signals ?? []);
+          for (const required of ['EURUSD','GBPUSD','USDJPY','EURGBP','USDZAR','EURZAR','GBPZAR','XAUUSD']) {
+            if (!allSignals.some((item) => item.symbol === required)) throw new Error(`Required decision instrument missing: ${required}`);
+          }
+
+          const validCoverage = new Set(['full','partial','event-only','asset-model']);
+          const validGates = new Set(['WAIT_EVENT','NO_MACRO_EDGE','AWAIT_TECHNICAL_CONFIRMATION']);
+          for (const signal of allSignals) {
+            if (!signal.components || ['structuralDivergence','policyDivergence','releaseDivergence'].some((field) => typeof signal.components[field] !== 'number')) throw new Error(`${signal.symbol} is missing auditable divergence components`);
+            if (!validCoverage.has(signal.coverage)) throw new Error(`${signal.symbol} has invalid coverage ${signal.coverage}`);
+            if (!validGates.has(signal.executionGate)) throw new Error(`${signal.symbol} has invalid execution gate ${signal.executionGate}`);
+            if (typeof signal.conviction !== 'number' || signal.conviction < 0 || signal.conviction > 100) throw new Error(`${signal.symbol} has invalid conviction`);
+            if (signal.risk === 'event-lockout' && (signal.direction !== 'WAIT' || signal.executionGate !== 'WAIT_EVENT')) throw new Error(`${signal.symbol} violated event lockout`);
+            if ((signal.direction === 'BUY' || signal.direction === 'SELL') && signal.executionGate !== 'AWAIT_TECHNICAL_CONFIRMATION') throw new Error(`${signal.symbol} exposed an executable direction without the technical-confirmation gate`);
+          }
+
+          if (!String(signals.methodology ?? '').includes('base-versus-quote')) throw new Error('Session methodology does not identify base-versus-quote macro divergence');
+          console.log('FXGA decision intelligence verified:', JSON.stringify({
+            collectorMode: signals.collectorMode,
+            economyObservationCount: signals.economyObservationCount,
+            strongest: signals.decisionSummary.strongestCurrency,
+            weakest: signals.decisionSummary.weakestCurrency,
+            actionable: signals.decisionSummary.actionableCount,
+            ranked: signals.rankedOpportunities.length,
+          }));
+          NODE
