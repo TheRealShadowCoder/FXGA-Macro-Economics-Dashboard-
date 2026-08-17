@@ -1,0 +1,40 @@
+name: Apply FXGA Public Contract Cleanup
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-public-contract-cleanup.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fxga-public-contract-cleanup
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply public contract cleanup
+        run: python3 scripts/apply_public_contract_cleanup.py
+      - name: Validate application
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Commit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then exit 0; fi
+          git add worker/index-v3.ts src/components/DecisionIntelligence.tsx
+          git commit -m "Align public contracts and technical execution gates"
+          git pull --rebase origin main
+          git push origin HEAD:main
