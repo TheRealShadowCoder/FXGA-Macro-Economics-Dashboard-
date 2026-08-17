@@ -9,6 +9,7 @@ import './responsive.css';
 import './intelligence.css';
 import './market-upgrades.css';
 import './institutional.css';
+import './institutional-finish.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
