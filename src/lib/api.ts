@@ -12,6 +12,7 @@ import type {
 } from './types';
 import type { EconomyAnalysisPayload, GlobalMacroPayload } from './economy-types';
 import type { EventStudiesPayload } from './event-study-types';
+import type { DataQualityPayload } from './data-quality-types';
 
 const REQUEST_TIMEOUT_MS = 12_000;
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -119,6 +120,10 @@ export function fetchEventStudies(days = 7, currency = ''): Promise<EventStudies
   const params = new URLSearchParams({ days: String(days) });
   if (currency) params.set('currency', currency);
   return getJson<EventStudiesPayload>(`/api/event-studies?${params.toString()}`);
+}
+
+export function fetchDataQuality(): Promise<DataQualityPayload> {
+  return getJson<DataQualityPayload>('/api/data-quality');
 }
 
 export function fetchAcquisitionCatalog(): Promise<AcquisitionCatalogPayload> {
