@@ -1,2 +1,2 @@
-activate=2026-08-17T19:48:00Z
-reason=Run v4.4 macro data-quality classifier against the live universe, refresh macro and technical state, publish data-quality diagnostics, replay event-study state and verify production contracts end to end.
+activate=2026-08-17T20:08:00Z
+reason=Activate v4.6.1 pre-release baseline scheduling, bootstrap upcoming release tasks, refresh technical and research state, replay verified state and validate production contracts end to end.
