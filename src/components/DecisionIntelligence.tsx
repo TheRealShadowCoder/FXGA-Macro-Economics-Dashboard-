@@ -1,192 +1,25 @@
 import type { SessionSignalsPayload } from '../lib/types';
 
-interface CurrencyState {
-  currency: string;
-  economy: string;
-  centralBank: string;
-  regime: string;
-  policyStance: string;
-  policyScore: number;
-  score: number;
-  confidence: number;
-  observationCount: number;
-  dimensionsCovered?: number;
-  quality?: 'structural' | 'provisional';
-  rank: number;
-}
+type CurrencyState={currency:string;economy:string;centralBank:string;regime:string;policyStance:string;policyScore:number;score:number;confidence:number;observationCount:number;dimensionsCovered?:number;quality?:'structural'|'provisional';rank:number;narrativeScore?:number;releaseImpulse?:number};
+type Opportunity={symbol:string;direction:'BUY'|'SELL'|'WAIT';score:number;confidence:number;conviction:number;convictionLabel:'high'|'medium'|'low';coverage:string;risk:'normal'|'elevated'|'event-lockout';executionGate:'WAIT_EVENT'|'NO_MACRO_EDGE'|'AWAIT_TECHNICAL_CONFIRMATION';components:{structuralDivergence:number;policyDivergence:number;releaseDivergence:number;narrativeDivergence?:number;marketConfirmation?:number;baseCurrencyScore:number;quoteCurrencyScore:number};centralBankDivergence:string;regimes:string[];rationale:string[];invalidation:string;catalyst?:string;catalystAt?:string;minutesToCatalyst?:number;threshold?:number;probabilities?:{buy:number;sell:number;wait:number};criticalThinking?:{thesis:string;counterThesis:string;contradictions:string[];missingEvidence:string[];whatWouldChangeMyMind:string[];scenarioSensitivity:Array<{name:string;score:number;direction:string}>};equationTrace?:{agreement:number;dataQuality:number;eventPenalty:number;decisionThreshold:number}};
+type Enhanced=SessionSignalsPayload&{economyObservationCount?:number;currencyStates?:CurrencyState[];rankedOpportunities?:Opportunity[];intelligenceMatrix?:{equations?:Record<string,string>;criticalThinkingRules?:string[];missingGlobalInputs?:string[]};dataQuality?:{minimumStructuralObservations:number;minimumCoveredDimensions:number;structuralEconomies:string[];provisionalEconomies:string[]};decisionSummary?:{actionableCount:number;waitCount?:number;strongestCurrency:string|null;weakestCurrency:string|null;topOpportunity?:{symbol:string;direction:'BUY'|'SELL'|'WAIT';score:number;confidence:number;conviction:number;executionGate:string}|null}};
+const signed=(v:number)=>`${v>0?'+':''}${Math.round(v)}`;
+const scoreClass=(v:number)=>v>10?'positive':v<-10?'negative':'neutral';
+const gateLabel=(g:Opportunity['executionGate'])=>g==='WAIT_EVENT'?'Event lockout':g==='AWAIT_TECHNICAL_CONFIRMATION'?'Technical confirmation required':'No macro edge';
+function catalystLabel(x:Opportunity){if(!x.catalyst)return'No immediate catalyst';if(typeof x.minutesToCatalyst!=='number')return x.catalyst;const m=x.minutesToCatalyst;if(m<=0)return`${x.catalyst} · now`;return m<60?`${x.catalyst} · ${m}m`:`${x.catalyst} · ${Math.floor(m/60)}h${m%60?` ${m%60}m`:''}`;}
+const pct=(v:number|undefined)=>typeof v==='number'?`${Math.round(v*100)}%`:'—';
 
-interface Opportunity {
-  symbol: string;
-  direction: 'BUY' | 'SELL' | 'WAIT';
-  score: number;
-  confidence: number;
-  conviction: number;
-  convictionLabel: 'high' | 'medium' | 'low';
-  coverage: 'full' | 'partial' | 'event-only' | 'asset-model';
-  risk: 'normal' | 'elevated' | 'event-lockout';
-  executionGate: 'WAIT_EVENT' | 'NO_MACRO_EDGE' | 'AWAIT_TECHNICAL_CONFIRMATION';
-  components: {
-    structuralDivergence: number;
-    policyDivergence: number;
-    releaseDivergence: number;
-    baseCurrencyScore: number;
-    quoteCurrencyScore: number;
-  };
-  centralBankDivergence: string;
-  regimes: string[];
-  rationale: string[];
-  catalyst?: string;
-  catalystAt?: string;
-  minutesToCatalyst?: number;
-}
+export function DecisionIntelligence({data}:{data:SessionSignalsPayload}){
+  const d=data as Enhanced,currencies=d.currencyStates??[],opps=d.rankedOpportunities??[],summary=d.decisionSummary,quality=d.dataQuality,matrix=d.intelligenceMatrix,top=opps[0];if(!currencies.length&&!opps.length)return null;
+  return <>
+    <section className="decision-hero panel"><div className="decision-heading"><span className="eyebrow">FXGA Critical Intelligence Matrix</span><h2>Thesis, counter-thesis and falsifiable decisions</h2><p>Correlated methods are collapsed into independent evidence families. Structure, central-bank reaction, fresh release surprise and official narrative are scored separately, then disagreement and event risk reduce confidence before BUY / SELL / WAIT.</p>{quality&&<p className="quality-note">Structural coverage {quality.structuralEconomies.length}/5 · provisional {quality.provisionalEconomies.length}/5 · minimum {quality.minimumStructuralObservations} observations across {quality.minimumCoveredDimensions} dimensions.</p>}</div><div className="decision-kpis"><div><small>Strongest</small><strong>{summary?.strongestCurrency??'—'}</strong></div><div><small>Weakest</small><strong>{summary?.weakestCurrency??'—'}</strong></div><div><small>Actionable</small><strong>{summary?.actionableCount??0}</strong></div><div><small>WAIT</small><strong>{summary?.waitCount??0}</strong></div></div>{summary?.topOpportunity&&<div className="top-opportunity"><div><small>Highest ranked edge</small><strong>{summary.topOpportunity.symbol}</strong></div><span className={`signal-direction ${summary.topOpportunity.direction.toLowerCase()}`}>{summary.topOpportunity.direction}</span><b className={scoreClass(summary.topOpportunity.score)}>{signed(summary.topOpportunity.score)}</b><em>{summary.topOpportunity.confidence}% confidence · conviction {summary.topOpportunity.conviction}/100</em></div>}</section>
 
-interface EnhancedSessionSignals extends SessionSignalsPayload {
-  collectorMode?: string;
-  economyObservationCount?: number;
-  currencyStates?: CurrencyState[];
-  rankedOpportunities?: Opportunity[];
-  dataQuality?: {
-    minimumStructuralObservations: number;
-    minimumCoveredDimensions: number;
-    structuralEconomies: string[];
-    provisionalEconomies: string[];
-  };
-  decisionSummary?: {
-    actionableCount: number;
-    waitCount: number;
-    strongestCurrency: string | null;
-    weakestCurrency: string | null;
-    topOpportunity: null | {
-      symbol: string;
-      direction: 'BUY' | 'SELL' | 'WAIT';
-      score: number;
-      confidence: number;
-      conviction: number;
-      executionGate: string;
-    };
-  };
-}
+    {matrix?.equations&&<section className="panel policy-panel"><span className="eyebrow">Decision Equations</span><div className="policy-pills">{Object.entries(matrix.equations).map(([k,v])=><span className="enabled" key={k}><b>{k}</b>: {v}</span>)}</div>{matrix.criticalThinkingRules?.length?<p className="quality-note">Rules: {matrix.criticalThinkingRules.join(' · ')}</p>:null}{matrix.missingGlobalInputs?.length?<div className="alert warn">Explicitly unavailable until Google-side feeds are connected: {matrix.missingGlobalInputs.join(' · ')}</div>:null}</section>}
 
-function signed(value: number) {
-  return `${value > 0 ? '+' : ''}${value}`;
-}
+    {!!currencies.length&&<><section className="section-head"><div><span className="eyebrow">Currency Evidence Matrix</span><h2>Five-economy ranking</h2><p>Structural score, policy reaction, release impulse and official narrative remain visible separately.</p></div></section><section className="currency-strength-grid">{currencies.map(c=><article className={`currency-strength-card ${c.quality??'structural'}`} key={c.currency}><div className="currency-rank">#{c.rank}</div><div className="currency-quality-row"><span className={`coverage-quality ${c.quality??'structural'}`}>{c.quality??'structural'}</span><small>{c.observationCount} obs · {c.dimensionsCovered??'—'}/5</small></div><div className="currency-strength-head"><div><span className="eyebrow">{c.economy}</span><h3>{c.currency}</h3></div><strong className={scoreClass(c.score)}>{signed(c.score)}</strong></div><div className="currency-strength-meta"><span><small>Regime</small>{c.regime}</span><span><small>{c.centralBank}</small>{c.policyStance}</span><span><small>Policy reaction</small><b className={scoreClass(c.policyScore)}>{signed(c.policyScore)}</b></span><span><small>Release / Narrative</small>{signed(c.releaseImpulse??0)} / {signed(c.narrativeScore??0)}</span><span><small>Confidence</small>{c.confidence}%</span></div></article>)}</section></>}
 
-function scoreClass(value: number) {
-  return value > 10 ? 'positive' : value < -10 ? 'negative' : 'neutral';
-}
+    {!!opps.length&&<><section className="section-head"><div><span className="eyebrow">Critical Divergence Scanner</span><h2>Unique pair decisions</h2><p>Every row includes the evidence conflict test and remains blocked from execution until the technical gate is satisfied.</p></div></section><section className="opportunity-board panel">{opps.slice(0,10).map((x,i)=><article className={`opportunity-row ${x.risk}`} key={x.symbol}><div className="opportunity-rank">{String(i+1).padStart(2,'0')}</div><div className="opportunity-symbol"><strong>{x.symbol}</strong><span>{x.coverage} · {x.convictionLabel}</span></div><div className={`signal-direction ${x.direction.toLowerCase()}`}>{x.direction}</div><div className="opportunity-score"><strong className={scoreClass(x.score)}>{signed(x.score)}</strong><span>{x.confidence}% · T {x.threshold??'—'}</span></div><div className="opportunity-components"><span><small>Structure</small><b className={scoreClass(x.components.structuralDivergence)}>{signed(x.components.structuralDivergence)}</b></span><span><small>Policy</small><b className={scoreClass(x.components.policyDivergence)}>{signed(x.components.policyDivergence)}</b></span><span><small>Release</small><b className={scoreClass(x.components.releaseDivergence)}>{signed(x.components.releaseDivergence)}</b></span><span><small>Narrative</small><b className={scoreClass(x.components.narrativeDivergence??0)}>{signed(x.components.narrativeDivergence??0)}</b></span></div><div className="opportunity-context"><span>{x.centralBankDivergence}</span><small>{catalystLabel(x)}</small>{x.criticalThinking&&<><span><b>Thesis:</b> {x.criticalThinking.thesis}</span><span><b>Counter:</b> {x.criticalThinking.counterThesis}</span>{x.criticalThinking.contradictions.length>0&&<small>Contradictions: {x.criticalThinking.contradictions.join(' · ')}</small>}</>}</div><div className={`execution-gate ${x.executionGate.toLowerCase()}`}>{gateLabel(x.executionGate)}</div>{x.probabilities&&<div className="opportunity-context"><small>P BUY {pct(x.probabilities.buy)} · P SELL {pct(x.probabilities.sell)} · P WAIT {pct(x.probabilities.wait)}</small>{x.equationTrace&&<small>Agreement {Math.round(x.equationTrace.agreement*100)}% · data quality {Math.round(x.equationTrace.dataQuality*100)}%</small>}</div>}</article>)}</section></>}
 
-function gateLabel(gate: Opportunity['executionGate']) {
-  if (gate === 'WAIT_EVENT') return 'Event lockout';
-  if (gate === 'AWAIT_TECHNICAL_CONFIRMATION') return 'Technical confirmation required';
-  return 'No macro edge';
-}
-
-function catalystLabel(item: Opportunity) {
-  if (!item.catalyst) return 'No immediate catalyst';
-  const minutes = item.minutesToCatalyst;
-  if (typeof minutes !== 'number') return item.catalyst;
-  if (minutes <= 0) return `${item.catalyst} · now`;
-  if (minutes < 60) return `${item.catalyst} · ${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  return `${item.catalyst} · ${hours}h${remainder ? ` ${remainder}m` : ''}`;
-}
-
-export function DecisionIntelligence({ data }: { data: SessionSignalsPayload }) {
-  const intelligence = data as EnhancedSessionSignals;
-  const currencies = intelligence.currencyStates ?? [];
-  const opportunities = intelligence.rankedOpportunities ?? [];
-  const summary = intelligence.decisionSummary;
-  const quality = intelligence.dataQuality;
-  if (!currencies.length && !opportunities.length) return null;
-
-  return (
-    <>
-      <section className="decision-hero panel">
-        <div className="decision-heading">
-          <span className="eyebrow">FXGA Global Decision Engine</span>
-          <h2>Macro edge before technical execution</h2>
-          <p>Each FX pair is scored base economy versus quote economy. Structural macro, central-bank reaction and released-data surprise remain separate so every bias can be audited.</p>
-          {quality && (
-            <p className="quality-note">
-              Structural coverage: {quality.structuralEconomies.length}/5 economies · provisional: {quality.provisionalEconomies.length}/5 · minimum {quality.minimumStructuralObservations} observations across {quality.minimumCoveredDimensions} macro dimensions.
-            </p>
-          )}
-        </div>
-        <div className="decision-kpis">
-          <div><small>Strongest covered currency</small><strong>{summary?.strongestCurrency ?? '—'}</strong></div>
-          <div><small>Weakest covered currency</small><strong>{summary?.weakestCurrency ?? '—'}</strong></div>
-          <div><small>Actionable macro edges</small><strong>{summary?.actionableCount ?? 0}</strong></div>
-          <div><small>Economy observations</small><strong>{intelligence.economyObservationCount ?? '—'}</strong></div>
-        </div>
-        {summary?.topOpportunity && (
-          <div className="top-opportunity">
-            <div><small>Highest ranked macro edge</small><strong>{summary.topOpportunity.symbol}</strong></div>
-            <span className={`signal-direction ${summary.topOpportunity.direction.toLowerCase()}`}>{summary.topOpportunity.direction}</span>
-            <b className={scoreClass(summary.topOpportunity.score)}>{signed(summary.topOpportunity.score)}</b>
-            <em>{summary.topOpportunity.confidence}% confidence · conviction {summary.topOpportunity.conviction}/100</em>
-          </div>
-        )}
-      </section>
-
-      {currencies.length > 0 && (
-        <>
-          <section className="section-head"><div><span className="eyebrow">Currency Strength Map</span><h2>Five-economy macro ranking</h2><p>Structural states are ranked first. Provisional states remain visible for context but are not granted full pair-model coverage.</p></div></section>
-          <section className="currency-strength-grid">
-            {currencies.map((currency) => (
-              <article className={`currency-strength-card ${currency.quality ?? 'structural'}`} key={currency.currency}>
-                <div className="currency-rank">#{currency.rank}</div>
-                <div className="currency-quality-row">
-                  <span className={`coverage-quality ${currency.quality ?? 'structural'}`}>{currency.quality ?? 'structural'}</span>
-                  <small>{currency.observationCount} obs · {currency.dimensionsCovered ?? '—'}/5 dimensions</small>
-                </div>
-                <div className="currency-strength-head">
-                  <div><span className="eyebrow">{currency.economy}</span><h3>{currency.currency}</h3></div>
-                  <strong className={scoreClass(currency.score)}>{signed(currency.score)}</strong>
-                </div>
-                <div className="currency-strength-meta">
-                  <span><small>Regime</small>{currency.regime}</span>
-                  <span><small>{currency.centralBank}</small>{currency.policyStance}</span>
-                  <span><small>Reaction score</small><b className={scoreClass(currency.policyScore)}>{signed(currency.policyScore)}</b></span>
-                  <span><small>Confidence</small>{currency.confidence}%</span>
-                </div>
-              </article>
-            ))}
-          </section>
-        </>
-      )}
-
-      {opportunities.length > 0 && (
-        <>
-          <section className="section-head"><div><span className="eyebrow">Macro Divergence Scanner</span><h2>Ranked pair and cross-asset opportunities</h2><p>BUY/SELL identifies the macro-favoured side only. Entries remain blocked until the technical execution gate is satisfied.</p></div></section>
-          <section className="opportunity-board panel">
-            {opportunities.slice(0, 10).map((item, index) => (
-              <article className={`opportunity-row ${item.risk}`} key={item.symbol}>
-                <div className="opportunity-rank">{String(index + 1).padStart(2, '0')}</div>
-                <div className="opportunity-symbol">
-                  <strong>{item.symbol}</strong>
-                  <span>{item.coverage} coverage · {item.convictionLabel} conviction</span>
-                </div>
-                <div className={`signal-direction ${item.direction.toLowerCase()}`}>{item.direction}</div>
-                <div className="opportunity-score">
-                  <strong className={scoreClass(item.score)}>{signed(item.score)}</strong>
-                  <span>{item.confidence}% confidence</span>
-                </div>
-                <div className="opportunity-components">
-                  <span><small>Structure</small><b className={scoreClass(item.components.structuralDivergence)}>{signed(item.components.structuralDivergence)}</b></span>
-                  <span><small>Policy</small><b className={scoreClass(item.components.policyDivergence)}>{signed(item.components.policyDivergence)}</b></span>
-                  <span><small>Release</small><b className={scoreClass(item.components.releaseDivergence)}>{signed(item.components.releaseDivergence)}</b></span>
-                </div>
-                <div className="opportunity-context">
-                  <span>{item.centralBankDivergence}</span>
-                  <small>{catalystLabel(item)}</small>
-                </div>
-                <div className={`execution-gate ${item.executionGate.toLowerCase()}`}>{gateLabel(item.executionGate)}</div>
-              </article>
-            ))}
-          </section>
-        </>
-      )}
-    </>
-  );
+    {top?.criticalThinking&&<section className="panel policy-panel"><span className="eyebrow">What Would Change The Top Decision</span><div className="policy-pills">{top.criticalThinking.whatWouldChangeMyMind.map(r=><span key={r}>{r}</span>)}</div><span className="eyebrow">Counterfactual Sensitivity</span><div className="policy-pills">{top.criticalThinking.scenarioSensitivity.map(s=><span key={s.name} className={s.direction==='WAIT'?'disabled':'enabled'}>{s.name}: {signed(s.score)} → {s.direction}</span>)}</div></section>}
+  </>;
 }
