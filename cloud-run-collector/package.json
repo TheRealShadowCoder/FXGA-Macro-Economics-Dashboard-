@@ -1,14 +1,14 @@
 {
   "name": "fxga-cloud-run-collector",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "start": "node src/server.js",
-    "check": "node --check src/server.js"
+    "start": "node src/server-v2.js",
+    "check": "node --check src/global-fred.js && node --check src/server-v2.js"
   },
   "dependencies": {
     "@google-cloud/firestore": "^7.11.0",
