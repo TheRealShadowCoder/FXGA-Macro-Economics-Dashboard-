@@ -12,7 +12,7 @@ permissions:
   id-token: write
 
 env:
-  CANARY_SERVICE: fxga-firestore9-write-canary
+  CANARY_JOB: fxga-firestore9-write-canary-job
   GAR_REPOSITORY: fxga-containers
   GCP_PROJECT_ID: fxglobalavengerstradingacademy
   GCP_REGION: us-central1
@@ -35,8 +35,7 @@ jobs:
           test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
           echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
 
-      - id: auth
-        uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
@@ -44,116 +43,99 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Prepare isolated Firestore 9 write probe
+      - name: Prepare minimal Firestore 9 job image
         run: |
-          node <<'NODE'
-          const fs=require('fs');
-          const path='cloud-run-collector/package.json';
-          const pkg=JSON.parse(fs.readFileSync(path,'utf8'));
-          pkg.version='4.7.0-firestore9-write-canary';
-          pkg.dependencies['@google-cloud/firestore']='9.0.0';
-          pkg.scripts.start='node src/firestore9-write-canary.js';
-          fs.writeFileSync(path,JSON.stringify(pkg,null,2)+'\n');
-          NODE
-          cat > cloud-run-collector/src/firestore9-write-canary.js <<'NODE'
-          import http from 'node:http';
+          rm -rf /tmp/fxga-firestore9-job
+          mkdir -p /tmp/fxga-firestore9-job
+          cat > /tmp/fxga-firestore9-job/package.json <<'JSON'
+          {
+            "name": "fxga-firestore9-write-canary-job",
+            "private": true,
+            "version": "1.0.0",
+            "type": "module",
+            "engines": { "node": ">=24" },
+            "dependencies": { "@google-cloud/firestore": "9.0.0" }
+          }
+          JSON
+          cat > /tmp/fxga-firestore9-job/probe.js <<'NODE'
           import crypto from 'node:crypto';
           import { Firestore } from '@google-cloud/firestore';
 
           const db=new Firestore({ignoreUndefinedProperties:true});
           const collection=db.collection('fxga_firestore9_canary');
-          const port=Number(process.env.PORT||8080);
+          const id=`probe-${Date.now()}-${crypto.randomUUID().slice(0,8)}`;
+          const ref=collection.doc(id);
+          const nonce=crypto.randomUUID();
 
-          function send(res,status,payload){
-            const body=JSON.stringify(payload);
-            res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','Content-Length':Buffer.byteLength(body)});
-            res.end(body);
+          try {
+            await ref.set({nonce,writtenAt:new Date().toISOString(),purpose:'temporary-firestore9-runtime-write-probe'},{merge:false});
+            const read=await ref.get();
+            if(!read.exists||read.data()?.nonce!==nonce)throw new Error('Canary write/read verification failed');
+            await ref.delete();
+            const afterDelete=await ref.get();
+            if(afterDelete.exists)throw new Error('Canary document deletion verification failed');
+            console.log(JSON.stringify({ok:true,written:true,readBack:true,deleted:true,collection:'fxga_firestore9_canary'}));
+            console.log('FIRESTORE 9 WRITE PROBE VERIFIED');
+          } catch (error) {
+            try { await ref.delete(); } catch {}
+            console.error('FIRESTORE 9 WRITE PROBE FAILED',error);
+            process.exitCode=1;
+          } finally {
+            await db.terminate().catch(()=>{});
           }
-
-          const server=http.createServer(async(req,res)=>{
-            try{
-              if(req.method==='GET'&&req.url==='/health')return send(res,200,{ok:true,firestoreMajor:9});
-              if(req.method==='POST'&&req.url==='/probe'){
-                const id=`probe-${Date.now()}-${crypto.randomUUID().slice(0,8)}`;
-                const ref=collection.doc(id);
-                const nonce=crypto.randomUUID();
-                const writtenAt=new Date().toISOString();
-                await ref.set({nonce,writtenAt,purpose:'temporary-firestore9-runtime-write-probe'},{merge:false});
-                const read=await ref.get();
-                if(!read.exists||read.data()?.nonce!==nonce)throw new Error('Canary write/read verification failed');
-                await ref.delete();
-                const afterDelete=await ref.get();
-                if(afterDelete.exists)throw new Error('Canary document deletion verification failed');
-                return send(res,200,{ok:true,written:true,readBack:true,deleted:true,collection:'fxga_firestore9_canary'});
-              }
-              return send(res,404,{error:'not found'});
-            }catch(error){
-              console.error(error);
-              return send(res,500,{error:String(error?.message||error).slice(0,600)});
-            }
-          });
-          server.listen(port,()=>console.log(`Firestore 9 write canary listening on :${port}`));
           NODE
-          cd cloud-run-collector
+          cat > /tmp/fxga-firestore9-job/Dockerfile <<'DOCKER'
+          FROM node:24-bookworm-slim
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+          COPY probe.js ./
+          CMD ["node","probe.js"]
+          DOCKER
+          cd /tmp/fxga-firestore9-job
           npm install --ignore-scripts --no-fund --no-audit
-          node --check src/firestore9-write-canary.js
+          node --check probe.js
           npm audit --omit=dev --json > /tmp/write-canary-audit.json || true
           node <<'NODE'
           const fs=require('fs'),x=JSON.parse(fs.readFileSync('/tmp/write-canary-audit.json','utf8')),v=x?.metadata?.vulnerabilities||{};
-          console.log('WRITE CANARY AUDIT',JSON.stringify(v));
-          if((v.moderate||0)+(v.high||0)+(v.critical||0)>0)throw new Error('Firestore 9 write-canary dependency tree is not clean');
+          console.log('WRITE JOB AUDIT',JSON.stringify(v));
+          if((v.moderate||0)+(v.high||0)+(v.critical||0)>0)throw new Error('Firestore 9 write-job dependency tree is not clean');
           NODE
 
-      - name: Build and push write canary
+      - name: Build and push minimal canary image
         run: |
           gcloud config set project "$GCP_PROJECT_ID"
-          IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/firestore9-write-canary:${GITHUB_SHA}"
+          IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/firestore9-write-job:${GITHUB_SHA}"
           gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
-          docker build -t "$IMAGE" cloud-run-collector
+          docker build -t "$IMAGE" /tmp/fxga-firestore9-job
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - name: Deploy private write canary
+      - name: Deploy one-shot Firestore 9 canary job
         run: |
-          gcloud run deploy "$CANARY_SERVICE" \
+          gcloud run jobs deploy "$CANARY_JOB" \
             --image "$IMAGE" \
             --region "$GCP_REGION" \
-            --platform managed \
-            --no-allow-unauthenticated \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" \
-            --cpu 1 \
-            --memory 512Mi \
-            --concurrency 1 \
-            --min 0 \
-            --max 1 \
-            --timeout 60 \
+            --tasks 1 \
+            --max-retries 0 \
+            --task-timeout 120s \
             --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION"
-          gcloud run services add-iam-policy-binding "$CANARY_SERVICE" --region "$GCP_REGION" --member="serviceAccount:$DEPLOY_SERVICE_ACCOUNT" --role=roles/run.invoker >/dev/null
 
-      - name: Execute isolated write read delete probe through Cloud Run proxy
+      - name: Execute isolated write read delete probe
         run: |
-          set -euo pipefail
-          gcloud run services proxy "$CANARY_SERVICE" --region "$GCP_REGION" --port 9090 >/tmp/canary-proxy.log 2>&1 &
-          PROXY_PID=$!
-          cleanup_proxy(){ kill "$PROXY_PID" >/dev/null 2>&1 || true; wait "$PROXY_PID" >/dev/null 2>&1 || true; }
-          trap cleanup_proxy EXIT
-          READY=0
-          for attempt in $(seq 1 30); do
-            if curl --max-time 5 -fsS http://127.0.0.1:9090/health > /tmp/health.json; then READY=1; break; fi
-            sleep 2
-          done
-          if [ "$READY" != "1" ]; then cat /tmp/canary-proxy.log || true; exit 1; fi
-          curl --max-time 60 -fsS -X POST http://127.0.0.1:9090/probe > /tmp/probe.json
-          cat /tmp/probe.json
-          node <<'NODE'
-          const fs=require('fs'),h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8')),p=JSON.parse(fs.readFileSync('/tmp/probe.json','utf8'));
-          if(!h.ok||Number(h.firestoreMajor)!==9)throw new Error('Firestore 9 write canary health failed');
-          if(!p.ok||!p.written||!p.readBack||!p.deleted)throw new Error('Firestore 9 write/read/delete probe failed');
-          if(p.collection!=='fxga_firestore9_canary')throw new Error('Write probe touched an unexpected collection');
-          console.log('FIRESTORE 9 WRITE PROBE VERIFIED');
-          NODE
+          gcloud run jobs execute "$CANARY_JOB" --region "$GCP_REGION" --wait
+          EXECUTION=$(gcloud run jobs executions list --job "$CANARY_JOB" --region "$GCP_REGION" --limit=1 --sort-by='~metadata.creationTimestamp' --format='value(metadata.name)')
+          test -n "$EXECUTION" || { echo '::error::Canary execution missing'; exit 1; }
+          STATUS=$(gcloud run jobs executions describe "$EXECUTION" --region "$GCP_REGION" --format='value(status.conditions[0].type,status.conditions[0].status,status.failedCount,status.succeededCount)')
+          echo "Execution $EXECUTION: $STATUS"
+          SUCCEEDED=$(gcloud run jobs executions describe "$EXECUTION" --region "$GCP_REGION" --format='value(status.succeededCount)')
+          FAILED=$(gcloud run jobs executions describe "$EXECUTION" --region "$GCP_REGION" --format='value(status.failedCount)')
+          test "${SUCCEEDED:-0}" = "1" || { echo '::error::Firestore 9 write job did not succeed'; exit 1; }
+          test "${FAILED:-0}" = "0" || { echo '::error::Firestore 9 write job reported failures'; exit 1; }
+          echo 'FIRESTORE 9 WRITE READ DELETE JOB VERIFIED'
 
-      - name: Delete write canary service
+      - name: Delete write canary job
         if: always()
         run: |
-          gcloud run services delete "$CANARY_SERVICE" --region "$GCP_REGION" --quiet >/dev/null 2>&1 || true
+          gcloud run jobs delete "$CANARY_JOB" --region "$GCP_REGION" --quiet >/dev/null 2>&1 || true
