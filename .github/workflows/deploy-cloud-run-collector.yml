@@ -28,7 +28,7 @@ jobs:
           node-version: '24'
       - name: Validate collector syntax
         working-directory: cloud-run-collector
-        run: node --check src/server.js
+        run: npm run check
 
   deploy:
     needs: validate
@@ -49,7 +49,7 @@ jobs:
             echo 'ready=true' >> "$GITHUB_OUTPUT"
           else
             echo 'ready=false' >> "$GITHUB_OUTPUT"
-            echo 'Google Cloud deployment is not activated yet; collector syntax validation passed.'
+            echo 'Google Cloud deployment is staged but not activated until project/WIF/service-account values are configured.'
           fi
 
       - id: auth
@@ -75,7 +75,7 @@ jobs:
           gcloud artifacts repositories describe "$GAR_REPOSITORY" --location "$GCP_REGION" >/dev/null 2>&1 || \
             gcloud artifacts repositories create "$GAR_REPOSITORY" --repository-format=docker --location "$GCP_REGION"
           gcloud tasks queues describe "$TASK_QUEUE" --location "$GCP_REGION" >/dev/null 2>&1 || \
-            gcloud tasks queues create "$TASK_QUEUE" --location "$GCP_REGION" --max-concurrent-dispatches=1 --max-dispatches-per-second=2
+            gcloud tasks queues create "$TASK_QUEUE" --location "$GCP_REGION" --max-concurrent-dispatches=2 --max-dispatches-per-second=4
 
       - name: Ensure collector secrets in Secret Manager
         if: steps.config.outputs.ready == 'true'
@@ -119,7 +119,7 @@ jobs:
             --min 0 \
             --max 2 \
             --timeout 300 \
-            --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$GCP_REGION,CLOUD_TASKS_QUEUE=$TASK_QUEUE,CLOUD_TASKS_INVOKER_SA=$RUNTIME_SA,CALENDAR_DAYS=14,MAX_BROWSER_SECONDS=25,CLOUDFLARE_WEBHOOK_URL=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook" \
+            --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$GCP_REGION,CLOUD_TASKS_QUEUE=$TASK_QUEUE,CLOUD_TASKS_INVOKER_SA=$RUNTIME_SA,CALENDAR_DAYS=14,MAX_BROWSER_SECONDS=25,GLOBAL_FRED_TARGET=180,CLOUDFLARE_WEBHOOK_URL=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook" \
             --set-secrets "COLLECTOR_WEBHOOK_SECRET=fxga-collector-webhook-secret:latest,FRED_API_KEY=fxga-fred-api-key:latest"
           SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           gcloud run services update "$SERVICE" --region "$GCP_REGION" --update-env-vars "CLOUD_RUN_SERVICE_URL=$SERVICE_URL"
@@ -134,22 +134,28 @@ jobs:
           gcloud secrets add-iam-policy-binding fxga-collector-webhook-secret --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor >/dev/null
           gcloud secrets add-iam-policy-binding fxga-fred-api-key --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor >/dev/null || true
 
-      - name: Configure two free-tier scheduler jobs
+      - name: Configure three free-tier scheduler jobs
         if: steps.config.outputs.ready == 'true'
         env:
           RUNTIME_SA: ${{ secrets.GCP_RUNTIME_SERVICE_ACCOUNT }}
         run: |
-          gcloud scheduler jobs describe fxga-calendar-bootstrap --location "$GCP_REGION" >/dev/null 2>&1 && \
-            gcloud scheduler jobs update http fxga-calendar-bootstrap --location "$GCP_REGION" --schedule='5 0 * * *' --time-zone='Etc/UTC' --uri="$SERVICE_URL/bootstrap" --http-method=POST --oidc-service-account-email="$RUNTIME_SA" --oidc-token-audience="$SERVICE_URL" || \
-            gcloud scheduler jobs create http fxga-calendar-bootstrap --location "$GCP_REGION" --schedule='5 0 * * *' --time-zone='Etc/UTC' --uri="$SERVICE_URL/bootstrap" --http-method=POST --oidc-service-account-email="$RUNTIME_SA" --oidc-token-audience="$SERVICE_URL"
-          gcloud scheduler jobs describe fxga-important-fred-sync --location "$GCP_REGION" >/dev/null 2>&1 && \
-            gcloud scheduler jobs update http fxga-important-fred-sync --location "$GCP_REGION" --schedule='0 * * * *' --time-zone='Etc/UTC' --uri="$SERVICE_URL/macro-sync" --http-method=POST --oidc-service-account-email="$RUNTIME_SA" --oidc-token-audience="$SERVICE_URL" || \
-            gcloud scheduler jobs create http fxga-important-fred-sync --location "$GCP_REGION" --schedule='0 * * * *' --time-zone='Etc/UTC' --uri="$SERVICE_URL/macro-sync" --http-method=POST --oidc-service-account-email="$RUNTIME_SA" --oidc-token-audience="$SERVICE_URL"
+          upsert_job() {
+            NAME="$1"; SCHEDULE="$2"; URI="$3"; BODY="$4"
+            if gcloud scheduler jobs describe "$NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
+              gcloud scheduler jobs update http "$NAME" --location "$GCP_REGION" --schedule="$SCHEDULE" --time-zone='Etc/UTC' --uri="$URI" --http-method=POST --headers='Content-Type=application/json' --message-body="$BODY" --oidc-service-account-email="$RUNTIME_SA" --oidc-token-audience="$SERVICE_URL"
+            else
+              gcloud scheduler jobs create http "$NAME" --location "$GCP_REGION" --schedule="$SCHEDULE" --time-zone='Etc/UTC' --uri="$URI" --http-method=POST --headers='Content-Type=application/json' --message-body="$BODY" --oidc-service-account-email="$RUNTIME_SA" --oidc-token-audience="$SERVICE_URL"
+            fi
+          }
+          upsert_job fxga-calendar-bootstrap '5 0 * * *' "$SERVICE_URL/bootstrap" '{}'
+          upsert_job fxga-fast-global-macro '0 * * * *' "$SERVICE_URL/macro-sync?mode=fast" '{"mode":"fast"}'
+          upsert_job fxga-full-global-macro '20 0 * * *' "$SERVICE_URL/macro-sync?mode=full" '{"mode":"full"}'
 
       - name: Deployment summary
         if: steps.config.outputs.ready == 'true'
         run: |
           echo "Cloud Run collector: $SERVICE_URL"
           echo "Calendar bootstrap: daily at 00:05 UTC"
-          echo "Important FRED sync: hourly"
+          echo "Fast macro/rates/FX/risk sync: hourly"
+          echo "Full 109+ dynamic USA/Europe/UK/South Africa/Japan FRED sync: daily at 00:20 UTC"
           echo "Release checks: exact event-time Cloud Tasks"
