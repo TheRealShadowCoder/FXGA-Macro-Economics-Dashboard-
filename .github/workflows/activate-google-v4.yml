@@ -129,7 +129,7 @@ jobs:
           node <<'NODE'
           const fs=require('fs'),crypto=require('crypto'),state=JSON.parse(fs.readFileSync('/tmp/google-state.json','utf8')),secret=process.env.WEBHOOK_SECRET,url='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook';
           async function send(type,payload){const body=JSON.stringify({version:1,type,generatedAt:new Date().toISOString(),payload}),timestamp=String(Date.now()),requestId=crypto.randomUUID(),signature=crypto.createHmac('sha256',secret).update(`${timestamp}.${requestId}.${body}`).digest('hex'),r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-FXGA-Timestamp':timestamp,'X-FXGA-Request-Id':requestId,'X-FXGA-Signature':`sha256=${signature}`},body}),text=await r.text();if(!r.ok)throw new Error(`${type} ${r.status}: ${text.slice(0,500)}`);console.log(`${type}: ${r.status}`);}
-          await send('calendar-snapshot',state.calendar.payload);await send('macro-snapshot',state.macro.payload);await send('intelligence-snapshot',state.intelligence.payload);
+          (async()=>{await send('calendar-snapshot',state.calendar.payload);await send('macro-snapshot',state.macro.payload);await send('intelligence-snapshot',state.intelligence.payload);})().catch(err=>{console.error(err);process.exit(1);});
           NODE
 
       - name: Verify passive edge and live v4 intelligence
@@ -137,8 +137,10 @@ jobs:
           node <<'NODE'
           const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
           async function get(path){const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,700)}`);return JSON.parse(t);}
-          const health=await get('/api/health');for(const k of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests'])if(Number(health.safety?.[k]??-1)!==0)throw new Error(`${k} must remain zero`);
-          const intel=await get('/api/super-economist'),signals=await get('/api/session-signals');if(intel.schemaVersion!==4||intel.executionLocation!=='Google Cloud Run')throw new Error('v4 intelligence not live');if(signals.rankedOpportunities?.length!==8)throw new Error('v4 pair matrix not live');
-          const acq=await fetch(base+'/api/acquire?source=fred');if(acq.status!==409)throw new Error('Cloudflare acquisition unexpectedly enabled');
-          console.log(`V4 CUTOVER VERIFIED: ${intel.coverage?.eligibleMethods}/9705 eligible, ${signals.decisionSummary?.actionableCount} actionable, Cloudflare upstream requests = 0.`);
+          (async()=>{
+            const health=await get('/api/health');for(const k of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests'])if(Number(health.safety?.[k]??-1)!==0)throw new Error(`${k} must remain zero`);
+            const intel=await get('/api/super-economist'),signals=await get('/api/session-signals');if(intel.schemaVersion!==4||intel.executionLocation!=='Google Cloud Run')throw new Error('v4 intelligence not live');if(signals.rankedOpportunities?.length!==8)throw new Error('v4 pair matrix not live');
+            const acq=await fetch(base+'/api/acquire?source=fred');if(acq.status!==409)throw new Error('Cloudflare acquisition unexpectedly enabled');
+            console.log(`V4 CUTOVER VERIFIED: ${intel.coverage?.eligibleMethods}/9705 eligible, ${signals.decisionSummary?.actionableCount} actionable, Cloudflare upstream requests = 0.`);
+          })().catch(err=>{console.error(err);process.exit(1);});
           NODE
