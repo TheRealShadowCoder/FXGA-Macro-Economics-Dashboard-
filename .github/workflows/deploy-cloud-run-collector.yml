@@ -32,26 +32,45 @@ jobs:
 
   deploy:
     needs: validate
-    if: ${{ vars.GCP_PROJECT_ID != '' && secrets.GCP_WIF_PROVIDER != '' && secrets.GCP_DEPLOY_SERVICE_ACCOUNT != '' && secrets.GCP_RUNTIME_SERVICE_ACCOUNT != '' && secrets.COLLECTOR_WEBHOOK_SECRET != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
+      - id: config
+        name: Check Google deployment configuration
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER }}
+          DEPLOY_SA: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          RUNTIME_SA: ${{ secrets.GCP_RUNTIME_SERVICE_ACCOUNT }}
+          WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
+        run: |
+          if [ -n "$PROJECT_ID" ] && [ -n "$WIF_PROVIDER" ] && [ -n "$DEPLOY_SA" ] && [ -n "$RUNTIME_SA" ] && [ -n "$WEBHOOK_SECRET" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'Google Cloud deployment is not activated yet; collector syntax validation passed.'
+          fi
+
       - id: auth
+        if: steps.config.outputs.ready == 'true'
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - if: steps.config.outputs.ready == 'true'
+        uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure project and APIs
+        if: steps.config.outputs.ready == 'true'
         run: |
           gcloud config set project '${{ vars.GCP_PROJECT_ID }}'
           gcloud services enable run.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com cloudtasks.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
 
       - name: Ensure Artifact Registry and Cloud Tasks queue
+        if: steps.config.outputs.ready == 'true'
         run: |
           gcloud artifacts repositories describe "$GAR_REPOSITORY" --location "$GCP_REGION" >/dev/null 2>&1 || \
             gcloud artifacts repositories create "$GAR_REPOSITORY" --repository-format=docker --location "$GCP_REGION"
@@ -59,6 +78,7 @@ jobs:
             gcloud tasks queues create "$TASK_QUEUE" --location "$GCP_REGION" --max-concurrent-dispatches=1 --max-dispatches-per-second=2
 
       - name: Ensure collector secrets in Secret Manager
+        if: steps.config.outputs.ready == 'true'
         env:
           COLLECTOR_WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
@@ -71,6 +91,7 @@ jobs:
           fi
 
       - name: Build and push container
+        if: steps.config.outputs.ready == 'true'
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
         run: |
@@ -81,6 +102,7 @@ jobs:
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
       - name: Deploy private Cloud Run service
+        if: steps.config.outputs.ready == 'true'
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           RUNTIME_SA: ${{ secrets.GCP_RUNTIME_SERVICE_ACCOUNT }}
@@ -104,6 +126,7 @@ jobs:
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
 
       - name: Configure IAM invocation and secret access
+        if: steps.config.outputs.ready == 'true'
         env:
           RUNTIME_SA: ${{ secrets.GCP_RUNTIME_SERVICE_ACCOUNT }}
         run: |
@@ -112,6 +135,7 @@ jobs:
           gcloud secrets add-iam-policy-binding fxga-fred-api-key --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor >/dev/null || true
 
       - name: Configure two free-tier scheduler jobs
+        if: steps.config.outputs.ready == 'true'
         env:
           RUNTIME_SA: ${{ secrets.GCP_RUNTIME_SERVICE_ACCOUNT }}
         run: |
@@ -123,6 +147,7 @@ jobs:
             gcloud scheduler jobs create http fxga-important-fred-sync --location "$GCP_REGION" --schedule='0 * * * *' --time-zone='Etc/UTC' --uri="$SERVICE_URL/macro-sync" --http-method=POST --oidc-service-account-email="$RUNTIME_SA" --oidc-token-audience="$SERVICE_URL"
 
       - name: Deployment summary
+        if: steps.config.outputs.ready == 'true'
         run: |
           echo "Cloud Run collector: $SERVICE_URL"
           echo "Calendar bootstrap: daily at 00:05 UTC"
