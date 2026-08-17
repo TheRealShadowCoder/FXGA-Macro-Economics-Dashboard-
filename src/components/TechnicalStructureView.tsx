@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchTechnicalSnapshot } from '../lib/api';
+import { AdvancedSmcPanel, SmtDivergencePanel } from './AdvancedSmcPanel';
 import type { MarketQuote, TechnicalAssetState, TechnicalBar, TechnicalBias, TechnicalGateStatus, TechnicalSnapshotPayload, TechnicalTimeframeState } from '../lib/types';
 import './TechnicalStructureView.css';
 
@@ -140,6 +141,7 @@ function StructureAssetCard({ state, quote }: { state: TechnicalAssetState; quot
           </div>
         ))}
       </div>
+      <AdvancedSmcPanel state={state} />
       <p className="structure-reason">{state.decisionGate.reason}</p>
     </article>
   );
@@ -189,6 +191,7 @@ export function TechnicalStructureView({ assets }: { assets: MarketQuote[] }) {
     {technicalLoading && !technical ? <div className="loading-panel">Building verified multi-timeframe structure…</div> : null}
     {technicalError && !technical ? <div className="panel structure-warming"><span className="eyebrow">Structure history</span><h3>Price history is being initialized</h3><p>{technicalError}</p></div> : null}
     {structureAssets.length ? <section className="structure-asset-grid">{structureAssets.map((state) => <StructureAssetCard key={state.id} state={state} quote={quoteById.get(state.id)} />)}</section> : null}
+    <SmtDivergencePanel technical={technical} />
 
     <section className="panel technical-method"><div><span className="eyebrow">Execution Framework</span><h2>Evidence-gated market structure</h2></div><div className="technical-framework"><div><strong>Directional context</strong><span>D1 and H4 structure, strong and weak swing points, dealing range and premium or discount.</span></div><div><strong>Confirmation</strong><span>Mapped liquidity, sweep, CHoCH, displacement, BOS and directional imbalance in strict order.</span></div><div><strong>Execution</strong><span>H1/M5 and M15/M1 hierarchy remains locked until the required lower-timeframe evidence exists.</span></div><div><strong>Protection</strong><span>Unverified bars, thin sampling and missing one-minute OHLC reduce quality instead of creating synthetic confirmation.</span></div></div><small className="technical-disclaimer">The structure engine uses observed market snapshots and provider-supplied session OHLC only. It does not infer missing candles, sweeps, order blocks or structure breaks.</small></section>
   </>;
