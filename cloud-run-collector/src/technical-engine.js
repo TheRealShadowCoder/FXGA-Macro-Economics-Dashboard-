@@ -1,3 +1,5 @@
+import { buildAdvancedTimeframeContext, buildNestedContext, buildSmtContext } from './advanced-technical.js';
+
 const MINUTE = 60_000;
 
 export const TECHNICAL_TIMEFRAMES = Object.freeze({
@@ -430,12 +432,17 @@ export function buildTechnicalSnapshot(states = {}, generatedAt = new Date().toI
   for (const id of TECHNICAL_ASSET_IDS) {
     const state = states[id] || { id, bars:{} };
     const timeframes = {};
-    for (const timeframe of Object.keys(TECHNICAL_TIMEFRAMES)) timeframes[timeframe] = analyzeTimeframe(timeframe,state.bars?.[timeframe] || []);
+    for (const timeframe of Object.keys(TECHNICAL_TIMEFRAMES)) {
+      const analyzed=analyzeTimeframe(timeframe,state.bars?.[timeframe] || []);
+      analyzed.advanced=buildAdvancedTimeframeContext(analyzed.history,analyzed);
+      timeframes[timeframe]=analyzed;
+    }
     timeframes.M1 = { timeframe:'M1',status:'unavailable',ready:false,bars:0,requiredBars:60,quality:{grade:'unavailable',score:0,averageSamples:0,providerOhlc:false},bias:'neutral',confidence:0,sequence:{bullish:null,bearish:null},history:[],reason:'One-minute OHLC is not claimed without a verified one-minute bar source.' };
     const models = {
       D1_H1_M5:executionModel('D1 → H1 → M5',timeframes,{direction:'D1',confirmation:'H1',entry:'M5'}),
       H4_M15_M1:executionModel('H4 → M15 → M1',timeframes,{direction:'H4',confirmation:'M15',entry:'M1'}),
     };
+    const nested=buildNestedContext(timeframes);
     assets[id] = {
       id,
       label:state.label || id,
@@ -446,15 +453,19 @@ export function buildTechnicalSnapshot(states = {}, generatedAt = new Date().toI
       lastPrice:state.lastPrice ?? null,
       timeframes,
       models,
+      nested,
       decisionGate:decisionGate(timeframes,models),
     };
   }
   const values = Object.values(assets);
+  const smt=buildSmtContext(assets);
   return {
     generatedAt,
     methodology:'evidence-gated-multi-timeframe-market-structure',
     sequence:['Liquidity Sweep','CHoCH','Displacement','BOS','FVG'],
     hierarchy:['D1 → H1 → M5','H4 → M15 → M1'],
+    advancedConcepts:['Breaker Block','Inverse FVG','Balanced Price Range','Consequent Encroachment','OTE 62–79 / 70.5','Protected Swing','Liquidity Void','SMT Divergence','Session Context','Nested Order Blocks'],
+    smt,
     sourcePolicy:'Only observed or provider-supplied price history is used. Unavailable structure remains unavailable.',
     counts:{
       assets:values.length,

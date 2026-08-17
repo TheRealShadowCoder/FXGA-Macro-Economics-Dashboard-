@@ -6,7 +6,7 @@
   "engines": { "node": ">=24" },
   "scripts": {
     "start": "node src/launcher.js",
-    "check": "node --check src/global-fred.js && node --check src/cnbc-market.js && node --check src/technical-engine.js && node --check src/institutional-research.js && node --check src/server-v2.js && node --check src/fxga-registry.js && node --check src/super-economist-core.js && node --check src/intelligence-matrix.js && node --check src/super-economist.js && node --check src/official-news.js && node --check src/super-runtime.js && node --check src/launcher.js"
+    "check": "node --check src/global-fred.js && node --check src/cnbc-market.js && node --check src/technical-engine.js && node --check src/advanced-technical.js && node --check src/institutional-research.js && node --check src/server-v2.js && node --check src/fxga-registry.js && node --check src/super-economist-core.js && node --check src/intelligence-matrix.js && node --check src/super-economist.js && node --check src/official-news.js && node --check src/super-runtime.js && node --check src/launcher.js"
   },
   "dependencies": {
     "@google-cloud/firestore": "^7.11.0",
