@@ -4,7 +4,7 @@
   "account_id": "4f260a0775a3df407e08512610c9898b",
   "compatibility_date": "2026-08-16",
   "compatibility_flags": ["nodejs_compat"],
-  "main": "./worker/index.ts",
+  "main": "./worker/index-v2.ts",
   "workers_dev": true,
   "assets": {
     "not_found_handling": "single-page-application"
