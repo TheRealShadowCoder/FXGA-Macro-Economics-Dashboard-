@@ -40,6 +40,13 @@ for ROLE in roles/datastore.user roles/cloudtasks.enqueuer; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$RUNTIME_SA" --role="$ROLE" >/dev/null
 done
 
+# Cloud Tasks uses the runtime identity to mint OIDC tokens for private Cloud Run
+# release-check requests. The runtime therefore needs actAs on its own service
+# account; keep this binding scoped to that one service account.
+gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
+  --role=roles/iam.serviceAccountUser \
+  --member="serviceAccount:$RUNTIME_SA" >/dev/null
+
 gcloud firestore databases describe --database='(default)' >/dev/null 2>&1 || \
   gcloud firestore databases create --database='(default)' --location="$REGION" --type=firestore-native
 
