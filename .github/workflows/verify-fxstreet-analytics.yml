@@ -1,4 +1,4 @@
-name: Verify FXGA Google Data Contract
+name: Verify FXGA Production Data Contract
 
 on:
   push:
@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: fxga-production-contract
+  cancel-in-progress: true
 
 jobs:
   verify:
@@ -17,7 +21,7 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Verify live Google Cloud data contract
+      - name: Verify live production data contract
         run: |
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
@@ -34,28 +38,20 @@ jobs:
           }
 
           const health = await getJson('/api/health');
-          if (health?.collectorMode !== 'google-cloud-run-webhook') throw new Error(`Unexpected collectorMode: ${health?.collectorMode}`);
-          if (health?.configured?.browserRun !== false) throw new Error('Cloudflare browser acquisition must remain disabled');
-          if (health?.configured?.calendarScraping !== false) throw new Error('Cloudflare calendar scraping must remain disabled');
-          if (health?.configured?.officialNewsScraping !== false) throw new Error('Cloudflare news scraping must remain disabled');
-          if (Number(health?.safety?.normalStateUpstreamCalendarRequests ?? -1) !== 0) throw new Error('Cloudflare calendar upstream requests must remain zero');
-          if (Number(health?.safety?.normalStateUpstreamFredRequests ?? -1) !== 0) throw new Error('Cloudflare FRED upstream requests must remain zero');
-          if (Number(health?.safety?.normalStateUpstreamNewsRequests ?? -1) !== 0) throw new Error('Cloudflare news upstream requests must remain zero');
-          if (Number(health?.safety?.normalStateUpstreamMarketRequests ?? -1) !== 0) throw new Error('Cloudflare market upstream requests must remain zero');
-          if (health?.safety?.releaseWindowPrimary !== 'Google Cloud Run collector') throw new Error(`Unexpected release-window owner: ${health?.safety?.releaseWindowPrimary}`);
-
-          const intelligence = await getJson('/api/super-economist');
-          if (intelligence?.executionLocation !== 'Google Cloud Run') throw new Error(`Unexpected intelligence executionLocation: ${intelligence?.executionLocation}`);
-          if (Number(intelligence?.schemaVersion) !== 4) throw new Error(`Expected intelligence schemaVersion 4, got ${intelligence?.schemaVersion}`);
+          if (health?.configured?.browserRun !== false) throw new Error('Application-edge browser acquisition must remain disabled');
+          if (health?.configured?.calendarScraping !== false) throw new Error('Application-edge calendar acquisition must remain disabled');
+          if (health?.configured?.officialNewsScraping !== false) throw new Error('Application-edge publication acquisition must remain disabled');
+          for (const key of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests']) {
+            if (Number(health?.safety?.[key] ?? -1) !== 0) throw new Error(`${key} must remain zero`);
+          }
 
           const acquisition = await getJson('/api/acquisition/catalog');
           if (acquisition?.policy?.bypassLogin !== false) throw new Error('Login-bypass policy regression');
           if (acquisition?.policy?.bypassCaptcha !== false) throw new Error('CAPTCHA-bypass policy regression');
           if (acquisition?.policy?.bypassPaywall !== false) throw new Error('Paywall-bypass policy regression');
           if (acquisition?.policy?.botEvasion !== false) throw new Error('Bot-evasion policy regression');
-
           const acquire = await fetch(`${base}/api/acquire?source=fred`, { headers: { Accept: 'application/json' } });
-          if (acquire.status !== 409) throw new Error(`Passive-edge acquisition contract regressed: expected 409, got ${acquire.status}`);
+          if (acquire.status !== 409) throw new Error(`Passive application-edge acquisition contract regressed: expected 409, got ${acquire.status}`);
 
           const dashboard = await getJson('/api/dashboard');
           if (!Array.isArray(dashboard?.macro) || dashboard.macro.length === 0) throw new Error('Dashboard macro payload is empty');
@@ -82,27 +78,48 @@ jobs:
             if (Array.isArray(market?.assets) && market.assets.length > 0) break;
             if (attempt < 18) await sleep(5000);
           }
-          if (!Array.isArray(market?.assets)) throw new Error('CNBC market payload is missing assets[]');
-          if (market.assets.length > 0) {
-            const ids = new Set(market.assets.map((asset) => asset?.id).filter(Boolean));
-            if (ids.size !== market.assets.length) throw new Error('CNBC market payload has duplicate asset IDs');
-            const usable = market.assets.filter((asset) => typeof asset?.price === 'number' && Number.isFinite(asset.price));
-            console.log(`CNBC snapshot: ${market.assets.length} configured assets, ${usable.length} currently priced, ${market.assets.filter((asset) => asset?.stale).length} last-good retained.`);
-          } else {
-            console.log('CNBC market route is live but awaiting its first Google Cloud market snapshot.');
+          if (!Array.isArray(market?.assets)) throw new Error('Market payload is missing assets[]');
+          const marketIds = new Set(market.assets.map((asset) => asset?.id).filter(Boolean));
+          if (marketIds.size !== market.assets.length) throw new Error('Market payload contains duplicate asset IDs');
+          const usableMarket = market.assets.filter((asset) => typeof asset?.price === 'number' && Number.isFinite(asset.price));
+
+          const technical = await getJson('/api/technical');
+          if (!technical || typeof technical !== 'object' || !technical.assets || typeof technical.assets !== 'object') throw new Error('Technical structure payload is invalid');
+          const technicalAssets = Object.values(technical.assets);
+          if (technicalAssets.length < 5) throw new Error(`Technical asset coverage is too small: ${technicalAssets.length}`);
+          const allowedGateStates = new Set(['confirmed','context-aligned','awaiting-confirmation','conflict','warming','unavailable']);
+          for (const asset of technicalAssets) {
+            if (!asset?.timeframes || typeof asset.timeframes !== 'object') throw new Error(`Technical timeframe matrix missing for ${asset?.id || 'unknown'}`);
+            if (!allowedGateStates.has(asset?.decisionGate?.status)) throw new Error(`Unexpected technical gate status for ${asset?.id}: ${asset?.decisionGate?.status}`);
+            for (const timeframe of ['D1','H4','H1','M15','M5','M1']) {
+              if (!asset.timeframes[timeframe]) throw new Error(`${asset?.id} is missing ${timeframe} state`);
+            }
+            if (asset.timeframes.M1?.ready === true) throw new Error(`${asset?.id} falsely claims verified one-minute readiness`);
+          }
+
+          const signals = await getJson('/api/session-signals');
+          if (!signals || typeof signals !== 'object' || !Array.isArray(signals.sessions)) throw new Error('Currency Outlook API contract is invalid');
+          const signalRows = signals.sessions.flatMap((session) => Array.isArray(session?.signals) ? session.signals : []);
+          if (signalRows.length && !signalRows.every((signal) => typeof signal?.technicalGate === 'string')) throw new Error('Currency signals are missing technical execution gates');
+
+          const eventStudies = await getJson('/api/event-studies?days=7');
+          if (Number(eventStudies?.days) !== 7 || !Array.isArray(eventStudies?.studies) || !eventStudies?.summary || typeof eventStudies.summary !== 'object') throw new Error('Event-study API contract is invalid');
+          for (const study of eventStudies.studies) {
+            if (!study?.eventId || !study?.releaseAt || !study?.horizons || typeof study.horizons !== 'object') throw new Error('Event-study record is malformed');
+            for (const [horizon, measurement] of Object.entries(study.horizons)) {
+              if (!['5m','15m','1h','4h'].includes(horizon)) throw new Error(`Unsupported event-study horizon ${horizon}`);
+              if (!['measured','baseline-too-old','observation-delayed','market-data-unavailable'].includes(measurement?.quality)) throw new Error(`Invalid event-study quality ${measurement?.quality}`);
+            }
           }
 
           const analysis = await getJson('/api/analysis');
           if (!analysis || typeof analysis !== 'object' || !analysis.regime) throw new Error('Macro Analysis API contract is invalid');
 
-          const signals = await getJson('/api/session-signals');
-          if (!signals || typeof signals !== 'object' || !Array.isArray(signals.sessions)) throw new Error('Session Signals API contract is invalid');
-
           const fred = await getJson('/api/fred/catalog');
-          if (!fred || typeof fred !== 'object' || !Array.isArray(fred.categories) || Number(fred.total) <= 0) throw new Error('Important FRED catalog contract is invalid');
+          if (!fred || typeof fred !== 'object' || !Array.isArray(fred.categories) || Number(fred.total) <= 0) throw new Error('Important macro catalog contract is invalid');
           const fredInflation = await getJson('/api/fred?category=inflation&limit=16');
-          if (!Array.isArray(fredInflation?.series) || fredInflation.series.length === 0) throw new Error('Important FRED inflation category returned no live observations');
-          if (!fredInflation.series.some((item) => typeof item?.value === 'number' && Number.isFinite(item.value))) throw new Error('Important FRED inflation category contains no numeric observations');
+          if (!Array.isArray(fredInflation?.series) || fredInflation.series.length === 0) throw new Error('Inflation category returned no live observations');
+          if (!fredInflation.series.some((item) => typeof item?.value === 'number' && Number.isFinite(item.value))) throw new Error('Inflation category contains no numeric observations');
 
           const completed = history.events.filter((event) => event?.actual != null && String(event.actual).trim() !== '');
           const biasCounts = completed.reduce((acc, event) => {
@@ -111,7 +128,8 @@ jobs:
             return acc;
           }, {});
 
-          console.log(`Important FRED live check: ${fredInflation.series.length} inflation observations returned.`);
-          console.log(`FXGA Google data contract passed: ${dashboard.macro.length} macro observations in dashboard, ${history.events.length} historical events, ${completed.length} completed releases.`);
+          console.log(`PRODUCTION CONTRACT PASSED: ${dashboard.macro.length} dashboard macro observations, ${history.events.length} historical events, ${completed.length} completed releases.`);
+          console.log(`Market: ${market.assets.length} configured instruments, ${usableMarket.length} priced. Technical: ${technicalAssets.length} assets; confirmed ${technical.counts?.confirmed || 0}; warming ${technical.counts?.warming || 0}.`);
+          console.log(`Event studies: ${eventStudies.studies.length} releases, ${eventStudies.summary?.measuredHorizons || 0} measured horizons.`);
           console.log('Completed release currency-bias counts:', biasCounts);
           NODE
