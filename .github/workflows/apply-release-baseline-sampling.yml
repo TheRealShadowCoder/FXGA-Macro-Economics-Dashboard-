@@ -22,34 +22,7 @@ jobs:
           node-version: '24'
 
       - name: Add pre-release market baselines
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          p=Path('cloud-run-collector/src/server-v2.js')
-          text=p.read_text()
-          old="""function taskOffsets(maxImportance) {
-  if (maxImportance>=3) return [0,60,300,900,3600,14400];
-  if (maxImportance===2) return [0,300,900,3600,14400];
-  return [0,900,3600];
-}"""
-          new="""function taskOffsets(maxImportance) {
-  // Negative offsets intentionally capture a verified pre-release market baseline.
-  // The release-check gateway triggers market-sync after every successful check,
-  // so the -5m task seeds the strict event-study baseline without fabricating prices.
-  if (maxImportance>=3) return [-300,0,60,300,900,3600,14400];
-  if (maxImportance===2) return [-300,0,300,900,3600,14400];
-  return [-900,0,900,3600];
-}"""
-          if old not in text:
-              raise SystemExit('Expected taskOffsets block not found; refusing unsafe patch')
-          p.write_text(text.replace(old,new,1))
-
-          pkg=Path('cloud-run-collector/package.json')
-          s=pkg.read_text()
-          if '"version": "4.5.0"' not in s:
-              raise SystemExit('Expected collector version 4.5.0 not found')
-          pkg.write_text(s.replace('"version": "4.5.0"','"version": "4.6.0"',1))
-          PY
+        run: python3 scripts/patch-release-baseline.py
 
       - name: Validate collector
         run: |
