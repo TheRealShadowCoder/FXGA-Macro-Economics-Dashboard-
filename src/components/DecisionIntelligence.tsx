@@ -10,6 +10,8 @@ interface CurrencyState {
   score: number;
   confidence: number;
   observationCount: number;
+  dimensionsCovered?: number;
+  quality?: 'structural' | 'provisional';
   rank: number;
 }
 
@@ -43,6 +45,12 @@ interface EnhancedSessionSignals extends SessionSignalsPayload {
   economyObservationCount?: number;
   currencyStates?: CurrencyState[];
   rankedOpportunities?: Opportunity[];
+  dataQuality?: {
+    minimumStructuralObservations: number;
+    minimumCoveredDimensions: number;
+    structuralEconomies: string[];
+    provisionalEconomies: string[];
+  };
   decisionSummary?: {
     actionableCount: number;
     waitCount: number;
@@ -89,6 +97,7 @@ export function DecisionIntelligence({ data }: { data: SessionSignalsPayload }) 
   const currencies = intelligence.currencyStates ?? [];
   const opportunities = intelligence.rankedOpportunities ?? [];
   const summary = intelligence.decisionSummary;
+  const quality = intelligence.dataQuality;
   if (!currencies.length && !opportunities.length) return null;
 
   return (
@@ -98,10 +107,15 @@ export function DecisionIntelligence({ data }: { data: SessionSignalsPayload }) 
           <span className="eyebrow">FXGA Global Decision Engine</span>
           <h2>Macro edge before technical execution</h2>
           <p>Each FX pair is scored base economy versus quote economy. Structural macro, central-bank reaction and released-data surprise remain separate so every bias can be audited.</p>
+          {quality && (
+            <p className="quality-note">
+              Structural coverage: {quality.structuralEconomies.length}/5 economies · provisional: {quality.provisionalEconomies.length}/5 · minimum {quality.minimumStructuralObservations} observations across {quality.minimumCoveredDimensions} macro dimensions.
+            </p>
+          )}
         </div>
         <div className="decision-kpis">
-          <div><small>Strongest currency</small><strong>{summary?.strongestCurrency ?? '—'}</strong></div>
-          <div><small>Weakest currency</small><strong>{summary?.weakestCurrency ?? '—'}</strong></div>
+          <div><small>Strongest covered currency</small><strong>{summary?.strongestCurrency ?? '—'}</strong></div>
+          <div><small>Weakest covered currency</small><strong>{summary?.weakestCurrency ?? '—'}</strong></div>
           <div><small>Actionable macro edges</small><strong>{summary?.actionableCount ?? 0}</strong></div>
           <div><small>Economy observations</small><strong>{intelligence.economyObservationCount ?? '—'}</strong></div>
         </div>
@@ -117,11 +131,15 @@ export function DecisionIntelligence({ data }: { data: SessionSignalsPayload }) 
 
       {currencies.length > 0 && (
         <>
-          <section className="section-head"><div><span className="eyebrow">Currency Strength Map</span><h2>Five-economy structural ranking</h2><p>Ranked from the independent macro state of each economy, not from spot-price momentum.</p></div></section>
+          <section className="section-head"><div><span className="eyebrow">Currency Strength Map</span><h2>Five-economy macro ranking</h2><p>Structural states are ranked first. Provisional states remain visible for context but are not granted full pair-model coverage.</p></div></section>
           <section className="currency-strength-grid">
             {currencies.map((currency) => (
-              <article className="currency-strength-card" key={currency.currency}>
+              <article className={`currency-strength-card ${currency.quality ?? 'structural'}`} key={currency.currency}>
                 <div className="currency-rank">#{currency.rank}</div>
+                <div className="currency-quality-row">
+                  <span className={`coverage-quality ${currency.quality ?? 'structural'}`}>{currency.quality ?? 'structural'}</span>
+                  <small>{currency.observationCount} obs · {currency.dimensionsCovered ?? '—'}/5 dimensions</small>
+                </div>
                 <div className="currency-strength-head">
                   <div><span className="eyebrow">{currency.economy}</span><h3>{currency.currency}</h3></div>
                   <strong className={scoreClass(currency.score)}>{signed(currency.score)}</strong>
