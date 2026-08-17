@@ -1,0 +1,55 @@
+import type { SessionSignalsPayload } from '../lib/types';
+
+function scoreClass(score: number) {
+  return score > 0 ? 'positive' : score < 0 ? 'negative' : 'neutral';
+}
+
+export function SignalsView({ data, loading, error }: { data: SessionSignalsPayload | null; loading: boolean; error: string }) {
+  if (loading && !data) return <div className="loading-panel">Calculating session signals from macro and release state…</div>;
+  if (error) return <div className="alert error">{error}</div>;
+  if (!data) return null;
+
+  return (
+    <>
+      <section className="panel signals-summary">
+        <div>
+          <span className="eyebrow">Report based directional engine</span>
+          <h2>{data.macroRegime}</h2>
+          <p>{data.methodology}</p>
+        </div>
+        <div className="signal-summary-stat"><strong>{data.macroConfidence}%</strong><span>Macro confidence</span></div>
+      </section>
+
+      <section className="session-grid">
+        {data.sessions.map((session) => (
+          <article className={`panel session-card ${session.active ? 'session-active' : ''}`} key={session.id}>
+            <div className="session-head">
+              <div><span className="eyebrow">{session.windowUtc}</span><h2>{session.label}</h2></div>
+              <span className={`session-state ${session.state}`}>{session.state}</span>
+            </div>
+            <div className="session-meta">
+              <span>Risk <strong>{session.risk.replace('-', ' ')}</strong></span>
+              <span>Events <strong>{session.eventCount}</strong></span>
+              <span>Focus <strong>{session.focusCurrencies.join(' · ')}</strong></span>
+            </div>
+            {session.nextCatalyst && <div className="next-catalyst"><small>Next catalyst</small>{session.nextCatalyst}</div>}
+            <div className="signal-list">
+              {session.signals.map((signal) => (
+                <div className="signal-row" key={signal.symbol}>
+                  <div className="signal-symbol"><strong>{signal.symbol}</strong><span>{signal.confidence}% confidence</span></div>
+                  <div className={`signal-score ${scoreClass(signal.score)}`}>{signal.score > 0 ? '+' : ''}{signal.score}</div>
+                  <div className={`signal-direction ${signal.direction.toLowerCase()}`}>{signal.direction}</div>
+                  <div className="signal-rationale">
+                    {signal.rationale.slice(0, 3).map((item) => <span key={item}>{item}</span>)}
+                    <small>{signal.invalidation}</small>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+      </section>
+      <div className="alert warn signal-caution">{data.caution}</div>
+    </>
+  );
+}
