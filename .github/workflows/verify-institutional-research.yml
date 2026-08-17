@@ -50,7 +50,7 @@ jobs:
             await sleep(3000);
           }
           if(!research||Number(research.schemaVersion)!==1)throw new Error('Research schema is unavailable');
-          if(typeof research.dataQuality?.overall!=='number')throw new Error('Data-quality score missing');
+          if(typeof research.dataQuality?.overall!=='number')throw new Error('Institutional research data-quality score missing');
           if(!Array.isArray(research.features)||research.features.length===0)throw new Error('Feature-engineering output missing');
           if(!Array.isArray(research.forecasts)||research.forecasts.length===0)throw new Error('Forecast ensemble output missing');
           if(!Array.isArray(research.regimes)||research.regimes.length===0)throw new Error('Regime map missing');
@@ -59,8 +59,14 @@ jobs:
           if(Number(research.capabilityCoverage?.total)!==40)throw new Error('Upgrade-domain coverage registry incomplete');
           if(!research.provenance?.reproducibilityHash)throw new Error('Reproducibility hash missing');
           if(!Array.isArray(research.operatingStandards?.slos)||research.operatingStandards.slos.length<7)throw new Error('Operating SLOs incomplete');
+
           const quality=await get('/api/data-quality');
-          if(typeof quality?.overall!=='number')throw new Error('Data-quality endpoint invalid');
+          const coverage=quality?.macro?.coverage;
+          if(!coverage||typeof coverage.effectiveCoveragePercent!=='number')throw new Error('Live macro acquisition-quality endpoint invalid');
+          if(Number(coverage.usableObservations||0)<100)throw new Error('Live macro acquisition quality below usable-observation floor');
+          if(Number(coverage.effectiveCoveragePercent||0)<75)throw new Error('Live macro effective coverage below safety floor');
+          if(!quality?.macro?.failures||typeof quality.macro.failures.total!=='number')throw new Error('Macro failure diagnostics missing');
+
           const scenarios=await get('/api/scenarios');
           if(!Array.isArray(scenarios?.scenarios)||scenarios.scenarios.length<10)throw new Error('Scenario endpoint invalid');
           const releases=await get('/api/release-analytics');
@@ -69,5 +75,5 @@ jobs:
           if(!Array.isArray(calendar?.events))throw new Error('Seven-day release memory invalid');
           const market=await get('/api/market-prices');
           if(!Array.isArray(market?.assets)||market.assets.length===0)throw new Error('Cross-asset market snapshot invalid');
-          console.log(JSON.stringify({dataQuality:research.dataQuality.overall,features:research.features.length,forecasts:research.forecasts.length,regimes:research.regimes.length,riskCategories:research.risk.categories.length,scenarios:research.scenarios.length,releaseProfiles:research.releaseAnalytics?.profiles?.length||0,calendarHistory:calendar.events.length,marketAssets:market.assets.length}));
+          console.log(JSON.stringify({institutionalDataQuality:research.dataQuality.overall,macroEffectiveCoverage:coverage.effectiveCoveragePercent,macroUsableObservations:coverage.usableObservations,macroFailures:quality.macro.failures.total,features:research.features.length,forecasts:research.forecasts.length,regimes:research.regimes.length,riskCategories:research.risk.categories.length,scenarios:research.scenarios.length,releaseProfiles:research.releaseAnalytics?.profiles?.length||0,calendarHistory:calendar.events.length,marketAssets:market.assets.length}));
           NODE
