@@ -1,2 +1,2 @@
-activate=2026-08-17T15:34:00Z
-reason=Refresh schema-v4 intelligence after eligible-family confidence recalibration and verify live BUY/SELL/WAIT decisions.
+activate=2026-08-17T16:47:00Z
+reason=Populate CNBC cross-asset prices, backfill the last 7 days of economic calendar results, classify base-currency bullish bearish neutral bias, refresh v4 intelligence, and replay Google state to passive Cloudflare.
