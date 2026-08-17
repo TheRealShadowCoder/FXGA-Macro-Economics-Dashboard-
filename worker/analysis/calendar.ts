@@ -47,14 +47,15 @@ export function analyzeCalendarEvent(event: CalendarEvent): CalendarEvent {
   if (revised !== null && previous !== null) revisionDelta = revised - previous;
 
   const nativeDeviation = typeof event.deviation === 'number' && Number.isFinite(event.deviation) ? event.deviation : undefined;
-  const deviationScore = nativeDeviation === undefined ? undefined : clamp(Math.tanh(nativeDeviation / 3.5) * 100);
+  let deviationScore = nativeDeviation === undefined ? undefined : clamp(Math.tanh(nativeDeviation / 3.5) * 100);
+  if (inverse && deviationScore !== undefined) deviationScore *= -1;
   const releaseScore = deviationScore ?? normalizedSurprise;
   const sourceConfidence = Math.min(25, Math.max(0, (event.sourceCount ?? 1) - 1) * 7);
   const fieldConfidence = (actual !== null ? 25 : 0) + (consensus !== null ? 20 : 0) + (previous !== null ? 10 : 0) + (nativeDeviation !== undefined ? 15 : 0);
   const analysisConfidence = Math.min(95, 35 + sourceConfidence + fieldConfidence);
 
   const note = nativeDeviation !== undefined
-    ? `FXStreet deviation ${nativeDeviation.toFixed(2)}; ${result}. Native deviation is kept separate from FXGA normalized surprise.`
+    ? `FXStreet deviation ${nativeDeviation.toFixed(2)}; ${result}. Native deviation is preserved, while FXGA orients the derived release score so positive means a stronger/better-than-expected economic impulse.`
     : actual !== null && consensus !== null
       ? `${result}; FXGA normalized surprise is calculated from actual versus consensus because no native deviation was supplied.`
       : 'Awaiting a released actual and/or consensus.';
