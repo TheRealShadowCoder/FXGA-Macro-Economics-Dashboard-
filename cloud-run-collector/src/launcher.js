@@ -3,8 +3,8 @@ import { refreshSuperEconomist, syncFullMacroFromUniverse, superHealth, fullStat
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
-// All upstream collection runs inside Google Cloud. FRED requests share one
-// conservative queue with temporary-error retry. Cloudflare never participates.
+// All upstream collection runs inside the primary data service. FRED requests share one
+// conservative queue with temporary-error retry. The application edge never participates.
 const nativeFetch=globalThis.fetch.bind(globalThis);
 const FRED_MIN_INTERVAL_MS=1050;
 let fredNextAt=0;
@@ -76,11 +76,23 @@ async function proxy(req,res,url){
   res.writeHead(upstream.status,headers);res.end(bytes);
   return upstream.status;
 }
+async function mergedState(){
+  const research=await fullState();
+  try{
+    const response=await fetch(`http://127.0.0.1:${internalPort}/state`,{headers:{Accept:'application/json'}});
+    if(!response.ok)return research;
+    const collector=await response.json();
+    return {...research,...collector,news:research.news,intelligence:research.intelligence,familySkill:research.familySkill};
+  }catch(error){
+    console.warn('Collector state merge unavailable',String(error?.message||error).slice(0,220));
+    return research;
+  }
+}
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url||'/','http://localhost');
   try{
     if(req.method==='GET'&&url.pathname==='/health')return sendJson(res,200,await superHealth());
-    if(req.method==='GET'&&url.pathname==='/state')return sendJson(res,200,await fullState());
+    if(req.method==='GET'&&url.pathname==='/state')return sendJson(res,200,await mergedState());
     if(req.method==='GET'&&url.pathname==='/super-economist'){
       const x=await intelligenceState();return x?sendJson(res,200,x):sendJson(res,503,{error:'Intelligence state not initialized'});
     }
