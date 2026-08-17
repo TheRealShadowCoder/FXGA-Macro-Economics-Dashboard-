@@ -1,0 +1,49 @@
+name: Integrate Institutional Source Network
+
+on:
+  push:
+    paths:
+      - '.github/workflows/integrate-source-network.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Wire source registry into Data Coverage
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p=Path('src/App.tsx')
+          s=p.read_text()
+          imp="import { SignalsView } from './components/SignalsView';"
+          if "SourceNetworkView" not in s:
+              if imp not in s: raise SystemExit('SignalsView import anchor missing')
+              s=s.replace(imp,imp+"\nimport { SourceNetworkView } from './components/SourceNetworkView';",1)
+          old="{data && view === 'sources' && <section className=\"source-grid\">{data.sources.map((source) => <article className=\"source-card\" key={source.id}><div className=\"source-status\"><span className={`status ${source.status}`}></span>{source.status.replace('_', ' ')}</div><h3>{source.name}</h3><p>{source.category} · {source.region}</p>{source.note && <small>{source.note}</small>}</article>)}</section>}"
+          new="{data && view === 'sources' && <SourceNetworkView activeSources={data.sources} />}"
+          if old in s:s=s.replace(old,new,1)
+          elif new not in s:raise SystemExit('Data Coverage render anchor missing')
+          p.write_text(s)
+          PY
+      - name: Validate frontend build
+        run: |
+          npm install --progress=false
+          npm run build
+      - name: Commit source-network integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then exit 0; fi
+          git add src/App.tsx
+          git commit -m "Integrate 83-source institutional research registry"
+          git push origin HEAD:main
