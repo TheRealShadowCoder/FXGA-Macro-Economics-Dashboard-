@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchEconomyAnalysis } from '../lib/api';
 import type { EconomyAnalysisPayload } from '../lib/economy-types';
+import '../economies.css';
 
 function scoreClass(score: number) {
   return score > 15 ? 'positive' : score < -15 ? 'negative' : 'neutral';
