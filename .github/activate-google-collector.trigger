@@ -1,2 +1,2 @@
-activate=2026-08-17T04:45:00Z
-reason=Retry guarded full-sync and Cloudflare cutover using WIF-generated Cloud Run ID token.
+activate=2026-08-17T04:56:00Z
+reason=Run guarded full-sync and Cloudflare cutover after Cloud Run v2 and Scheduler fixes.
