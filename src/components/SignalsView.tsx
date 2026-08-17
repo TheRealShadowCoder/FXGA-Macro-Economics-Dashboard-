@@ -1,16 +1,37 @@
-import type { SessionSignalsPayload } from '../lib/types';
+import { useEffect, useState } from 'react';
+import { fetchReleaseImpact } from '../lib/api';
+import type { ReleaseImpactPayload, SessionSignalsPayload } from '../lib/types';
+import { ReleaseImpactView } from './ReleaseImpactView';
 
 function scoreClass(score: number) {
   return score > 0 ? 'positive' : score < 0 ? 'negative' : 'neutral';
 }
 
 export function SignalsView({ data, loading, error }: { data: SessionSignalsPayload | null; loading: boolean; error: string }) {
+  const [impact, setImpact] = useState<ReleaseImpactPayload | null>(null);
+  const [impactLoading, setImpactLoading] = useState(false);
+  const [impactError, setImpactError] = useState('');
+
+  useEffect(() => {
+    if (!data) return;
+    let cancelled = false;
+    setImpactLoading(true);
+    setImpactError('');
+    void fetchReleaseImpact()
+      .then((payload) => { if (!cancelled) setImpact(payload); })
+      .catch((caught) => { if (!cancelled) setImpactError(caught instanceof Error ? caught.message : 'Unable to calculate release impact'); })
+      .finally(() => { if (!cancelled) setImpactLoading(false); });
+    return () => { cancelled = true; };
+  }, [data?.generatedAt]);
+
   if (loading && !data) return <div className="loading-panel">Calculating session signals from macro and release state…</div>;
   if (error) return <div className="alert error">{error}</div>;
   if (!data) return null;
 
   return (
     <>
+      <ReleaseImpactView data={impact} loading={impactLoading} error={impactError} />
+
       <section className="panel signals-summary">
         <div>
           <span className="eyebrow">Report based directional engine</span>
