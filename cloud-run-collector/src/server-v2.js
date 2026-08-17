@@ -6,6 +6,7 @@ import { Firestore } from '@google-cloud/firestore';
 import { CloudTasksClient } from '@google-cloud/tasks';
 import { FRED_BASE_IDS, FAST_FRED_IDS, discoverGlobalFredUniverse, summarizeUniverse } from './global-fred.js';
 import { collectCnbcMarket } from './cnbc-market.js';
+import { TECHNICAL_ASSET_IDS, buildTechnicalSnapshot, updateTechnicalBars } from './technical-engine.js';
 
 const app = express();
 app.use(express.json({ limit: '3mb' }));
@@ -30,6 +31,7 @@ const tasks = new CloudTasksClient();
 const state = db.collection('fxga_collector_state');
 const calendarHistory = db.collection('fxga_calendar_history');
 const marketSnapshots = db.collection('fxga_market_snapshots');
+const marketBars = db.collection('fxga_market_bars');
 const UNIVERSE_TTL_MS = 7 * 86_400_000;
 const CALENDAR_HISTORY_DAYS = 7;
 const MAX_FRED_CONCURRENCY = 8;
@@ -343,6 +345,35 @@ async function scheduleReleaseTasks(events) {
   }
   return {clusters:clusters.size,tasksCreated:created};
 }
+
+async function createMarketPulseTask(scheduleAt) {
+  if (!cfg.projectId||!cfg.serviceUrl||!cfg.taskInvokerSa) return {created:false,reason:'tasks-not-configured'};
+  const when = new Date(scheduleAt);
+  if (!Number.isFinite(when.getTime()) || when.getTime() < Date.now()-5000) return {created:false,reason:'past'};
+  const parent=tasks.queuePath(cfg.projectId,cfg.region,cfg.taskQueue);
+  const key=when.toISOString().slice(0,16).replace(/[-:T]/g,'');
+  const taskName=tasks.taskPath(cfg.projectId,cfg.region,cfg.taskQueue,`market-${key}`);
+  try {
+    await tasks.createTask({parent,task:{name:taskName,scheduleTime:{seconds:Math.floor(when.getTime()/1000)},httpRequest:{httpMethod:'POST',url:`${cfg.serviceUrl}/market-sync`,headers:{'Content-Type':'application/json'},body:Buffer.from('{}'),oidcToken:{serviceAccountEmail:cfg.taskInvokerSa,audience:cfg.serviceUrl}}}});
+    return {created:true};
+  } catch(error) { if (Number(error?.code)===6) return {created:false,reason:'exists'}; throw error; }
+}
+async function scheduleMarketPulseTasks({hours=26,intervalMinutes=15}={}) {
+  const intervalMs=Math.max(5,intervalMinutes)*60_000;
+  const start=Math.ceil((Date.now()+60_000)/intervalMs)*intervalMs;
+  const end=Date.now()+Math.max(1,hours)*3_600_000;
+  let created=0,existing=0,skippedClosed=0;
+  for (let timestamp=start;timestamp<=end;timestamp+=intervalMs) {
+    const when=new Date(timestamp),day=when.getUTCDay();
+    // High-frequency technical sampling is limited to the normal Monday-Friday market week.
+    if (day===0||day===6) { skippedClosed+=1; continue; }
+    const result=await createMarketPulseTask(when);
+    if (result.created) created+=1;
+    else if (result.reason==='exists') existing+=1;
+  }
+  return {intervalMinutes:Math.max(5,intervalMinutes),hours,created,existing,skippedClosed};
+}
+
 async function signedWebhook(type,payload) {
   if (!cfg.webhookSecret||!cfg.webhookUrl) return {sent:false,reason:'webhook-not-configured'};
   const body=JSON.stringify({version:1,type,generatedAt:new Date().toISOString(),payload});
@@ -360,6 +391,34 @@ async function signedWebhook(type,payload) {
   throw lastError||new Error('Webhook failed');
 }
 
+
+async function updateTechnicalMarket(snapshot) {
+  const refs=TECHNICAL_ASSET_IDS.map((id)=>marketBars.doc(id));
+  const documents=await db.getAll(...refs);
+  let states=Object.fromEntries(documents.filter((doc)=>doc.exists).map((doc)=>[doc.id,doc.data()]));
+  const hasHistory=Object.values(states).some((value)=>Object.values(value?.bars||{}).some((bars)=>Array.isArray(bars)&&bars.length>=8));
+  if (!hasHistory) {
+    try {
+      const historical=await marketSnapshots.orderBy('capturedAt','asc').limitToLast(1000).get();
+      for (const document of historical.docs) {
+        const payload=document.data();
+        if (!payload?.capturedAt||!Array.isArray(payload?.assets)) continue;
+        states=updateTechnicalBars(states,{generatedAt:payload.capturedAt,assets:payload.assets});
+      }
+    } catch(error) {
+      console.warn('Technical history bootstrap skipped:',String(error?.message||error).slice(0,240));
+    }
+  }
+  states=updateTechnicalBars(states,snapshot);
+  const batch=db.batch();
+  for (const id of TECHNICAL_ASSET_IDS) batch.set(marketBars.doc(id),states[id],{merge:false});
+  await batch.commit();
+  const technical=buildTechnicalSnapshot(states,snapshot.generatedAt);
+  const saved=await putIfChanged('technical',technical);
+  if (saved.changed) await signedWebhook('technical-snapshot',technical);
+  return {changed:saved.changed,counts:technical.counts,generatedAt:technical.generatedAt};
+}
+
 async function syncCnbcMarket() {
   const fresh = await collectCnbcMarket({ maxBrowserSeconds:cfg.maxBrowserSeconds });
   const previousState = await getState('market');
@@ -370,14 +429,15 @@ async function syncCnbcMarket() {
     const previous = previousById.get(asset.id);
     if (previous?.price == null) return asset;
     staleRetained += 1;
-    return { ...previous, stale:true, staleSince:previous.staleSince || previous.fetchedAt || previousState?.updatedAt || null, lastAttemptAt:asset.fetchedAt, lastAttemptMode:asset.mode, error:asset.error || 'CNBC refresh returned no usable price; retained last good value.' };
+    return { ...previous, stale:true, staleSince:previous.staleSince || previous.fetchedAt || previousState?.updatedAt || null, lastAttemptAt:asset.fetchedAt, lastAttemptMode:asset.mode, error:asset.error || 'Market refresh returned no usable price; retained last verified value.' };
   });
   const snapshot = { ...fresh, generatedAt:new Date().toISOString(), assets, live:assets.filter((asset)=>asset.price!=null&&!asset.stale).length, staleRetained, failed:assets.filter((asset)=>asset.price==null).length };
   const saved = await putIfChanged('market', snapshot);
   const historyId = snapshot.generatedAt.slice(0,16).replace(/[-:T]/g,'');
   await marketSnapshots.doc(historyId).set({ capturedAt:snapshot.generatedAt, source:'CNBC', assets:assets.map(({error,...asset})=>asset) }, { merge:true });
   if (saved.changed) await signedWebhook('market-snapshot', snapshot);
-  return { changed:saved.changed, requested:snapshot.requested, live:snapshot.live, staleRetained:snapshot.staleRetained, failed:snapshot.failed, durationMs:snapshot.durationMs };
+  const technical=await updateTechnicalMarket(snapshot).catch((error)=>({error:String(error?.message||error).slice(0,300)}));
+  return { changed:saved.changed, requested:snapshot.requested, live:snapshot.live, staleRetained:snapshot.staleRetained, failed:snapshot.failed, durationMs:snapshot.durationMs, technical };
 }
 async function bootstrapCalendar() {
   const now=new Date(); const from=new Date(now.getTime()-CALENDAR_HISTORY_DAYS*86_400_000); const to=new Date(now.getTime()+cfg.calendarDays*86_400_000);
@@ -390,11 +450,11 @@ async function bootstrapCalendar() {
   const sourceHealth={fxstreet:{ok:fxstreet.length>0,events:fxstreet.length},myfxbook:{ok:Boolean(myfx.ok),events:(myfx.events||[]).length,mode:myfx.mode,error:myfx.error},cnbc:{ok:Boolean(cnbcResult.ok),items:(cnbcResult.items||[]).length,error:cnbcResult.error}};
   const snapshot={generatedAt:new Date().toISOString(),days:cfg.calendarDays,historyDays:CALENDAR_HISTORY_DAYS,windowStart:from.toISOString(),windowEnd:to.toISOString(),targetEconomies:TARGET_ECONOMIES,events,sourceHealth,cnbcContext:cnbcResult.items||[]};
   const history=await persistCalendarHistory(events);
-  const saved=await putIfChanged('calendar',snapshot); const scheduled=await scheduleReleaseTasks(events);
+  const saved=await putIfChanged('calendar',snapshot); const scheduled=await scheduleReleaseTasks(events); const marketPulse=await scheduleMarketPulseTasks();
   if (saved.changed) await signedWebhook('calendar-snapshot',snapshot);
   await state.doc('source-health').set({updatedAt:new Date().toISOString(),payload:sourceHealth});
   const market=await syncCnbcMarket().catch((error)=>({error:String(error?.message||error).slice(0,300)}));
-  return {events:events.length,changed:saved.changed,scheduled,history,sourceHealth,market};
+  return {events:events.length,changed:saved.changed,scheduled,marketPulse,history,sourceHealth,market};
 }
 async function releaseCheck({eventIds=[],releaseAt,offsetSeconds=0}) {
   const calendarState=await getState('calendar'); const allEvents=calendarState?.payload?.events||[];
@@ -483,20 +543,21 @@ async function syncFred(mode='fast') {
 }
 
 app.get('/health',async(_req,res)=>{
-  const [calendar,macro,universe,market]=await Promise.all([getState('calendar'),getState('macro'),getState('fred-universe'),getState('market')]);
-  res.json({ok:true,service:'fxga-cloud-run-collector',version:2,projectConfigured:Boolean(cfg.projectId),tasksConfigured:Boolean(cfg.serviceUrl&&cfg.taskInvokerSa),webhookConfigured:Boolean(cfg.webhookSecret&&cfg.webhookUrl),fredConfigured:Boolean(cfg.fredApiKey),calendarUpdatedAt:calendar?.updatedAt??null,macroUpdatedAt:macro?.updatedAt??null,marketUpdatedAt:market?.updatedAt??null,marketAssets:market?.payload?.assets?.length??0,fredUniverse:universe?.payload?.summary??{curatedBase:FRED_BASE_IDS.length},targetEconomies:TARGET_ECONOMIES,mode:'event-driven-cloud-run'});
+  const [calendar,macro,universe,market,technical]=await Promise.all([getState('calendar'),getState('macro'),getState('fred-universe'),getState('market'),getState('technical')]);
+  res.json({ok:true,service:'fxga-cloud-run-collector',version:2,projectConfigured:Boolean(cfg.projectId),tasksConfigured:Boolean(cfg.serviceUrl&&cfg.taskInvokerSa),webhookConfigured:Boolean(cfg.webhookSecret&&cfg.webhookUrl),fredConfigured:Boolean(cfg.fredApiKey),calendarUpdatedAt:calendar?.updatedAt??null,macroUpdatedAt:macro?.updatedAt??null,marketUpdatedAt:market?.updatedAt??null,marketAssets:market?.payload?.assets?.length??0,technicalUpdatedAt:technical?.updatedAt??null,technicalAssets:Object.keys(technical?.payload?.assets||{}).length,fredUniverse:universe?.payload?.summary??{curatedBase:FRED_BASE_IDS.length},targetEconomies:TARGET_ECONOMIES,mode:'event-driven-cloud-run'});
 });
 app.post('/bootstrap',async(_req,res,next)=>{try{res.json(await bootstrapCalendar());}catch(error){next(error);}});
 app.post('/release-check',async(req,res,next)=>{try{res.json(await releaseCheck(req.body||{}));}catch(error){next(error);}});
 app.post('/macro-sync',async(req,res,next)=>{try{const [macro,market]=await Promise.all([syncFred(req.query.mode||req.body?.mode||'fast'),syncCnbcMarket()]);res.json({...macro,market});}catch(error){next(error);}});
 app.post('/market-sync',async(_req,res,next)=>{try{res.json(await syncCnbcMarket());}catch(error){next(error);}});
 app.get('/market',async(_req,res)=>{const market=await getState('market');res.json(market?.payload??{generatedAt:null,source:'CNBC',assets:[]});});
+app.get('/technical',async(_req,res)=>{const technical=await getState('technical');res.json(technical?.payload??{generatedAt:null,methodology:'evidence-gated-multi-timeframe-market-structure',counts:{assets:0,confirmed:0,contextAligned:0,conflict:0,warming:0},assets:{}});});
 app.get('/calendar-history',async(req,res)=>{const days=Math.min(7,Math.max(1,Number(req.query.days||7)));const calendar=await getState('calendar');const now=Date.now(),cutoff=now-days*86_400_000;const events=(calendar?.payload?.events||[]).filter((event)=>{const time=Date.parse(event.date);return Number.isFinite(time)&&time<=now&&time>=cutoff;});res.json({generatedAt:calendar?.payload?.generatedAt??null,days,events});});
 app.post('/fred-discover',async(req,res,next)=>{try{res.json(await getFredUniverse(Boolean(req.body?.force)));}catch(error){next(error);}});
 app.get('/fred-universe',async(_req,res,next)=>{try{res.json(await getFredUniverse(false));}catch(error){next(error);}});
 app.get('/state',async(_req,res)=>{
-  const [calendar,macro,sourceHealth,universe,market]=await Promise.all([getState('calendar'),getState('macro'),getState('source-health'),getState('fred-universe'),getState('market')]);
-  res.json({calendar,macro,sourceHealth,fredUniverse:universe,market});
+  const [calendar,macro,sourceHealth,universe,market,technical]=await Promise.all([getState('calendar'),getState('macro'),getState('source-health'),getState('fred-universe'),getState('market'),getState('technical')]);
+  res.json({calendar,macro,sourceHealth,fredUniverse:universe,market,technical});
 });
 app.use((error,_req,res,_next)=>{console.error(error);res.status(500).json({error:String(error?.message||error).slice(0,1000)});});
 app.listen(cfg.port,()=>console.log(`FXGA Cloud Run global collector v2 listening on :${cfg.port}`));
