@@ -7,6 +7,8 @@ import type {
   MacroObservation,
   ReleaseImpactPayload,
   SessionSignalsPayload,
+  TechnicalSnapshotPayload,
+  TechnicalTimeframeState,
 } from './types';
 import type { EconomyAnalysisPayload, GlobalMacroPayload } from './economy-types';
 
@@ -57,6 +59,15 @@ export async function fetchFredCategory(category: string, limit = 16): Promise<M
   const params = new URLSearchParams({ category, limit: String(limit) });
   const payload = await getJson<{ series: MacroObservation[] }>(`/api/fred?${params.toString()}`);
   return payload.series;
+}
+
+export function fetchTechnicalSnapshot(): Promise<TechnicalSnapshotPayload> {
+  return getJson<TechnicalSnapshotPayload>('/api/technical');
+}
+
+export function fetchTechnicalHistory(asset: string, timeframe: string): Promise<{ generatedAt: string | null; asset: string; timeframe: string; bias: string; quality: TechnicalTimeframeState['quality']; history: TechnicalTimeframeState['history'] }> {
+  const params = new URLSearchParams({ asset, timeframe });
+  return getJson(`/api/technical-history?${params.toString()}`);
 }
 
 export function fetchAcquisitionCatalog(): Promise<AcquisitionCatalogPayload> {
