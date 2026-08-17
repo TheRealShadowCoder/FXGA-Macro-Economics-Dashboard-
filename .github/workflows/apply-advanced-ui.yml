@@ -1,0 +1,35 @@
+name: Apply FXGA Advanced Market Workspace
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-advanced-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply advanced market workspace
+        run: python3 scripts/apply_advanced_ui.py
+      - name: Validate dashboard
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Commit dashboard integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then exit 0; fi
+          git add src/components/TechnicalStructureView.tsx
+          git commit -m "Expose advanced SMC evidence in market workspace"
+          git push origin HEAD:main
