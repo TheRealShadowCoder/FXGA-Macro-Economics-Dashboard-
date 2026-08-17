@@ -1,2 +1,2 @@
-activate=2026-08-17T16:47:00Z
-reason=Populate CNBC cross-asset prices, backfill the last 7 days of economic calendar results, classify base-currency bullish bearish neutral bias, refresh v4 intelligence, and replay Google state to passive Cloudflare.
+activate=2026-08-17T17:36:00Z
+reason=Refresh the institutional research payload, risk decomposition, scenario analysis, release-surprise profiles, econometric forecasts, regimes, market snapshots and current macro decision state after the production deployment.
