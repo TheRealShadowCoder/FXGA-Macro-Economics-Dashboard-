@@ -24,7 +24,7 @@ const cfg = {
   globalFredTarget: Math.min(Math.max(Number(process.env.GLOBAL_FRED_TARGET || 180), 110), 220),
 };
 
-const db = new Firestore();
+const db = new Firestore({ ignoreUndefinedProperties: true });
 const tasks = new CloudTasksClient();
 const state = db.collection('fxga_collector_state');
 const UNIVERSE_TTL_MS = 7 * 86_400_000;
