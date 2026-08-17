@@ -100,6 +100,9 @@ jobs:
 
           const fred = await getJson('/api/fred/catalog');
           if (!fred || typeof fred !== 'object' || !Array.isArray(fred.categories) || Number(fred.total) <= 0) throw new Error('Important FRED catalog contract is invalid');
+          const fredInflation = await getJson('/api/fred?category=inflation&limit=16');
+          if (!Array.isArray(fredInflation?.series) || fredInflation.series.length === 0) throw new Error('Important FRED inflation category returned no live observations');
+          if (!fredInflation.series.some((item) => typeof item?.value === 'number' && Number.isFinite(item.value))) throw new Error('Important FRED inflation category contains no numeric observations');
 
           const completed = history.events.filter((event) => event?.actual != null && String(event.actual).trim() !== '');
           const biasCounts = completed.reduce((acc, event) => {
@@ -108,6 +111,7 @@ jobs:
             return acc;
           }, {});
 
+          console.log(`Important FRED live check: ${fredInflation.series.length} inflation observations returned.`);
           console.log(`FXGA Google data contract passed: ${dashboard.macro.length} macro observations in dashboard, ${history.events.length} historical events, ${completed.length} completed releases.`);
           console.log('Completed release currency-bias counts:', biasCounts);
           NODE
