@@ -2,6 +2,10 @@ name: Activate Google Cloud Collector
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/activate-google-collector.trigger'
 
 permissions:
   contents: read
