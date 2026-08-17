@@ -348,7 +348,7 @@ async function scheduleReleaseTasks(events) {
       const result=await createReleaseTask(releaseAt,offset,cluster.map((event)=>event.id)); if (result.created) created+=1;
     }
   }
-  return {clusters:clusters.size,tasksCreated:created};
+  return {clusters:clusters.size,tasksCreated:created,samplingPolicy:{highImpactSeconds:taskOffsets(3),mediumImpactSeconds:taskOffsets(2),lowImpactSeconds:taskOffsets(1),preReleaseBaselineAwaited:true,eventStudyHorizonsSeconds:[300,900,3600,14400]}};
 }
 
 async function createMarketPulseTask(scheduleAt) {
