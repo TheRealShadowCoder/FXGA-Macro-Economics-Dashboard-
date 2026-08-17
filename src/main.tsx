@@ -6,6 +6,7 @@ import './styles.css';
 import './advanced.css';
 import './responsive.css';
 import './intelligence.css';
+import './market-upgrades.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
