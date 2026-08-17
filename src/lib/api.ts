@@ -11,6 +11,7 @@ import type {
   TechnicalTimeframeState,
 } from './types';
 import type { EconomyAnalysisPayload, GlobalMacroPayload } from './economy-types';
+import type { EventStudiesPayload } from './event-study-types';
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { headers: { Accept: 'application/json' } });
@@ -68,6 +69,12 @@ export function fetchTechnicalSnapshot(): Promise<TechnicalSnapshotPayload> {
 export function fetchTechnicalHistory(asset: string, timeframe: string): Promise<{ generatedAt: string | null; asset: string; timeframe: string; bias: string; quality: TechnicalTimeframeState['quality']; history: TechnicalTimeframeState['history'] }> {
   const params = new URLSearchParams({ asset, timeframe });
   return getJson(`/api/technical-history?${params.toString()}`);
+}
+
+export function fetchEventStudies(days = 7, currency = ''): Promise<EventStudiesPayload> {
+  const params = new URLSearchParams({ days: String(days) });
+  if (currency) params.set('currency', currency);
+  return getJson<EventStudiesPayload>(`/api/event-studies?${params.toString()}`);
 }
 
 export function fetchAcquisitionCatalog(): Promise<AcquisitionCatalogPayload> {
