@@ -1,0 +1,56 @@
+name: Integrate Institutional Research Platform
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-institutional-research.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: institutional-research-integration
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Apply guarded source integration
+        run: python3 scripts/apply_institutional_research_upgrade.py
+
+      - name: Validate collector modules
+        run: |
+          node --check cloud-run-collector/src/institutional-research.js
+          node --check cloud-run-collector/src/super-economist.js
+          node --check cloud-run-collector/src/super-runtime.js
+          node --check cloud-run-collector/src/server-v2.js
+          node --check cloud-run-collector/src/launcher.js
+
+      - name: Validate frontend build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit integrated platform
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No integration changes were required."
+            exit 0
+          fi
+          git add src/App.tsx src/components/AcquisitionView.tsx src/components/DecisionIntelligence.tsx cloud-run-collector/src/super-economist.js cloud-run-collector/src/super-runtime.js cloud-run-collector/src/server-v2.js cloud-run-collector/src/launcher.js cloud-run-collector/package.json worker/index-v3.ts
+          git commit -m "Integrate institutional research and risk platform"
+          git push origin HEAD:main
