@@ -1,0 +1,61 @@
+name: Verify FXStreet Analytics Contract
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify live FXStreet analytics and extraction policy
+        run: |
+          node <<'NODE'
+          const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+          async function getJson(path) {
+            const response = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' } });
+            const text = await response.text();
+            if (!response.ok) throw new Error(`${path} returned ${response.status}: ${text.slice(0, 800)}`);
+            return JSON.parse(text);
+          }
+
+          let calendar;
+          for (let attempt = 1; attempt <= 12; attempt += 1) {
+            calendar = await getJson('/api/calendar?days=7&importance=1');
+            const ready = Array.isArray(calendar?.events) && calendar.events.length > 0 && calendar.events.every((event) =>
+              event?.fxstreetAnalytics?.methodology === 'fxga-transparent-fxstreet-style' &&
+              typeof event.fxstreetAnalytics.expectedImpact === 'string' &&
+              typeof event.fxstreetAnalytics.expectedImpactScore === 'number' &&
+              typeof event.fxstreetAnalytics.historicalReliability === 'number' &&
+              typeof event.fxstreetAnalytics.sampleSize === 'number' &&
+              event.fxstreetAnalytics.marketImpactAvailability?.trueRange === 'requires-market-price-history' &&
+              event.fxstreetAnalytics.marketImpactAvailability?.volatilityRatio === 'requires-market-price-history' &&
+              event.fxstreetAnalytics.marketImpactAvailability?.trueRangeVsDeviation === 'requires-market-price-history'
+            );
+            if (ready) break;
+            if (attempt === 12) throw new Error('FXStreet-style analytics contract is not live on all returned calendar events');
+            await sleep(2000);
+          }
+
+          const acquisition = await getJson('/api/acquisition/catalog');
+          if (acquisition?.policy?.bypassLogin !== false) throw new Error('Login-bypass policy regression');
+          if (acquisition?.policy?.bypassCaptcha !== false) throw new Error('CAPTCHA-bypass policy regression');
+          if (acquisition?.policy?.bypassPaywall !== false) throw new Error('Paywall-bypass policy regression');
+          if (acquisition?.policy?.botEvasion !== false) throw new Error('Bot-evasion policy regression');
+
+          const health = await getJson('/api/health');
+          if (health?.safety?.releaseWindowPrimary !== 'FXStreet public calendar feed') throw new Error('FXStreet public feed is not the release-window primary');
+          if (health?.safety?.normalStateUpstreamCalendarRequests !== 0) throw new Error('Normal-state calendar polling regression');
+          if (health?.safety?.browserSoftBudgetSecondsPerUtcDay > 480) throw new Error('Browser safety budget regression');
+
+          const events = calendar.events;
+          const withNativeDev = events.filter((event) => typeof event.deviation === 'number').length;
+          const historical = events.filter((event) => (event.fxstreetAnalytics?.sampleSize ?? 0) > 0).length;
+          console.log(`FXStreet analytics contract passed: ${events.length} events, ${withNativeDev} with native deviation, ${historical} with accumulated event history.`);
+          NODE
