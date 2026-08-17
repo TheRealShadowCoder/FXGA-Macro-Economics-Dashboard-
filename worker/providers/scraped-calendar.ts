@@ -1,6 +1,6 @@
 import { getCalendarBrowserDebug } from '../acquisition/calendar-browser';
 
-export { getScrapedEconomicCalendar, refreshScrapedReleaseWindow } from './calendar-consensus';
+export { getScrapedEconomicCalendar, refreshScrapedReleaseWindow } from './calendar-consensus-v2';
 
 const SOURCE_STATUS_KEY = 'calendar:scrape-source-status:v1';
 
