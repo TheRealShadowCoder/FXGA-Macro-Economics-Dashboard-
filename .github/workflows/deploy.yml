@@ -47,7 +47,7 @@ jobs:
         run: |
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
-          const expectedEngine = 'scraped-consensus-v4';
+          const expectedEngine = 'scraped-consensus-v5';
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
           async function getJson(path) {
@@ -102,7 +102,17 @@ jobs:
           const calendar = await getJson('/api/calendar?days=7&importance=1');
           if (!Array.isArray(calendar?.events) || calendar.events.length < 1) throw new Error('Cached scraped economic calendar returned no events');
           if (calendar?.mode !== 'scraped-calendar-consensus') throw new Error('Calendar endpoint is not using scraped consensus state');
-          if (!calendar?.analytics?.fxstreetDeviation || !calendar?.analytics?.normalizedSurprise || !calendar?.analytics?.revisionDelta) throw new Error('Calendar analytics flags are incomplete');
+          if (!calendar?.analytics?.fxstreetDeviation || !calendar?.analytics?.normalizedSurprise || !calendar?.analytics?.standardizedSurprise || !calendar?.analytics?.beatMissInlineProbabilities || !calendar?.analytics?.revisionDelta) throw new Error('Calendar analytics flags are incomplete');
+          if (calendar.events.some((event) => !event.probabilities || typeof event.probabilities.sampleSize !== 'number')) throw new Error('Calendar events are missing calibrated beat/miss/in-line probabilities');
+
+          const impact = await getJson('/api/release-impact');
+          if (!Array.isArray(impact?.assets) || impact.assets.length !== 5) throw new Error(`Expected five release-impact assets, got ${impact?.assets?.length ?? 0}`);
+          for (const id of ['usd','rates','gold','equities','crypto']) {
+            const asset = impact.assets.find((item) => item.id === id);
+            if (!asset || typeof asset.score !== 'number' || typeof asset.releaseImpulse !== 'number' || !asset.probabilities) throw new Error(`Release impact missing for ${id}`);
+            const total = Object.values(asset.probabilities).reduce((sum, value) => sum + Number(value), 0);
+            if (Math.abs(total - 100) > 0.2) throw new Error(`Release probabilities for ${id} do not sum to 100: ${total}`);
+          }
 
           const signals = await getJson('/api/session-signals');
           if (!Array.isArray(signals?.sessions) || signals.sessions.length !== 4) throw new Error(`Expected four session blocks, got ${signals?.sessions?.length ?? 0}`);
@@ -125,5 +135,5 @@ jobs:
             ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket verification failed')); });
           });
 
-          console.log(`FXGA verification passed: ${catalog.total} important FRED series, ${calendar.events.length} calendar events, ${signals.sessions.length} session signal blocks.`);
+          console.log(`FXGA verification passed: ${catalog.total} important FRED series, ${calendar.events.length} calendar events, ${impact.assets.length} release-impact assets, ${signals.sessions.length} session signal blocks.`);
           NODE
