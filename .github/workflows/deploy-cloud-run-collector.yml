@@ -8,6 +8,10 @@ on:
       - 'cloud-run-collector/**'
       - '.github/workflows/deploy-cloud-run-collector.yml'
 
+concurrency:
+  group: fxga-google-cloud-production
+  cancel-in-progress: true
+
 permissions:
   contents: read
   id-token: write
@@ -29,9 +33,15 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+      - name: Install collector dependencies
+        working-directory: cloud-run-collector
+        run: npm install --ignore-scripts --no-fund --no-audit
       - name: Validate collector syntax
         working-directory: cloud-run-collector
         run: npm run check
+      - name: Enforce production dependency security
+        working-directory: cloud-run-collector
+        run: npm audit --omit=dev --audit-level=moderate
 
   deploy:
     needs: validate
@@ -153,4 +163,4 @@ jobs:
           echo "Calendar bootstrap: daily at 00:05 UTC"
           echo "Fast macro/rates/FX/risk sync: hourly"
           echo "Full cached-universe USA/Europe/UK/South Africa/Japan FRED sync: daily at 00:20 UTC with 900-second Scheduler deadline"
-          echo "Release checks: exact event-time Cloud Tasks"
+          echo "Release checks: exact event-time Cloud Tasks with awaited pre-release market baselines"
