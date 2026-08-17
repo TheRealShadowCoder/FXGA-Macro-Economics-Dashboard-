@@ -5,6 +5,7 @@ import { MarketsView } from './components/MarketsView';
 import { ResearchView } from './components/ResearchView';
 import { MetricCard } from './components/MetricCard';
 import { SignalsView } from './components/SignalsView';
+import { SourceNetworkView } from './components/SourceNetworkView';
 import { fetchAcquisitionCatalog, fetchDashboard, fetchFredCatalog, fetchFredCategory, fetchMacroAnalysis, fetchSessionSignals } from './lib/api';
 import type {
   AcquisitionCatalogPayload,
@@ -342,7 +343,7 @@ export default function App() {
 
         {view === 'acquisition' && <AcquisitionView catalog={acquisitionCatalog} loading={acquisitionLoading} error={acquisitionError} liveStatus={liveStatus} lastLiveEvent={lastLiveEvent} />}
         {data && view === 'news' && <section className="panel full"><div className="panel-title"><div><span className="eyebrow">Primary-source intelligence</span><h2>Official releases and speeches</h2></div><span>{filteredNews.length} items</span></div>{filteredNews.map((item) => <NewsRow key={item.id} item={item} />)}</section>}
-        {data && view === 'sources' && <section className="source-grid">{data.sources.map((source) => <article className="source-card" key={source.id}><div className="source-status"><span className={`status ${source.status}`}></span>{source.status.replace('_', ' ')}</div><h3>{source.name}</h3><p>{source.category} · {source.region}</p>{source.note && <small>{source.note}</small>}</article>)}</section>}
+        {data && view === 'sources' && <SourceNetworkView activeSources={data.sources} />}
         <footer>Generated {data?.generatedAt ? new Date(data.generatedAt).toLocaleString() : '—'} · FX Global Avengers Trading Academy</footer>
       </main>
     </div>
