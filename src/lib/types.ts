@@ -29,6 +29,7 @@ export interface FredSeriesDefinition {
   units: string;
   frequency: string;
   categories: string[];
+  importance?: 'critical' | 'high';
 }
 
 export interface FredCategory {
@@ -43,6 +44,7 @@ export interface FredCatalogPayload {
   maxSeriesPerRequest: number;
   categories: FredCategory[];
   series: FredSeriesDefinition[];
+  policy?: { importantOnly: boolean; scope: string };
 }
 
 export interface MacroDimension {
@@ -155,6 +157,8 @@ export interface AcquisitionDocument {
   };
 }
 
+export type ReleaseOutcome = 'beat' | 'miss' | 'in-line' | 'pending' | 'no-consensus';
+
 export interface CalendarEvent {
   id: string;
   date: string;
@@ -170,6 +174,52 @@ export interface CalendarEvent {
   currency?: string;
   unit?: string;
   source?: string;
+  providers?: string[];
+  sourceCount?: number;
+  confidence?: number;
+  deviation?: number;
+  normalizedSurprise?: number;
+  surprisePercent?: number;
+  revisionDelta?: number;
+  releaseScore?: number;
+  outcome?: ReleaseOutcome;
+  relation?: boolean | null;
+  betterThanExpected?: boolean;
+  worseThanExpected?: boolean;
+  analysisConfidence?: number;
+  analysisNote?: string;
+}
+
+export interface SessionTradeSignal {
+  symbol: string;
+  direction: 'BUY' | 'SELL' | 'WAIT';
+  score: number;
+  confidence: number;
+  rationale: string[];
+  invalidation: string;
+  catalyst?: string;
+}
+
+export interface SessionSignal {
+  id: 'asia' | 'london' | 'new-york' | 'overlap';
+  label: string;
+  windowUtc: string;
+  active: boolean;
+  state: 'active' | 'upcoming' | 'closed';
+  risk: 'normal' | 'elevated' | 'event-lockout';
+  focusCurrencies: string[];
+  nextCatalyst?: string;
+  eventCount: number;
+  signals: SessionTradeSignal[];
+}
+
+export interface SessionSignalsPayload {
+  generatedAt: string;
+  methodology: string;
+  caution: string;
+  macroRegime: string;
+  macroConfidence: number;
+  sessions: SessionSignal[];
 }
 
 export interface NewsItem {
