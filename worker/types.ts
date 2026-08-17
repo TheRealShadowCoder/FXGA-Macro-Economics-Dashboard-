@@ -4,6 +4,8 @@ export interface Env {
   APP_NAME: string;
   CACHE_TTL_SECONDS: string;
   BROWSER_SOFT_BUDGET_SECONDS?: string;
+  COLLECTOR_MODE?: string;
+  COLLECTOR_WEBHOOK_SECRET?: string;
   FRED_API_KEY?: string;
   TRADING_ECONOMICS_API_KEY?: string;
   NEWS_API_KEY?: string;
@@ -27,9 +29,9 @@ export interface MacroObservation {
   date: string | null;
   previous: number | null;
   change: number | null;
-  units: string;
-  frequency: string;
-  categories: string[];
+  units?: string;
+  frequency?: string;
+  categories?: string[];
   lastUpdated?: string;
   history: Array<{ date: string; value: number }>;
 }
