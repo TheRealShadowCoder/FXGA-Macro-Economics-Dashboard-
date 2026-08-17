@@ -57,11 +57,24 @@ jobs:
           if (!signals?.decisionSummary || typeof signals.decisionSummary.actionableCount !== 'number') throw new Error('Decision summary missing');
           if (!Array.isArray(signals?.rankedOpportunities) || signals.rankedOpportunities.length < 8) throw new Error('Ranked opportunity board is incomplete');
 
+          if (!signals?.dataQuality) throw new Error('Macro data-quality gate is missing');
+          if (signals.dataQuality.minimumStructuralObservations !== 3 || signals.dataQuality.minimumCoveredDimensions !== 2) throw new Error('Unexpected structural coverage thresholds');
+          if (!Array.isArray(signals.dataQuality.structuralEconomies) || !Array.isArray(signals.dataQuality.provisionalEconomies)) throw new Error('Structural/provisional economy lists are missing');
+          if (signals.dataQuality.structuralEconomies.length + signals.dataQuality.provisionalEconomies.length !== 5) throw new Error('Five economies are not fully classified by data quality');
+
+          for (const state of signals.currencyStates) {
+            if (!['structural','provisional'].includes(state.quality)) throw new Error(`${state.currency} has invalid quality ${state.quality}`);
+            if (typeof state.dimensionsCovered !== 'number' || typeof state.observationCount !== 'number') throw new Error(`${state.currency} is missing coverage diagnostics`);
+            const meetsGate = state.observationCount >= 3 && state.dimensionsCovered >= 2 && state.confidence >= 35;
+            if ((state.quality === 'structural') !== meetsGate) throw new Error(`${state.currency} quality label does not match its actual coverage`);
+          }
+
           const allSignals = signals.sessions.flatMap((session) => session.signals ?? []);
           for (const required of ['EURUSD','GBPUSD','USDJPY','EURGBP','USDZAR','EURZAR','GBPZAR','XAUUSD']) {
             if (!allSignals.some((item) => item.symbol === required)) throw new Error(`Required decision instrument missing: ${required}`);
           }
 
+          const qualityByCurrency = new Map(signals.currencyStates.map((item) => [item.currency, item.quality]));
           const validCoverage = new Set(['full','partial','event-only','asset-model']);
           const validGates = new Set(['WAIT_EVENT','NO_MACRO_EDGE','AWAIT_TECHNICAL_CONFIRMATION']);
           for (const signal of allSignals) {
@@ -71,12 +84,21 @@ jobs:
             if (typeof signal.conviction !== 'number' || signal.conviction < 0 || signal.conviction > 100) throw new Error(`${signal.symbol} has invalid conviction`);
             if (signal.risk === 'event-lockout' && (signal.direction !== 'WAIT' || signal.executionGate !== 'WAIT_EVENT')) throw new Error(`${signal.symbol} violated event lockout`);
             if ((signal.direction === 'BUY' || signal.direction === 'SELL') && signal.executionGate !== 'AWAIT_TECHNICAL_CONFIRMATION') throw new Error(`${signal.symbol} exposed an executable direction without the technical-confirmation gate`);
+
+            if (/^[A-Z]{6}$/.test(signal.symbol)) {
+              const baseCurrency = signal.symbol.slice(0, 3);
+              const quoteCurrency = signal.symbol.slice(3, 6);
+              const hasProvisionalSide = qualityByCurrency.get(baseCurrency) === 'provisional' || qualityByCurrency.get(quoteCurrency) === 'provisional';
+              if (hasProvisionalSide && signal.coverage === 'full') throw new Error(`${signal.symbol} incorrectly received full coverage despite a provisional economy`);
+            }
           }
 
           if (!String(signals.methodology ?? '').includes('base-versus-quote')) throw new Error('Session methodology does not identify base-versus-quote macro divergence');
           console.log('FXGA decision intelligence verified:', JSON.stringify({
             collectorMode: signals.collectorMode,
             economyObservationCount: signals.economyObservationCount,
+            structuralEconomies: signals.dataQuality.structuralEconomies,
+            provisionalEconomies: signals.dataQuality.provisionalEconomies,
             strongest: signals.decisionSummary.strongestCurrency,
             weakest: signals.decisionSummary.weakestCurrency,
             actionable: signals.decisionSummary.actionableCount,
