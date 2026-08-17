@@ -59,186 +59,92 @@ export interface MacroDimension {
 
 export interface MacroAnalysisPayload {
   generatedAt: string;
-  regime: {
-    name: string;
-    growthScore: number;
-    inflationScore: number;
-    recessionRisk: number;
-    summary: string;
-  };
+  regime: { name: string; growthScore: number; inflationScore: number; recessionRisk: number; summary: string };
   dimensions: MacroDimension[];
-  policy: {
-    fedReactionScore: number;
-    stance: string;
-    ratesMomentum: number;
-  };
+  policy: { fedReactionScore: number; stance: string; ratesMomentum: number };
   assets: Array<{ id: string; label: string; score: number; bias: string }>;
   confidence: number;
   coverage: { observed: number; requested: number };
   topSignals: Array<{ seriesId: string; title: string; score: number; value: number | null; date: string | null }>;
-  methodology: {
-    scoreRange: string;
-    principle: string;
-    caution: string;
-  };
+  methodology: { scoreRange: string; principle: string; caution: string };
 }
 
-export interface AcquisitionMethodInfo {
-  id: string;
-  label: string;
-  description: string;
-  cost: 'low' | 'medium' | 'high';
-}
-
+export interface AcquisitionMethodInfo { id: string; label: string; description: string; cost: 'low' | 'medium' | 'high' }
 export interface AcquisitionSourceInfo {
-  id: string;
-  name: string;
-  url: string;
-  category: string;
-  region: string;
-  methods: string[];
-  cacheTtlSeconds: number;
-  minIntervalSeconds: number;
-  allowBrowser: boolean;
-  official: boolean;
-  expectedMarkers?: string[];
+  id: string; name: string; url: string; category: string; region: string; methods: string[];
+  cacheTtlSeconds: number; minIntervalSeconds: number; allowBrowser: boolean; official: boolean; expectedMarkers?: string[];
 }
-
 export interface BrowserBudgetStatus {
-  dayUtc: string;
-  usedSeconds: number;
-  softLimitSeconds: number;
-  remainingSeconds: number;
-  browserSessionReuse: boolean;
-  reason: string;
-  nextLaunchAllowedAt: string | null;
+  dayUtc: string; usedSeconds: number; softLimitSeconds: number; remainingSeconds: number;
+  browserSessionReuse: boolean; reason: string; nextLaunchAllowedAt: string | null;
 }
-
 export interface AcquisitionCatalogPayload {
-  methods: AcquisitionMethodInfo[];
-  sources: AcquisitionSourceInfo[];
-  status: {
-    websocketClients: number;
-    inFlightSources: number;
-    browserBudget: BrowserBudgetStatus;
-    sources: number;
-  } | null;
-  limits: {
-    externalSubrequestsPerInvocation: number;
-    simultaneousOutgoingConnections: number;
-    browserSoftBudgetSecondsPerUtcDay: number;
-    browserConcurrentJobsInFxga: number;
-    minBrowserLaunchGapSeconds: number;
-  };
+  methods: AcquisitionMethodInfo[]; sources: AcquisitionSourceInfo[];
+  status: { websocketClients: number; inFlightSources: number; browserBudget: BrowserBudgetStatus; sources: number } | null;
+  limits: { externalSubrequestsPerInvocation: number; simultaneousOutgoingConnections: number; browserSoftBudgetSecondsPerUtcDay: number; browserConcurrentJobsInFxga: number; minBrowserLaunchGapSeconds: number };
   policy: Record<string, boolean>;
 }
-
 export interface AcquisitionDocument {
-  sourceId: string;
-  sourceName: string;
-  sourceUrl: string;
-  finalUrl: string;
-  fetchedAt: string;
-  contentType: string;
-  official: boolean;
-  methodsAvailable: string[];
-  methodsUsed: string[];
-  browserUsed: boolean;
-  changed: boolean;
-  warnings: string[];
-  title: string;
-  text: string;
-  extraction: {
-    textCharacters: number;
-    links: number;
-    embeddedPayloads: number;
-    dataAttributes: number;
-    tables: number;
-  };
+  sourceId: string; sourceName: string; sourceUrl: string; finalUrl: string; fetchedAt: string; contentType: string;
+  official: boolean; methodsAvailable: string[]; methodsUsed: string[]; browserUsed: boolean; changed: boolean; warnings: string[];
+  title: string; text: string;
+  extraction: { textCharacters: number; links: number; embeddedPayloads: number; dataAttributes: number; tables: number };
 }
 
 export type ReleaseOutcome = 'beat' | 'miss' | 'in-line' | 'pending' | 'no-consensus';
+export interface ReleaseProbabilities {
+  beat: number;
+  miss: number;
+  inLine: number;
+  sampleSize: number;
+  method: 'empirical-bayesian';
+}
 
 export interface CalendarEvent {
-  id: string;
-  date: string;
-  country: string;
-  event: string;
-  category: string;
-  importance: number;
-  actual?: string;
-  previous?: string;
-  forecast?: string;
-  teForecast?: string;
-  revised?: string;
-  currency?: string;
-  unit?: string;
-  source?: string;
-  providers?: string[];
-  sourceCount?: number;
-  confidence?: number;
-  deviation?: number;
-  normalizedSurprise?: number;
-  surprisePercent?: number;
-  revisionDelta?: number;
-  releaseScore?: number;
-  outcome?: ReleaseOutcome;
-  relation?: boolean | null;
-  betterThanExpected?: boolean;
-  worseThanExpected?: boolean;
-  analysisConfidence?: number;
-  analysisNote?: string;
+  id: string; date: string; country: string; event: string; category: string; importance: number;
+  actual?: string; previous?: string; forecast?: string; teForecast?: string; revised?: string; currency?: string; unit?: string;
+  source?: string; providers?: string[]; sourceCount?: number; confidence?: number;
+  deviation?: number; normalizedSurprise?: number; standardizedSurprise?: number; surprisePercent?: number;
+  revisionDelta?: number; releaseScore?: number; outcome?: ReleaseOutcome; probabilities?: ReleaseProbabilities;
+  relation?: boolean | null; betterThanExpected?: boolean; worseThanExpected?: boolean;
+  analysisConfidence?: number; analysisNote?: string;
+}
+
+export interface ReleaseImpactAsset {
+  id: 'usd' | 'rates' | 'gold' | 'equities' | 'crypto';
+  label: string;
+  score: number;
+  baselineScore: number;
+  releaseImpulse: number;
+  bias: string;
+  probabilities: Record<string, number>;
+  confidence: number;
+}
+
+export interface ReleaseImpactPayload {
+  generatedAt: string;
+  regime: string;
+  methodology: string;
+  contributors: Array<{ event: string; currency: string; score: number; family: string; ageMinutes: number }>;
+  assets: ReleaseImpactAsset[];
 }
 
 export interface SessionTradeSignal {
-  symbol: string;
-  direction: 'BUY' | 'SELL' | 'WAIT';
-  score: number;
-  confidence: number;
-  rationale: string[];
-  invalidation: string;
-  catalyst?: string;
+  symbol: string; direction: 'BUY' | 'SELL' | 'WAIT'; score: number; confidence: number; rationale: string[]; invalidation: string; catalyst?: string;
 }
-
 export interface SessionSignal {
-  id: 'asia' | 'london' | 'new-york' | 'overlap';
-  label: string;
-  windowUtc: string;
-  active: boolean;
-  state: 'active' | 'upcoming' | 'closed';
-  risk: 'normal' | 'elevated' | 'event-lockout';
-  focusCurrencies: string[];
-  nextCatalyst?: string;
-  eventCount: number;
-  signals: SessionTradeSignal[];
+  id: 'asia' | 'london' | 'new-york' | 'overlap'; label: string; windowUtc: string; active: boolean;
+  state: 'active' | 'upcoming' | 'closed'; risk: 'normal' | 'elevated' | 'event-lockout';
+  focusCurrencies: string[]; nextCatalyst?: string; eventCount: number; signals: SessionTradeSignal[];
 }
-
 export interface SessionSignalsPayload {
-  generatedAt: string;
-  methodology: string;
-  caution: string;
-  macroRegime: string;
-  macroConfidence: number;
-  sessions: SessionSignal[];
+  generatedAt: string; methodology: string; caution: string; macroRegime: string; macroConfidence: number; sessions: SessionSignal[];
 }
 
 export interface NewsItem {
-  id: string;
-  sourceId: string;
-  sourceName: string;
-  title: string;
-  link: string;
-  publishedAt: string;
-  summary?: string;
-  category: string;
-  region: string;
+  id: string; sourceId: string; sourceName: string; title: string; link: string; publishedAt: string; summary?: string; category: string; region: string;
 }
 
 export interface DashboardPayload {
-  generatedAt: string;
-  macro: MacroObservation[];
-  calendar: CalendarEvent[];
-  news: NewsItem[];
-  sources: SourceInfo[];
-  errors: Array<{ provider: string; message: string }>;
+  generatedAt: string; macro: MacroObservation[]; calendar: CalendarEvent[]; news: NewsItem[]; sources: SourceInfo[]; errors: Array<{ provider: string; message: string }>;
 }
