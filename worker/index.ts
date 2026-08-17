@@ -1,5 +1,6 @@
 import { ACQUISITION_METHODS, ACQUISITION_SOURCES, getAcquisitionSource } from './acquisition/registry';
 import { analyzeCalendar } from './analysis/calendar';
+import { buildReleaseImpact } from './analysis/release-impact';
 import { buildSessionSignals } from './analysis/sessions';
 import { FxgaCoordinator } from './coordinator';
 import { DEFAULT_DASHBOARD_SERIES, getFredCatalog, getFredSeries, resolveFredSeries } from './providers/fred';
@@ -9,7 +10,7 @@ import type { CalendarEvent, Env, MacroObservation } from './types';
 
 export { FxgaCoordinator };
 
-const CALENDAR_ENGINE_VERSION = 'scraped-consensus-v4';
+const CALENDAR_ENGINE_VERSION = 'scraped-consensus-v5';
 const securityHeaders = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
@@ -154,6 +155,12 @@ export default {
         return json(scheduler.baseline.analysis, { headers: { 'Cache-Control': 'public, max-age=60' } });
       }
 
+      if (url.pathname === '/api/release-impact') {
+        const scheduler = await getSchedulerState(env, true);
+        if (!scheduler?.baseline?.analysis) return error('Macro baseline is not initialized', 503);
+        return json(buildReleaseImpact(scheduler.baseline.analysis, schedulerEvents(scheduler)), { headers: { 'Cache-Control': 'public, max-age=15' } });
+      }
+
       if (url.pathname === '/api/session-signals') {
         const scheduler = await getSchedulerState(env, true);
         if (!scheduler?.baseline?.analysis) return error('Macro baseline is not initialized', 503);
@@ -219,12 +226,19 @@ export default {
           .filter((event: any) => Number(event.importance ?? 1) >= importance && Date.parse(event.date) <= cutoff)
           .sort((a: any, b: any) => Date.parse(a.date) - Date.parse(b.date));
         const seen = new Set<string>();
-        const events = analyzeCalendar(rawEvents.filter((event: CalendarEvent) => !seen.has(event.id) && Boolean(seen.add(event.id))));
+        const events = analyzeCalendar(rawEvents.filter((event: CalendarEvent) => {
+          if (seen.has(event.id)) return false;
+          seen.add(event.id);
+          return true;
+        }));
         return json({
           events, cached: true, mode: scheduler.mode ?? 'scraped-calendar-consensus',
           calendarSources: scheduler.calendarSources ?? ['Myfxbook', 'FXStreet', 'CNBC'],
           calendarSyncedAt: scheduler.calendarSyncedAt ?? null,
-          analytics: { fxstreetDeviation: true, normalizedSurprise: true, revisionDelta: true, releaseScore: true },
+          analytics: {
+            fxstreetDeviation: true, normalizedSurprise: true, standardizedSurprise: true,
+            beatMissInlineProbabilities: true, revisionDelta: true, releaseScore: true,
+          },
         }, { headers: { 'Cache-Control': 'public, max-age=30' } });
       }
 
