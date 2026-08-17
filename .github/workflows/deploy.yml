@@ -76,22 +76,28 @@ jobs:
           node <<'NODE'
           const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          async function raw(path,opts={}){
+          async function fetchHealth(){
             let last;
-            for(let i=0;i<10;i++){
-              try{const r=await fetch(base+path,{...opts,headers:{Accept:'application/json',...(opts.headers||{})}});return r;}catch(e){last=e;await sleep(1200)}
+            for(let i=0;i<20;i++){
+              try{
+                const r=await fetch(base+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+                const text=await r.text();
+                if(r.ok){
+                  const h=JSON.parse(text);
+                  if(h.collectorMode==='google-cloud-run-webhook') return h;
+                  last=new Error(`Waiting for passive version; current mode ${h.collectorMode}`);
+                }else last=new Error(`/api/health ${r.status}: ${text.slice(0,300)}`);
+              }catch(e){last=e;}
+              await sleep(1500);
             }
             throw last;
           }
-          const hres=await raw('/api/health');
-          if(!hres.ok) throw new Error(`/api/health ${hres.status}: ${(await hres.text()).slice(0,500)}`);
-          const h=await hres.json();
-          if(h.collectorMode!=='google-cloud-run-webhook') throw new Error(`Wrong collector mode ${h.collectorMode}`);
+          const h=await fetchHealth();
           if(h.configured?.browserRun!==false||h.configured?.calendarScraping!==false||h.configured?.officialNewsScraping!==false) throw new Error('Cloudflare acquisition is not fully disabled');
           const s=h.safety||{};
           for(const k of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests']) if(Number(s[k]??-1)!==0) throw new Error(`${k} must be zero`);
           if(Number(s.browserSoftBudgetSecondsPerUtcDay??-1)!==0) throw new Error('Cloudflare Browser budget must be zero');
-          const acquire=await raw('/api/acquire?source=fred');
+          const acquire=await fetch(base+'/api/acquire?source=fred',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
           if(acquire.status!==409) throw new Error(`Cloudflare acquisition endpoint must be disabled, got ${acquire.status}`);
           console.log('Passive Cloudflare verified: signed webhook receive/persist/serve only; all upstream acquisition counters are zero.');
           NODE
