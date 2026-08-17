@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { Firestore } from '@google-cloud/firestore';
 import { CloudTasksClient } from '@google-cloud/tasks';
 import { FRED_BASE_IDS, FAST_FRED_IDS, discoverGlobalFredUniverse, summarizeUniverse } from './global-fred.js';
+import { collectCnbcMarket } from './cnbc-market.js';
 
 const app = express();
 app.use(express.json({ limit: '3mb' }));
@@ -27,7 +28,10 @@ const cfg = {
 const db = new Firestore({ ignoreUndefinedProperties: true });
 const tasks = new CloudTasksClient();
 const state = db.collection('fxga_collector_state');
+const calendarHistory = db.collection('fxga_calendar_history');
+const marketSnapshots = db.collection('fxga_market_snapshots');
 const UNIVERSE_TTL_MS = 7 * 86_400_000;
+const CALENDAR_HISTORY_DAYS = 7;
 const MAX_FRED_CONCURRENCY = 8;
 
 const TARGET_ECONOMIES = ['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN'];
@@ -81,6 +85,78 @@ function importance(value) {
   if (raw === 'HIGH' || raw === '3') return 3;
   if (raw === 'MEDIUM' || raw === '2') return 2;
   return 1;
+}
+function economicNumber(value) {
+  let text = clean(value)?.replace(/,/g,'').replace(/\s/g,'');
+  if (!text) return undefined;
+  let negative = false;
+  if (/^\(.*\)$/.test(text)) { negative = true; text = text.slice(1,-1); }
+  const match = text.match(/^([+-]?\d*\.?\d+)([KMBT])?%?$/i);
+  if (!match) return undefined;
+  const suffix = (match[2] || '').toUpperCase();
+  const multiplier = suffix === 'K' ? 1e3 : suffix === 'M' ? 1e6 : suffix === 'B' ? 1e9 : suffix === 'T' ? 1e12 : 1;
+  const parsed = Number(match[1]) * multiplier;
+  if (!Number.isFinite(parsed)) return undefined;
+  return negative ? -parsed : parsed;
+}
+function eventBiasRule(name='') {
+  const title = normalizeTitle(name);
+  if (/unemployment rate|jobless claims|initial claims|continuing claims|claimant count|unemployment claims|layoffs|redundanc/.test(title)) return { direction:'lower', family:'labour-slack', explanation:'Lower labour-market slack or claims is normally supportive for the base currency.' };
+  if (/cpi|consumer price|ppi|producer price|pce price|inflation rate|inflation expectation|average hourly earnings|wage|earnings growth/.test(title)) return { direction:'higher', family:'policy-inflation', explanation:'A hotter-than-expected inflation or wage release normally supports the base currency through a more hawkish rates path.' };
+  if (/interest rate|cash rate|repo rate|bank rate|refinancing rate|deposit facility|fed funds|policy rate/.test(title)) return { direction:'higher', family:'policy-rate', explanation:'A higher-than-expected policy rate is normally supportive for the base currency.' };
+  if (/trade balance|current account|exports/.test(title)) return { direction:'higher', family:'external-balance', explanation:'A stronger external balance is normally supportive for the base currency.' };
+  if (/gdp|retail sales|industrial production|manufacturing production|pmi|employment change|nonfarm payroll|nfp|consumer confidence|business confidence|building permits|housing starts|durable goods|factory orders|services|manufacturing|economic sentiment|business activity|capacity utilization|productivity/.test(title)) return { direction:'higher', family:'growth-activity', explanation:'A stronger-than-expected growth or activity release is normally supportive for the base currency.' };
+  return { direction:'context', family:'context-sensitive', explanation:'This release is context-sensitive; FXGA does not force a directional currency label without a supported rule.' };
+}
+function classifyCurrencyBias(event) {
+  const actual = economicNumber(event.actual);
+  const forecast = economicNumber(event.forecast);
+  const previous = economicNumber(event.revised ?? event.previous);
+  const rule = eventBiasRule(event.event);
+  if (actual === undefined) return { currencyBias:'pending', currencyBiasScore:0, biasConfidence:0, currencyBiasReason:'Actual result is not available yet.', comparisonBasis:'none' };
+  const reference = forecast !== undefined ? forecast : previous;
+  const comparisonBasis = forecast !== undefined ? 'forecast' : previous !== undefined ? 'previous' : 'none';
+  if (reference === undefined) return { currencyBias:'neutral', currencyBiasScore:0, biasConfidence:25, currencyBiasReason:rule.explanation + ' No numeric consensus or previous value is available for comparison.', comparisonBasis };
+  if (rule.direction === 'context') return { currencyBias:'neutral', currencyBiasScore:0, biasConfidence:35, currencyBiasReason:rule.explanation, comparisonBasis };
+  const difference = actual - reference;
+  const tolerance = Math.max(1e-9, Math.abs(reference) * 0.0001);
+  if (Math.abs(difference) <= tolerance) return { currencyBias:'neutral', currencyBiasScore:0, biasConfidence:70, currencyBiasReason:'Result is effectively in line with ' + comparisonBasis + '. ' + rule.explanation, comparisonBasis };
+  const positiveSurprise = difference > 0;
+  const bullish = rule.direction === 'higher' ? positiveSurprise : !positiveSurprise;
+  const magnitude = Math.abs(difference) / Math.max(Math.abs(reference), 1e-9);
+  const importanceBoost = Number(event.importance || 1) >= 3 ? 12 : Number(event.importance || 1) === 2 ? 6 : 0;
+  const biasConfidence = Math.max(45, Math.min(96, Math.round(62 + importanceBoost + Math.min(22, magnitude * 180))));
+  return {
+    currencyBias: bullish ? 'bullish' : 'bearish',
+    currencyBiasScore: bullish ? 1 : -1,
+    biasConfidence,
+    currencyBiasReason:'Actual ' + actual + ' vs ' + comparisonBasis + ' ' + reference + '. ' + rule.explanation,
+    comparisonBasis,
+    surpriseValue:difference,
+    surprisePercent: reference === 0 ? undefined : (difference / Math.abs(reference)) * 100,
+    interpretationFamily:rule.family,
+  };
+}
+function enrichCalendarEvent(event) {
+  const bias = classifyCurrencyBias(event);
+  const actual = economicNumber(event.actual), forecast = economicNumber(event.forecast);
+  const outcome = actual === undefined ? 'pending' : forecast === undefined ? 'no-consensus' : actual > forecast ? 'beat' : actual < forecast ? 'miss' : 'in-line';
+  return { ...event, ...bias, outcome, betterThanExpected:bias.currencyBias === 'bullish', worseThanExpected:bias.currencyBias === 'bearish' };
+}
+async function persistCalendarHistory(events) {
+  const now = Date.now(), cutoff = now - CALENDAR_HISTORY_DAYS * 86_400_000;
+  const completed = events.filter((event) => {
+    const time = Date.parse(event.date);
+    return Number.isFinite(time) && time <= now && time >= cutoff && clean(event.actual) !== undefined;
+  });
+  for (let index = 0; index < completed.length; index += 400) {
+    const batch = db.batch();
+    for (const event of completed.slice(index, index + 400)) {
+      batch.set(calendarHistory.doc(event.id), { ...event, archivedAt:new Date().toISOString(), retentionWindowDays:CALENDAR_HISTORY_DAYS }, { merge:true });
+    }
+    await batch.commit();
+  }
+  return { persisted:completed.length, historyDays:CALENDAR_HISTORY_DAYS };
 }
 function record(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
 function dateValue(value) {
@@ -284,20 +360,41 @@ async function signedWebhook(type,payload) {
   throw lastError||new Error('Webhook failed');
 }
 
+async function syncCnbcMarket() {
+  const fresh = await collectCnbcMarket({ maxBrowserSeconds:cfg.maxBrowserSeconds });
+  const previousState = await getState('market');
+  const previousById = new Map((previousState?.payload?.assets || []).map((asset) => [asset.id, asset]));
+  let staleRetained = 0;
+  const assets = fresh.assets.map((asset) => {
+    if (asset.price != null) return asset;
+    const previous = previousById.get(asset.id);
+    if (previous?.price == null) return asset;
+    staleRetained += 1;
+    return { ...previous, stale:true, staleSince:previous.staleSince || previous.fetchedAt || previousState?.updatedAt || null, lastAttemptAt:asset.fetchedAt, lastAttemptMode:asset.mode, error:asset.error || 'CNBC refresh returned no usable price; retained last good value.' };
+  });
+  const snapshot = { ...fresh, generatedAt:new Date().toISOString(), assets, live:assets.filter((asset)=>asset.price!=null&&!asset.stale).length, staleRetained, failed:assets.filter((asset)=>asset.price==null).length };
+  const saved = await putIfChanged('market', snapshot);
+  const historyId = snapshot.generatedAt.slice(0,16).replace(/[-:T]/g,'');
+  await marketSnapshots.doc(historyId).set({ capturedAt:snapshot.generatedAt, source:'CNBC', assets:assets.map(({error,...asset})=>asset) }, { merge:true });
+  if (saved.changed) await signedWebhook('market-snapshot', snapshot);
+  return { changed:saved.changed, requested:snapshot.requested, live:snapshot.live, staleRetained:snapshot.staleRetained, failed:snapshot.failed, durationMs:snapshot.durationMs };
+}
 async function bootstrapCalendar() {
-  const now=new Date(); const to=new Date(now.getTime()+cfg.calendarDays*86_400_000);
-  const [fxstreetResult,myfxbook,cnbc]=await Promise.allSettled([fetchFxstreet(now,to),scrapeMyfxbook(),scrapeCnbc()]);
+  const now=new Date(); const from=new Date(now.getTime()-CALENDAR_HISTORY_DAYS*86_400_000); const to=new Date(now.getTime()+cfg.calendarDays*86_400_000);
+  const [fxstreetResult,myfxbook,cnbc]=await Promise.allSettled([fetchFxstreet(from,to),scrapeMyfxbook(),scrapeCnbc()]);
   const fxstreet=fxstreetResult.status==='fulfilled'?fxstreetResult.value:[];
   const myfx=myfxbook.status==='fulfilled'?myfxbook.value:{events:[],ok:false,error:String(myfxbook.reason)};
   const cnbcResult=cnbc.status==='fulfilled'?cnbc.value:{items:[],ok:false,error:String(cnbc.reason)};
-  const events=mergeEvents(fxstreet,myfx.events||[]).filter((event)=>Date.parse(event.date)<=to.getTime());
+  const events=mergeEvents(fxstreet,myfx.events||[]).map(enrichCalendarEvent).filter((event)=>Date.parse(event.date)>=from.getTime()&&Date.parse(event.date)<=to.getTime());
   if (!events.length) throw new Error('Calendar bootstrap produced no events');
   const sourceHealth={fxstreet:{ok:fxstreet.length>0,events:fxstreet.length},myfxbook:{ok:Boolean(myfx.ok),events:(myfx.events||[]).length,mode:myfx.mode,error:myfx.error},cnbc:{ok:Boolean(cnbcResult.ok),items:(cnbcResult.items||[]).length,error:cnbcResult.error}};
-  const snapshot={generatedAt:new Date().toISOString(),days:cfg.calendarDays,targetEconomies:TARGET_ECONOMIES,events,sourceHealth,cnbcContext:cnbcResult.items||[]};
+  const snapshot={generatedAt:new Date().toISOString(),days:cfg.calendarDays,historyDays:CALENDAR_HISTORY_DAYS,windowStart:from.toISOString(),windowEnd:to.toISOString(),targetEconomies:TARGET_ECONOMIES,events,sourceHealth,cnbcContext:cnbcResult.items||[]};
+  const history=await persistCalendarHistory(events);
   const saved=await putIfChanged('calendar',snapshot); const scheduled=await scheduleReleaseTasks(events);
   if (saved.changed) await signedWebhook('calendar-snapshot',snapshot);
   await state.doc('source-health').set({updatedAt:new Date().toISOString(),payload:sourceHealth});
-  return {events:events.length,changed:saved.changed,scheduled,sourceHealth};
+  const market=await syncCnbcMarket().catch((error)=>({error:String(error?.message||error).slice(0,300)}));
+  return {events:events.length,changed:saved.changed,scheduled,history,sourceHealth,market};
 }
 async function releaseCheck({eventIds=[],releaseAt,offsetSeconds=0}) {
   const calendarState=await getState('calendar'); const allEvents=calendarState?.payload?.events||[];
@@ -311,13 +408,14 @@ async function releaseCheck({eventIds=[],releaseAt,offsetSeconds=0}) {
     if (!eventIds.includes(event.id)) return event;
     const candidate=fresh.find((item)=>item.currency===event.currency&&Math.abs(Date.parse(item.date)-Date.parse(event.date))<=120_000&&normalizeTitle(item.event)===normalizeTitle(event.event));
     if (!candidate) return event;
-    const merged={...event,actual:candidate.actual??event.actual,forecast:candidate.forecast??event.forecast,previous:candidate.previous??event.previous,revised:candidate.revised??event.revised,deviation:candidate.deviation??event.deviation,lastUpdate:candidate.lastUpdate??new Date().toISOString(),providers:[...new Set([...(event.providers||[]),'fxstreet'])]};
+    const merged=enrichCalendarEvent({...event,actual:candidate.actual??event.actual,forecast:candidate.forecast??event.forecast,previous:candidate.previous??event.previous,revised:candidate.revised??event.revised,deviation:candidate.deviation??event.deviation,lastUpdate:candidate.lastUpdate??new Date().toISOString(),providers:[...new Set([...(event.providers||[]),'fxstreet'])]});
     if (eventFingerprint(merged)!==eventFingerprint(event)) changed.push(merged); return merged;
   });
   if (!changed.length) return {changed:0,releaseAt,offsetSeconds};
   const snapshot={...calendarState.payload,generatedAt:new Date().toISOString(),events:next};
   await state.doc('calendar').set({hash:stableHash(snapshot),updatedAt:new Date().toISOString(),payload:snapshot});
-  await state.collection('release_snapshots').doc(`${Date.now()}-${stableHash(eventIds.join(',')).slice(0,12)}`).set({releaseAt,offsetSeconds,changed,capturedAt:new Date().toISOString()});
+  await db.collection('fxga_release_snapshots').doc(`${Date.now()}-${stableHash(eventIds.join(',')).slice(0,12)}`).set({releaseAt,offsetSeconds,changed,capturedAt:new Date().toISOString()});
+  await persistCalendarHistory(changed);
   await signedWebhook('release-delta',{releaseAt,offsetSeconds,events:changed});
   return {changed:changed.length,releaseAt,offsetSeconds};
 }
@@ -385,17 +483,20 @@ async function syncFred(mode='fast') {
 }
 
 app.get('/health',async(_req,res)=>{
-  const [calendar,macro,universe]=await Promise.all([getState('calendar'),getState('macro'),getState('fred-universe')]);
-  res.json({ok:true,service:'fxga-cloud-run-collector',version:2,projectConfigured:Boolean(cfg.projectId),tasksConfigured:Boolean(cfg.serviceUrl&&cfg.taskInvokerSa),webhookConfigured:Boolean(cfg.webhookSecret&&cfg.webhookUrl),fredConfigured:Boolean(cfg.fredApiKey),calendarUpdatedAt:calendar?.updatedAt??null,macroUpdatedAt:macro?.updatedAt??null,fredUniverse:universe?.payload?.summary??{curatedBase:FRED_BASE_IDS.length},targetEconomies:TARGET_ECONOMIES,mode:'event-driven-cloud-run'});
+  const [calendar,macro,universe,market]=await Promise.all([getState('calendar'),getState('macro'),getState('fred-universe'),getState('market')]);
+  res.json({ok:true,service:'fxga-cloud-run-collector',version:2,projectConfigured:Boolean(cfg.projectId),tasksConfigured:Boolean(cfg.serviceUrl&&cfg.taskInvokerSa),webhookConfigured:Boolean(cfg.webhookSecret&&cfg.webhookUrl),fredConfigured:Boolean(cfg.fredApiKey),calendarUpdatedAt:calendar?.updatedAt??null,macroUpdatedAt:macro?.updatedAt??null,marketUpdatedAt:market?.updatedAt??null,marketAssets:market?.payload?.assets?.length??0,fredUniverse:universe?.payload?.summary??{curatedBase:FRED_BASE_IDS.length},targetEconomies:TARGET_ECONOMIES,mode:'event-driven-cloud-run'});
 });
 app.post('/bootstrap',async(_req,res,next)=>{try{res.json(await bootstrapCalendar());}catch(error){next(error);}});
 app.post('/release-check',async(req,res,next)=>{try{res.json(await releaseCheck(req.body||{}));}catch(error){next(error);}});
-app.post('/macro-sync',async(req,res,next)=>{try{res.json(await syncFred(req.query.mode||req.body?.mode||'fast'));}catch(error){next(error);}});
+app.post('/macro-sync',async(req,res,next)=>{try{const [macro,market]=await Promise.all([syncFred(req.query.mode||req.body?.mode||'fast'),syncCnbcMarket()]);res.json({...macro,market});}catch(error){next(error);}});
+app.post('/market-sync',async(_req,res,next)=>{try{res.json(await syncCnbcMarket());}catch(error){next(error);}});
+app.get('/market',async(_req,res)=>{const market=await getState('market');res.json(market?.payload??{generatedAt:null,source:'CNBC',assets:[]});});
+app.get('/calendar-history',async(req,res)=>{const days=Math.min(7,Math.max(1,Number(req.query.days||7)));const calendar=await getState('calendar');const now=Date.now(),cutoff=now-days*86_400_000;const events=(calendar?.payload?.events||[]).filter((event)=>{const time=Date.parse(event.date);return Number.isFinite(time)&&time<=now&&time>=cutoff;});res.json({generatedAt:calendar?.payload?.generatedAt??null,days,events});});
 app.post('/fred-discover',async(req,res,next)=>{try{res.json(await getFredUniverse(Boolean(req.body?.force)));}catch(error){next(error);}});
 app.get('/fred-universe',async(_req,res,next)=>{try{res.json(await getFredUniverse(false));}catch(error){next(error);}});
 app.get('/state',async(_req,res)=>{
-  const [calendar,macro,sourceHealth,universe]=await Promise.all([getState('calendar'),getState('macro'),getState('source-health'),getState('fred-universe')]);
-  res.json({calendar,macro,sourceHealth,fredUniverse:universe});
+  const [calendar,macro,sourceHealth,universe,market]=await Promise.all([getState('calendar'),getState('macro'),getState('source-health'),getState('fred-universe'),getState('market')]);
+  res.json({calendar,macro,sourceHealth,fredUniverse:universe,market});
 });
 app.use((error,_req,res,_next)=>{console.error(error);res.status(500).json({error:String(error?.message||error).slice(0,1000)});});
 app.listen(cfg.port,()=>console.log(`FXGA Cloud Run global collector v2 listening on :${cfg.port}`));
