@@ -1,13 +1,15 @@
 import { ACQUISITION_METHODS, ACQUISITION_SOURCES, getAcquisitionSource } from './acquisition/registry';
+import { analyzeCalendar } from './analysis/calendar';
+import { buildSessionSignals } from './analysis/sessions';
 import { FxgaCoordinator } from './coordinator';
 import { DEFAULT_DASHBOARD_SERIES, getFredCatalog, getFredSeries, resolveFredSeries } from './providers/fred';
 import { getOfficialNews } from './providers/rss';
 import { sourceRegistry } from './sources';
-import type { Env, MacroObservation } from './types';
+import type { CalendarEvent, Env, MacroObservation } from './types';
 
 export { FxgaCoordinator };
 
-const CALENDAR_ENGINE_VERSION = 'scraped-consensus-v3';
+const CALENDAR_ENGINE_VERSION = 'scraped-consensus-v4';
 const securityHeaders = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
@@ -59,22 +61,27 @@ function coreMacroFromBaseline(observations: MacroObservation[]) {
   return observations.filter((item) => ids.has(item.seriesId));
 }
 
+function schedulerEvents(scheduler: Record<string, any>) {
+  const runtimes = [...(scheduler.active ?? []), ...(scheduler.upcoming ?? []), ...(scheduler.recent ?? [])];
+  const seen = new Set<string>();
+  const events: CalendarEvent[] = [];
+  for (const runtime of runtimes) {
+    const event = runtime?.event as CalendarEvent | undefined;
+    if (!event || seen.has(event.id)) continue;
+    seen.add(event.id);
+    events.push(event);
+  }
+  return events;
+}
+
 async function dashboard(env: Env) {
   const errors: Array<{ provider: string; message: string }> = [];
   let scheduler: Record<string, any> | null = null;
   let news: Awaited<ReturnType<typeof getOfficialNews>> = [];
-
-  try {
-    scheduler = await getSchedulerState(env, true);
-  } catch (caught) {
-    errors.push({ provider: 'Release Scheduler', message: caught instanceof Error ? caught.message : 'Scheduler failed' });
-  }
-
-  try {
-    news = await getOfficialNews();
-  } catch (caught) {
-    errors.push({ provider: 'Official RSS', message: caught instanceof Error ? caught.message : 'Collector failed' });
-  }
+  try { scheduler = await getSchedulerState(env, true); }
+  catch (caught) { errors.push({ provider: 'Release Scheduler', message: caught instanceof Error ? caught.message : 'Scheduler failed' }); }
+  try { news = await getOfficialNews(); }
+  catch (caught) { errors.push({ provider: 'Official RSS', message: caught instanceof Error ? caught.message : 'Collector failed' }); }
 
   const observations = (scheduler?.baseline?.observations ?? []) as MacroObservation[];
   const upcoming = Array.isArray(scheduler?.upcoming) ? scheduler.upcoming.map((item: any) => item.event) : [];
@@ -83,7 +90,7 @@ async function dashboard(env: Env) {
   return {
     generatedAt: new Date().toISOString(),
     macro: coreMacroFromBaseline(observations),
-    calendar: [...active, ...upcoming].slice(0, 120),
+    calendar: analyzeCalendar([...active, ...upcoming].slice(0, 120)),
     news,
     sources: sourceRegistry(env),
     scheduler: scheduler ? {
@@ -94,9 +101,7 @@ async function dashboard(env: Env) {
       nextCalendarSyncAt: scheduler.nextCalendarSyncAt ?? null,
       nextReleaseAt: scheduler.nextReleaseAt ?? null,
       nextAlarmAt: scheduler.nextAlarmAt ?? null,
-      active: scheduler.active ?? [],
-      recent: scheduler.recent ?? [],
-      stats: scheduler.stats ?? null,
+      active: scheduler.active ?? [], recent: scheduler.recent ?? [], stats: scheduler.stats ?? null,
       baselineGeneratedAt: scheduler.baseline?.generatedAt ?? null,
     } : null,
     errors,
@@ -107,13 +112,10 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return new Response(null, { status: 404 });
-
     if (url.pathname === '/api/live') {
       if (request.method !== 'GET') return error('Method not allowed', 405);
-      const upstream = new Request('https://fxga-coordinator.internal/ws', request);
-      return coordinator(env).fetch(upstream);
+      return coordinator(env).fetch(new Request('https://fxga-coordinator.internal/ws', request));
     }
-
     if (request.method !== 'GET') return error('Method not allowed', 405);
 
     try {
@@ -122,43 +124,29 @@ export default {
         const acquisition = statusResponse.ok ? await statusResponse.json() as Record<string, any> : null;
         return json({
           ok: true,
-          app: env.APP_NAME || 'FXGA Macro Intelligence',
-          calendarEngineVersion: CALENDAR_ENGINE_VERSION,
+          app: env.APP_NAME || 'FXGA Macro Intelligence', calendarEngineVersion: CALENDAR_ENGINE_VERSION,
           timestamp: new Date().toISOString(),
           configured: {
-            fred: Boolean(env.FRED_API_KEY),
-            calendarScraping: true,
+            fred: Boolean(env.FRED_API_KEY), calendarScraping: true,
             calendarSources: ['Myfxbook', 'FXStreet', 'CNBC'],
             tradingEconomicsLegacyOptional: Boolean(env.TRADING_ECONOMICS_API_KEY),
-            browserRun: Boolean(env.BROWSER),
-            durableCoordinator: Boolean(env.FXGA_COORDINATOR),
+            browserRun: Boolean(env.BROWSER), durableCoordinator: Boolean(env.FXGA_COORDINATOR),
           },
           fredUniverse: getFredCatalog().total,
-          acquisition,
-          scheduler: acquisition?.scheduler ?? null,
+          acquisition, scheduler: acquisition?.scheduler ?? null,
           safety: {
-            workerSubrequestCeiling: 45,
-            platformSubrequestLimitFree: 50,
-            collectorMaxConcurrentConnections: 5,
-            platformOutgoingConnectionLimit: 6,
+            workerSubrequestCeiling: 45, platformSubrequestLimitFree: 50,
+            collectorMaxConcurrentConnections: 5, platformOutgoingConnectionLimit: 6,
             browserSoftBudgetSecondsPerUtcDay: Math.min(Number(env.BROWSER_SOFT_BUDGET_SECONDS || 480), 480),
-            browserSessionReuse: false,
-            websocketMode: 'Durable Object Hibernation',
-            releaseMode: 'Event-driven Durable Object alarms',
-            normalStateUpstreamCalendarRequests: 0,
-            normalStateUpstreamFredRequests: 0,
-            releaseWindowPrimary: 'Myfxbook lightweight scrape',
+            browserSessionReuse: true, websocketMode: 'Durable Object Hibernation',
+            releaseMode: 'Event-driven Durable Object alarms', normalStateUpstreamCalendarRequests: 0,
+            normalStateUpstreamFredRequests: 0, releaseWindowPrimary: 'FXStreet public calendar feed',
           },
         }, { headers: { 'Cache-Control': 'no-store' } });
       }
 
-      if (url.pathname === '/api/sources') {
-        return json({ sources: sourceRegistry(env) }, { headers: { 'Cache-Control': 'public, max-age=60' } });
-      }
-
-      if (url.pathname === '/api/dashboard') {
-        return cached(request, env, async () => json(await dashboard(env)), 60);
-      }
+      if (url.pathname === '/api/sources') return json({ sources: sourceRegistry(env) }, { headers: { 'Cache-Control': 'public, max-age=60' } });
+      if (url.pathname === '/api/dashboard') return cached(request, env, async () => json(await dashboard(env)), 60);
 
       if (url.pathname === '/api/analysis') {
         const scheduler = await getSchedulerState(env, true);
@@ -166,9 +154,13 @@ export default {
         return json(scheduler.baseline.analysis, { headers: { 'Cache-Control': 'public, max-age=60' } });
       }
 
-      if (url.pathname === '/api/release-state') {
-        return json(await getSchedulerState(env, true), { headers: { 'Cache-Control': 'no-store' } });
+      if (url.pathname === '/api/session-signals') {
+        const scheduler = await getSchedulerState(env, true);
+        if (!scheduler?.baseline?.analysis) return error('Macro baseline is not initialized', 503);
+        return json(buildSessionSignals(scheduler.baseline.analysis, schedulerEvents(scheduler)), { headers: { 'Cache-Control': 'public, max-age=30' } });
       }
+
+      if (url.pathname === '/api/release-state') return json(await getSchedulerState(env, true), { headers: { 'Cache-Control': 'no-store' } });
 
       if (url.pathname === '/api/release-history') {
         const id = url.searchParams.get('id')?.trim() ?? '';
@@ -177,9 +169,7 @@ export default {
         return new Response(response.body, { status: response.status, headers: { 'Content-Type': 'application/json; charset=utf-8', ...securityHeaders } });
       }
 
-      if (url.pathname === '/api/fred/catalog') {
-        return json(getFredCatalog(), { headers: { 'Cache-Control': 'public, max-age=3600' } });
-      }
+      if (url.pathname === '/api/fred/catalog') return json(getFredCatalog(), { headers: { 'Cache-Control': 'public, max-age=3600' } });
 
       if (url.pathname === '/api/fred') {
         return cached(request, env, async () => {
@@ -190,7 +180,7 @@ export default {
           const limit = Number(url.searchParams.get('limit') || 12);
           const selected = resolveFredSeries({ requested, category, query, limit });
           const series = await getFredSeries(env, selected.map((item) => item.id));
-          return json({ series, selection: { category: category ?? null, query: query ?? null, count: series.length } });
+          return json({ series, selection: { category: category ?? null, query: query ?? null, count: series.length, importantOnly: true } });
         }, 300);
       }
 
@@ -198,25 +188,14 @@ export default {
         const statusResponse = await coordinator(env).fetch('https://fxga-coordinator.internal/status');
         const status = statusResponse.ok ? await statusResponse.json() : null;
         return json({
-          methods: ACQUISITION_METHODS,
-          sources: ACQUISITION_SOURCES,
-          status,
+          methods: ACQUISITION_METHODS, sources: ACQUISITION_SOURCES, status,
           limits: {
-            externalSubrequestsPerInvocation: 45,
-            simultaneousOutgoingConnections: 6,
+            externalSubrequestsPerInvocation: 45, simultaneousOutgoingConnections: 6,
             collectorMaxConcurrentConnections: 5,
             browserSoftBudgetSecondsPerUtcDay: Math.min(Number(env.BROWSER_SOFT_BUDGET_SECONDS || 480), 480),
-            browserConcurrentJobsInFxga: 1,
-            minBrowserLaunchGapSeconds: 22,
+            browserConcurrentJobsInFxga: 1, minBrowserLaunchGapSeconds: 22,
           },
-          policy: {
-            publicPagesOnly: true,
-            robotsAware: true,
-            bypassLogin: false,
-            bypassCaptcha: false,
-            bypassPaywall: false,
-            botEvasion: false,
-          },
+          policy: { publicPagesOnly: true, robotsAware: true, bypassLogin: false, bypassCaptcha: false, bypassPaywall: false, botEvasion: false },
         }, { headers: { 'Cache-Control': 'no-store' } });
       }
 
@@ -235,40 +214,33 @@ export default {
         const days = Math.min(Math.max(Number(url.searchParams.get('days') || 7), 1), 31);
         const importance = Math.min(Math.max(Number(url.searchParams.get('importance') || 1), 1), 3);
         const cutoff = Date.now() + days * 86_400_000;
-        const events = [...(scheduler.active ?? []), ...(scheduler.upcoming ?? [])]
+        const rawEvents = [...(scheduler.active ?? []), ...(scheduler.upcoming ?? []), ...(scheduler.recent ?? [])]
           .map((item: any) => item.event)
           .filter((event: any) => Number(event.importance ?? 1) >= importance && Date.parse(event.date) <= cutoff)
           .sort((a: any, b: any) => Date.parse(a.date) - Date.parse(b.date));
+        const seen = new Set<string>();
+        const events = analyzeCalendar(rawEvents.filter((event: CalendarEvent) => !seen.has(event.id) && Boolean(seen.add(event.id))));
         return json({
-          events,
-          cached: true,
-          mode: scheduler.mode ?? 'scraped-calendar-consensus',
+          events, cached: true, mode: scheduler.mode ?? 'scraped-calendar-consensus',
           calendarSources: scheduler.calendarSources ?? ['Myfxbook', 'FXStreet', 'CNBC'],
           calendarSyncedAt: scheduler.calendarSyncedAt ?? null,
+          analytics: { fxstreetDeviation: true, normalizedSurprise: true, revisionDelta: true, releaseScore: true },
         }, { headers: { 'Cache-Control': 'public, max-age=30' } });
       }
 
       if (url.pathname === '/api/news') {
-        return cached(request, env, async () => {
-          const source = url.searchParams.get('source') || undefined;
-          return json({ items: await getOfficialNews(source) });
-        }, 300);
+        return cached(request, env, async () => json({ items: await getOfficialNews(url.searchParams.get('source') || undefined) }), 300);
       }
 
       return error('API route not found', 404);
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'Unexpected collector error';
-      return error(message, 502);
+      return error(caught instanceof Error ? caught.message : 'Unexpected collector error', 502);
     }
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(
-      coordinator(env)
-        .fetch('https://fxga-coordinator.internal/scheduler/sync')
-        .then(async (response) => {
-          if (!response.ok) throw new Error(`Scheduled scraped-calendar sync returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
-        }),
-    );
+    ctx.waitUntil(coordinator(env).fetch('https://fxga-coordinator.internal/scheduler/sync').then(async (response) => {
+      if (!response.ok) throw new Error(`Scheduled scraped-calendar sync returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
+    }));
   },
 };
