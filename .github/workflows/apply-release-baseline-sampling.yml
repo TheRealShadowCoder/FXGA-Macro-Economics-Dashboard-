@@ -1,0 +1,68 @@
+name: Apply FXGA Release Baseline Sampling
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/release-baseline-sampling.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Add pre-release market baselines
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p=Path('cloud-run-collector/src/server-v2.js')
+          text=p.read_text()
+          old="""function taskOffsets(maxImportance) {
+  if (maxImportance>=3) return [0,60,300,900,3600,14400];
+  if (maxImportance===2) return [0,300,900,3600,14400];
+  return [0,900,3600];
+}"""
+          new="""function taskOffsets(maxImportance) {
+  // Negative offsets intentionally capture a verified pre-release market baseline.
+  // The release-check gateway triggers market-sync after every successful check,
+  // so the -5m task seeds the strict event-study baseline without fabricating prices.
+  if (maxImportance>=3) return [-300,0,60,300,900,3600,14400];
+  if (maxImportance===2) return [-300,0,300,900,3600,14400];
+  return [-900,0,900,3600];
+}"""
+          if old not in text:
+              raise SystemExit('Expected taskOffsets block not found; refusing unsafe patch')
+          p.write_text(text.replace(old,new,1))
+
+          pkg=Path('cloud-run-collector/package.json')
+          s=pkg.read_text()
+          if '"version": "4.5.0"' not in s:
+              raise SystemExit('Expected collector version 4.5.0 not found')
+          pkg.write_text(s.replace('"version": "4.5.0"','"version": "4.6.0"',1))
+          PY
+
+      - name: Validate collector
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts --no-fund --no-audit
+          npm run check
+
+      - name: Commit baseline sampling upgrade
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/server-v2.js cloud-run-collector/package.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Add pre-release market baseline sampling'
+          git pull --rebase origin main
+          git push origin HEAD:main
