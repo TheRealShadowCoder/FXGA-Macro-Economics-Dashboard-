@@ -1,0 +1,2 @@
+Institutional research platform deployment revision: 2026-08-17
+Includes data-quality gates, probabilistic forecasts, release-surprise profiles, risk decomposition, scenario analysis, provenance, regime analytics and release-aligned market snapshots.
