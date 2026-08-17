@@ -2,6 +2,14 @@
 
 This service moves upstream macro/calendar acquisition away from Cloudflare. Cloudflare remains the dashboard/state/webhook edge; Google Cloud performs external collection and sends signed deltas only when state changes.
 
+## Active Google Cloud target
+
+- Project ID: `fxglobalavengerstradingacademy`
+- Initial region: `us-central1`
+- Cloud Run service: `fxga-macro-collector`
+
+Deployment authentication is provided by GitHub Actions through Workload Identity Federation. No long-lived Google service-account key is stored in the repository.
+
 ## Runtime architecture
 
 1. Cloud Scheduler calls `/bootstrap` once daily.
