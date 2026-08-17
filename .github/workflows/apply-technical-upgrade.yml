@@ -1,0 +1,50 @@
+name: Apply FXGA Technical Structure Upgrade
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-technical-upgrade.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fxga-technical-upgrade
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Apply technical structure integration
+        run: python3 scripts/apply_technical_upgrade.py
+
+      - name: Validate collector and edge source
+        run: |
+          node --check cloud-run-collector/src/technical-engine.js
+          node --check cloud-run-collector/src/server-v2.js
+          npm ci
+          npm run build
+
+      - name: Commit integrated upgrade
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No source changes were produced."
+            exit 0
+          fi
+          git add cloud-run-collector/src/server-v2.js cloud-run-collector/package.json worker/index-v3.ts
+          git commit -m "Integrate evidence-gated technical structure engine"
+          git push origin HEAD:main
