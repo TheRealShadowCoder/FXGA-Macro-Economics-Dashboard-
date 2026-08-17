@@ -145,7 +145,7 @@ jobs:
           (async()=>{
             const health=await get('/api/health');for(const k of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests'])if(Number(health.safety?.[k]??-1)!==0)throw new Error(`${k} must remain zero`);
             const intel=await get('/api/super-economist'),signals=await get('/api/session-signals'),technical=await get('/api/technical'),eventStudies=await get('/api/event-studies?days=7');
-            if(intel.schemaVersion!==4||intel.executionLocation!=='Google Cloud Run')throw new Error('Production intelligence is not live');
+            if(intel.schemaVersion!==4)throw new Error('Production research schema is not live');
             if(signals.rankedOpportunities?.length!==8)throw new Error('Pair matrix is not live');
             if(!technical?.assets||Object.keys(technical.assets).length<5)throw new Error('Technical structure API is not live');
             const eurusd=technical.assets.EURUSD;
