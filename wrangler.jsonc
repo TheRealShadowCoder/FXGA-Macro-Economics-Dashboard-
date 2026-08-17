@@ -35,6 +35,7 @@
   "vars": {
     "APP_NAME": "FXGA Macro Intelligence",
     "CACHE_TTL_SECONDS": "300",
-    "BROWSER_SOFT_BUDGET_SECONDS": "480"
+    "BROWSER_SOFT_BUDGET_SECONDS": "480",
+    "COLLECTOR_MODE": "cloudflare-native"
   }
 }
