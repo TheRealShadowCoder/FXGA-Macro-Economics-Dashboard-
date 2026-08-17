@@ -1,12 +1,52 @@
 import http from 'node:http';
 import { refreshSuperEconomist, superHealth, fullState, intelligenceState, registrySearch } from './super-runtime.js';
 
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+// All upstream collection runs inside Google Cloud. FRED discovery and observation
+// calls share one governor so a discovery burst cannot exhaust the API window
+// before the observation phase. Cloudflare never participates in these requests.
+const nativeFetch=globalThis.fetch.bind(globalThis);
+const FRED_MIN_INTERVAL_MS=650;
+let fredNextAt=0;
+let fredQueue=Promise.resolve();
+
+async function runFredRequest(input,init){
+  for(let attempt=0;attempt<6;attempt++){
+    const wait=Math.max(0,fredNextAt-Date.now());
+    if(wait)await sleep(wait);
+    fredNextAt=Date.now()+FRED_MIN_INTERVAL_MS;
+    const response=await nativeFetch(input,init);
+    if(![429,500,502,503,504].includes(response.status)||attempt===5)return response;
+    const retryHeader=Number(response.headers.get('retry-after'));
+    await response.arrayBuffer().catch(()=>{});
+    const retryMs=Number.isFinite(retryHeader)&&retryHeader>0
+      ? retryHeader*1000
+      : [5000,10000,20000,30000,45000,60000][attempt];
+    console.warn(`FRED HTTP ${response.status}; retrying attempt ${attempt+2}/6 after ${retryMs}ms`);
+    await sleep(retryMs);
+  }
+  return nativeFetch(input,init);
+}
+
+globalThis.fetch=(input,init)=>{
+  try{
+    const raw=typeof input==='string'||input instanceof URL?String(input):input?.url;
+    const url=new URL(raw);
+    if(url.hostname==='api.stlouisfed.org'){
+      const task=fredQueue.then(()=>runFredRequest(input,init),()=>runFredRequest(input,init));
+      fredQueue=task.then(()=>undefined,()=>undefined);
+      return task;
+    }
+  }catch{}
+  return nativeFetch(input,init);
+};
+
 const publicPort=Number(process.env.PORT||8080);
 const internalPort=publicPort===8081?8082:8081;
 process.env.PORT=String(internalPort);
 await import('./server-v2.js');
 
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function waitInternal(){
   for(let i=0;i<30;i++){
     try{const r=await fetch(`http://127.0.0.1:${internalPort}/health`);if(r.ok)return;}catch{}
