@@ -17,6 +17,12 @@ const COUNTRY_CURRENCY: Record<string, string> = {
   JP: 'JPY', CA: 'CAD', AU: 'AUD', NZ: 'NZD', CH: 'CHF', CN: 'CNY', ZA: 'ZAR',
 };
 
+const HOT_WINDOW_MS = 10 * 60_000;
+const HOT_CACHE_TTL_SECONDS = 2;
+const SCHEDULE_CACHE_TTL_SECONDS = 120;
+const REQUEST_TIMEOUT_MS = 3_500;
+const SCHEDULE_BUCKET_MS = 5 * 60_000;
+
 function clean(value: unknown): string | undefined {
   if (value == null) return undefined;
   if (typeof value === 'object') {
@@ -74,6 +80,17 @@ function titlesMatch(a: string, b: string) {
 
 function isoSeconds(date: Date) {
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function isHotWindow(from: Date, to: Date, now = Date.now()) {
+  return from.getTime() <= now + HOT_WINDOW_MS && to.getTime() >= now - HOT_WINDOW_MS;
+}
+
+function canonicalWindow(from: Date, to: Date) {
+  if (isHotWindow(from, to)) return { from, to, hot: true };
+  const start = Math.floor(from.getTime() / SCHEDULE_BUCKET_MS) * SCHEDULE_BUCKET_MS;
+  const end = Math.ceil(to.getTime() / SCHEDULE_BUCKET_MS) * SCHEDULE_BUCKET_MS;
+  return { from: new Date(start), to: new Date(end), hot: false };
 }
 
 function buildUrl(from: Date, to: Date) {
@@ -159,13 +176,19 @@ function parsePayload(payload: unknown): CalendarEvent[] {
 
     const eventDateId = clean(object.id ?? object.Id ?? object.idEcoCalendarDate ?? object.IdEcoCalendarDate);
     const eventId = clean(event.id ?? event.Id ?? object.eventId ?? object.EventId ?? object.idEcoCalendar ?? object.IdEcoCalendar);
+    const rawVolatility = object.volatility ?? object.Volatility ?? event.volatility ?? event.Volatility;
+    const unit = clean(object.unit ?? object.Unit ?? event.unit ?? event.Unit);
+
     events.push({
       id: `fxstreet-feed-${eventDateId ?? identity}`,
-      eventDateId, eventId, date,
+      eventDateId,
+      eventId,
+      date,
       country: clean(country.name ?? country.Name ?? object.countryName ?? object.CountryName) ?? currency,
-      currency, event: name,
+      currency,
+      event: name,
       category: clean(event.categoryName ?? event.CategoryName ?? object.categoryName ?? object.CategoryName) ?? 'Economic Calendar',
-      importance: importance(object.volatility ?? object.Volatility ?? event.volatility ?? event.Volatility),
+      importance: importance(rawVolatility),
       actual: clean(object.actual ?? object.Actual ?? object.displayActual ?? object.DisplayActual),
       forecast: clean(object.consensus ?? object.Consensus ?? object.displayConsensus ?? object.DisplayConsensus),
       previous: clean(object.previous ?? object.Previous ?? object.displayPrevious ?? object.DisplayPrevious),
@@ -175,24 +198,62 @@ function parsePayload(payload: unknown): CalendarEvent[] {
       betterThanExpected: boolValue(object.better ?? object.Better) ?? undefined,
       worseThanExpected: boolValue(object.worst ?? object.Worst) ?? undefined,
       preliminary: boolValue(object.preliminar ?? object.Preliminar ?? object.preliminary ?? object.Preliminary) ?? undefined,
+      unit,
       lastUpdate: clean(object.lastUpdated ?? object.LastUpdated ?? object.lastUpdate ?? object.LastUpdate) ?? new Date().toISOString(),
-      source: 'FXStreet public calendar feed', providers: ['fxstreet'], sourceCount: 1,
+      source: 'FXStreet public calendar feed',
+      providers: ['fxstreet'],
+      sourceCount: 1,
     });
   }
   return events.sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
 }
 
-export async function fetchFxstreetPublicWindow(from: Date, to: Date): Promise<CalendarEvent[]> {
-  try {
-    const response = await fetch(buildUrl(from, to), {
-      headers: { Accept: 'application/json', 'User-Agent': 'FXGA-Macro-Intelligence/1.0 (+public economic research collector)', Referer: 'https://www.fxstreet.com/economic-calendar' },
-      redirect: 'follow',
-    });
-    if (!response.ok) return [];
-    return parsePayload(await response.json());
-  } catch {
-    return [];
+async function fetchJsonFast(url: URL, ttlSeconds: number) {
+  const cache = (caches as CacheStorage & { default: Cache }).default;
+  const cacheKey = new Request(url.toString(), { method: 'GET', headers: { Accept: 'application/json' } });
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    try { return await cached.json(); } catch { /* Fall through to origin. */ }
   }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort('FXStreet public feed timeout'), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'FXGA-Macro-Intelligence/1.0 (+public economic research collector)',
+        Referer: 'https://www.fxstreet.com/economic-calendar',
+      },
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const text = await response.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { return null; }
+
+    if (ttlSeconds > 0) {
+      const headers = new Headers(response.headers);
+      headers.set('Content-Type', 'application/json; charset=utf-8');
+      headers.set('Cache-Control', `public, max-age=${ttlSeconds}`);
+      await cache.put(cacheKey, new Response(text, { status: 200, headers }));
+    }
+    return parsed;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function fetchFxstreetPublicWindow(from: Date, to: Date): Promise<CalendarEvent[]> {
+  const window = canonicalWindow(from, to);
+  const ttl = window.hot ? HOT_CACHE_TTL_SECONDS : SCHEDULE_CACHE_TTL_SECONDS;
+  const payload = await fetchJsonFast(buildUrl(window.from, window.to), ttl);
+  if (!payload) return [];
+  return parsePayload(payload)
+    .filter((event) => Date.parse(event.date) >= from.getTime() - 1000 && Date.parse(event.date) <= to.getTime() + 1000);
 }
 
 export function mergeFxstreetReleaseValues(scheduled: CalendarEvent[], fresh: CalendarEvent[]) {
@@ -215,6 +276,7 @@ export function mergeFxstreetReleaseValues(scheduled: CalendarEvent[], fresh: Ca
       eventId: match.eventId ?? event.eventId,
       eventDateId: match.eventDateId ?? event.eventDateId,
       importance: Math.max(event.importance, match.importance),
+      unit: match.unit ?? event.unit,
       lastUpdate: match.lastUpdate ?? new Date().toISOString(),
       providers: [...new Set([...(event.providers ?? []), 'fxstreet'])],
       sourceCount: Math.max(event.sourceCount ?? 1, 1),
