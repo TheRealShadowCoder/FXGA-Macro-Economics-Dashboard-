@@ -1,2 +1,2 @@
-activate=2026-08-17T05:01:00Z
-reason=Run guarded activation with safe Cloud Run bootstrap and full-sync diagnostics.
+activate=2026-08-17T05:07:00Z
+reason=Retry guarded full-sync and Cloudflare cutover after Firestore optional-field persistence fix.
