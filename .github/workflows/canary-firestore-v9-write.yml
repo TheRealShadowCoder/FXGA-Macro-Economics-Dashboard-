@@ -113,8 +113,7 @@ jobs:
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - id: deploy_canary
-        name: Deploy private write canary
+      - name: Deploy private write canary
         run: |
           gcloud run deploy "$CANARY_SERVICE" \
             --image "$IMAGE" \
@@ -129,30 +128,22 @@ jobs:
             --max 1 \
             --timeout 60 \
             --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION"
-          PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')
-          test -n "$PROJECT_NUMBER" || { echo '::error::Project number missing'; exit 1; }
-          CANARY_URL="https://${CANARY_SERVICE}-${PROJECT_NUMBER}.${GCP_REGION}.run.app"
-          echo "Deterministic canary URL: $CANARY_URL"
-          echo "url=$CANARY_URL" >> "$GITHUB_OUTPUT"
-          echo "CANARY_URL=$CANARY_URL" >> "$GITHUB_ENV"
           gcloud run services add-iam-policy-binding "$CANARY_SERVICE" --region "$GCP_REGION" --member="serviceAccount:$DEPLOY_SERVICE_ACCOUNT" --role=roles/run.invoker >/dev/null
 
-      - id: invoke
-        uses: google-github-actions/auth@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
-          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
-          token_format: id_token
-          id_token_audience: ${{ steps.deploy_canary.outputs.url }}
-          id_token_include_email: true
-
-      - name: Execute isolated write read delete probe
-        env:
-          TOKEN: ${{ steps.invoke.outputs.id_token }}
+      - name: Execute isolated write read delete probe through Cloud Run proxy
         run: |
-          curl --max-time 60 -fsS -H "Authorization: Bearer $TOKEN" "$CANARY_URL/health" > /tmp/health.json
-          curl --max-time 60 -fsS -X POST -H "Authorization: Bearer $TOKEN" "$CANARY_URL/probe" > /tmp/probe.json
+          set -euo pipefail
+          gcloud run services proxy "$CANARY_SERVICE" --region "$GCP_REGION" --port 9090 >/tmp/canary-proxy.log 2>&1 &
+          PROXY_PID=$!
+          cleanup_proxy(){ kill "$PROXY_PID" >/dev/null 2>&1 || true; wait "$PROXY_PID" >/dev/null 2>&1 || true; }
+          trap cleanup_proxy EXIT
+          READY=0
+          for attempt in $(seq 1 30); do
+            if curl --max-time 5 -fsS http://127.0.0.1:9090/health > /tmp/health.json; then READY=1; break; fi
+            sleep 2
+          done
+          if [ "$READY" != "1" ]; then cat /tmp/canary-proxy.log || true; exit 1; fi
+          curl --max-time 60 -fsS -X POST http://127.0.0.1:9090/probe > /tmp/probe.json
           cat /tmp/probe.json
           node <<'NODE'
           const fs=require('fs'),h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8')),p=JSON.parse(fs.readFileSync('/tmp/probe.json','utf8'));
