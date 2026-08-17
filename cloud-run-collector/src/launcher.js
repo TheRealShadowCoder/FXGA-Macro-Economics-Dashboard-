@@ -1,13 +1,12 @@
 import http from 'node:http';
-import { refreshSuperEconomist, superHealth, fullState, intelligenceState, registrySearch } from './super-runtime.js';
+import { refreshSuperEconomist, syncFullMacroFromUniverse, superHealth, fullState, intelligenceState, registrySearch } from './super-runtime.js';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
-// All upstream collection runs inside Google Cloud. FRED discovery and observation
-// calls share one governor so a discovery burst cannot exhaust the API window
-// before the observation phase. Cloudflare never participates in these requests.
+// All upstream collection runs inside Google Cloud. FRED requests share one
+// conservative queue with temporary-error retry. Cloudflare never participates.
 const nativeFetch=globalThis.fetch.bind(globalThis);
-const FRED_MIN_INTERVAL_MS=650;
+const FRED_MIN_INTERVAL_MS=1050;
 let fredNextAt=0;
 let fredQueue=Promise.resolve();
 
@@ -92,9 +91,15 @@ const server=http.createServer(async(req,res)=>{
       const raw=await bodyOf(req);let input={};try{input=raw.length?JSON.parse(raw.toString('utf8')):{}}catch{}
       return sendJson(res,200,await refreshSuperEconomist({forceNews:Boolean(input.forceNews)}));
     }
+    if(req.method==='POST'&&url.pathname==='/macro-sync'&&String(url.searchParams.get('mode')||'').toLowerCase()==='full'){
+      await bodyOf(req);
+      const macro=await syncFullMacroFromUniverse();
+      const intelligence=await refreshSuperEconomist({forceNews:true});
+      return sendJson(res,200,{...macro,intelligence:{observations:intelligence.observations,coverage:intelligence.coverage,audit:intelligence.audit}});
+    }
     const status=await proxy(req,res,url);
     if(status>=200&&status<300&&req.method==='POST'&&['/bootstrap','/release-check','/macro-sync'].includes(url.pathname)){
-      const forceNews=url.pathname==='/bootstrap'||(url.pathname==='/macro-sync'&&url.searchParams.get('mode')==='full');
+      const forceNews=url.pathname==='/bootstrap';
       refreshSuperEconomist({forceNews}).then(x=>console.log('FXGA 9705 intelligence refresh',JSON.stringify({trigger:url.pathname,...x}))).catch(e=>console.error('FXGA 9705 intelligence refresh failed',e));
     }
   }catch(error){
