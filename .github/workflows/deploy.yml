@@ -47,7 +47,7 @@ jobs:
         run: |
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
-          const expectedEngine = 'scraped-consensus-v3';
+          const expectedEngine = 'scraped-consensus-v4';
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
           async function getJson(path) {
@@ -61,13 +61,7 @@ jobs:
           for (let attempt = 1; attempt <= 12; attempt += 1) {
             try {
               health = await getJson('/api/health');
-              if (
-                health?.calendarEngineVersion === expectedEngine &&
-                health?.configured?.fred &&
-                health?.configured?.browserRun &&
-                health?.configured?.durableCoordinator &&
-                health?.configured?.calendarScraping
-              ) break;
+              if (health?.calendarEngineVersion === expectedEngine && health?.configured?.fred && health?.configured?.browserRun && health?.configured?.durableCoordinator && health?.configured?.calendarScraping) break;
             } catch (error) {
               if (attempt === 12) throw error;
             }
@@ -75,24 +69,23 @@ jobs:
           }
 
           if (health?.calendarEngineVersion !== expectedEngine) throw new Error(`Live Worker is stale: expected ${expectedEngine}, got ${health?.calendarEngineVersion ?? 'none'}`);
-          if (!health?.configured?.fred) throw new Error('Live Worker does not report FRED as configured after rollout polling');
-          if (!health?.configured?.browserRun) throw new Error('Browser Run binding is not live after rollout polling');
-          if (!health?.configured?.durableCoordinator) throw new Error('Durable Object coordinator is not live after rollout polling');
-          if (!health?.configured?.calendarScraping) throw new Error('Scraped calendar mode is not enabled');
-          if (!Array.isArray(health?.configured?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => health.configured.calendarSources.includes(name))) throw new Error('Expected Myfxbook, FXStreet and CNBC calendar source configuration');
-          if (health?.safety?.workerSubrequestCeiling > 45) throw new Error('FXGA subrequest safety target exceeds 45');
-          if (health?.safety?.collectorMaxConcurrentConnections > 5) throw new Error('FXGA collector concurrency exceeds five connections');
-          if (health?.safety?.browserSoftBudgetSecondsPerUtcDay > 480) throw new Error('FXGA browser budget exceeds 480 seconds/day');
+          if (!health?.configured?.fred) throw new Error('FRED is not configured');
+          if (!health?.configured?.browserRun || !health?.configured?.durableCoordinator) throw new Error('Cloudflare browser/coordinator bindings are not live');
+          if (!Array.isArray(health?.configured?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => health.configured.calendarSources.includes(name))) throw new Error('Expected all requested calendar sources');
+          if (health?.safety?.releaseWindowPrimary !== 'FXStreet public calendar feed') throw new Error('FXStreet public feed is not the release-window primary');
+          if (health?.safety?.workerSubrequestCeiling > 45 || health?.safety?.collectorMaxConcurrentConnections > 5 || health?.safety?.browserSoftBudgetSecondsPerUtcDay > 480) throw new Error('Safety budget regression');
 
           const catalog = await getJson('/api/fred/catalog');
-          if (!Array.isArray(catalog?.series) || catalog.series.length < 90) throw new Error(`FRED catalog is unexpectedly small: ${catalog?.series?.length ?? 0}`);
-          if (!Array.isArray(catalog?.categories) || catalog.categories.length < 17) throw new Error(`FRED category catalog is unexpectedly small: ${catalog?.categories?.length ?? 0}`);
+          if (catalog?.policy?.importantOnly !== true) throw new Error('FRED catalog is not marked important-only');
+          if (!Array.isArray(catalog?.series) || catalog.series.length < 35 || catalog.series.length > 40) throw new Error(`Important FRED set should be 35-40 series, got ${catalog?.series?.length ?? 0}`);
+          if (!Array.isArray(catalog?.categories) || catalog.categories.length < 12 || catalog.categories.length > 15) throw new Error(`Unexpected important FRED category count: ${catalog?.categories?.length ?? 0}`);
+          if (catalog.series.some((series) => !['critical','high'].includes(series.importance))) throw new Error('FRED catalog contains a non-important series');
 
-          const sampleCategories = ['inflation','labour','growth','liquidity','credit','housing','manufacturing','policy-rates','treasury-yields','yield-spreads','recession-risk','financial-conditions','usd-fx','volatility','consumption','business-activity','leading-indicators'];
+          const sampleCategories = ['inflation','labour','growth','liquidity','credit','policy-rates','treasury-yields','yield-spreads','recession-risk','financial-conditions','usd-fx','volatility','consumption','leading-indicators'];
           for (const category of sampleCategories) {
             const payload = await getJson(`/api/fred?category=${encodeURIComponent(category)}&limit=1`);
             const first = payload?.series?.[0];
-            if (!first || first.value === null || !first.date) throw new Error(`Live FRED category ${category} returned no current observation`);
+            if (!first || first.value === null || !first.date) throw new Error(`Live important FRED category ${category} returned no observation`);
           }
 
           const analysis = await getJson('/api/analysis');
@@ -100,33 +93,29 @@ jobs:
           if (!Array.isArray(analysis?.assets) || analysis.assets.length < 4 || analysis?.coverage?.observed < 20) throw new Error('Macro analysis coverage is unexpectedly low');
 
           const releaseState = await getJson('/api/release-state');
-          console.log('SCRAPED_CALENDAR_DIAGNOSTICS=' + JSON.stringify({
-            initialized: releaseState?.initialized,
-            reason: releaseState?.reason,
-            mode: releaseState?.mode,
-            sourceStatus: releaseState?.calendarSourceStatus,
-            upcoming: releaseState?.upcoming?.length ?? 0,
-            active: releaseState?.active?.length ?? 0,
-          }));
-          if (!releaseState?.initialized) throw new Error(`Event-driven release scheduler is not initialized. Diagnostics=${JSON.stringify(releaseState?.calendarSourceStatus ?? null)}`);
-          if (releaseState?.mode !== 'scraped-calendar-consensus') throw new Error(`Unexpected calendar scheduler mode: ${releaseState?.mode}`);
-          if (!Array.isArray(releaseState?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => releaseState.calendarSources.includes(name))) throw new Error('Release scheduler does not advertise all three requested calendar sources');
+          console.log('SCRAPED_CALENDAR_DIAGNOSTICS=' + JSON.stringify({ initialized: releaseState?.initialized, mode: releaseState?.mode, sourceStatus: releaseState?.calendarSourceStatus, upcoming: releaseState?.upcoming?.length ?? 0, active: releaseState?.active?.length ?? 0 }));
+          if (!releaseState?.initialized || releaseState?.mode !== 'scraped-calendar-consensus') throw new Error('Event-driven release scheduler is not initialized in scraped consensus mode');
           const sourceStatus = releaseState?.calendarSourceStatus;
-          if (!sourceStatus?.sources?.myfxbook || !sourceStatus?.sources?.fxstreet || !sourceStatus?.sources?.cnbc) throw new Error('Per-source calendar scrape status is incomplete');
-          if (!(sourceStatus.sources.myfxbook.ok || sourceStatus.sources.fxstreet.ok)) throw new Error(`Neither primary calendar source returned events: ${JSON.stringify(sourceStatus)}`);
-          if (!(sourceStatus.mergedEvents > 0)) throw new Error('Scraped calendar consensus produced no merged events');
+          if (!sourceStatus?.sources?.myfxbook || !sourceStatus?.sources?.fxstreet || !sourceStatus?.sources?.cnbc) throw new Error('Per-source calendar status is incomplete');
+          if (!(sourceStatus.sources.myfxbook.ok || sourceStatus.sources.fxstreet.ok) || !(sourceStatus.mergedEvents > 0)) throw new Error(`No primary calendar source returned events: ${JSON.stringify(sourceStatus)}`);
 
           const calendar = await getJson('/api/calendar?days=7&importance=1');
-          if (!Array.isArray(calendar?.events) || calendar.events.length < 1) throw new Error('Cached scraped economic calendar returned no upcoming events');
-          if (calendar?.mode !== 'scraped-calendar-consensus') throw new Error('Public calendar endpoint is not serving scraped consensus state');
+          if (!Array.isArray(calendar?.events) || calendar.events.length < 1) throw new Error('Cached scraped economic calendar returned no events');
+          if (calendar?.mode !== 'scraped-calendar-consensus') throw new Error('Calendar endpoint is not using scraped consensus state');
+          if (!calendar?.analytics?.fxstreetDeviation || !calendar?.analytics?.normalizedSurprise || !calendar?.analytics?.revisionDelta) throw new Error('Calendar analytics flags are incomplete');
+
+          const signals = await getJson('/api/session-signals');
+          if (!Array.isArray(signals?.sessions) || signals.sessions.length !== 4) throw new Error(`Expected four session blocks, got ${signals?.sessions?.length ?? 0}`);
+          for (const id of ['asia','london','new-york','overlap']) {
+            const session = signals.sessions.find((item) => item.id === id);
+            if (!session || !Array.isArray(session.signals) || session.signals.length < 4) throw new Error(`Session signals missing for ${id}`);
+            if (session.signals.some((signal) => !['BUY','SELL','WAIT'].includes(signal.direction))) throw new Error(`Invalid signal direction in ${id}`);
+          }
 
           const acquisition = await getJson('/api/acquisition/catalog');
           if (!Array.isArray(acquisition?.methods) || acquisition.methods.length < 10) throw new Error('Acquisition method stack is incomplete');
           const requiredSources = ['myfxbook-calendar', 'fxstreet-calendar', 'cnbc-economy'];
-          if (!Array.isArray(acquisition?.sources) || !requiredSources.every((id) => acquisition.sources.some((source) => source.id === id))) throw new Error('Acquisition source registry is missing one of the requested calendar scrapers');
-          if (acquisition?.limits?.externalSubrequestsPerInvocation > 45) throw new Error('Acquisition subrequest guard exceeds safety target');
-          if (acquisition?.limits?.collectorMaxConcurrentConnections > 5) throw new Error('Acquisition connection guard exceeds five');
-          if (acquisition?.status?.browserBudget?.softLimitSeconds > 480) throw new Error('Browser Run safety budget exceeds 480 seconds/day');
+          if (!Array.isArray(acquisition?.sources) || !requiredSources.every((id) => acquisition.sources.some((source) => source.id === id))) throw new Error('Calendar source registry is incomplete');
 
           await new Promise((resolve, reject) => {
             if (typeof WebSocket === 'undefined') return reject(new Error('Node runner has no WebSocket implementation'));
@@ -136,5 +125,5 @@ jobs:
             ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket verification failed')); });
           });
 
-          console.log(`FXGA verification passed: ${catalog.total} FRED series, ${calendar.events.length} cached calendar events, calendar sources=${JSON.stringify(sourceStatus.sources)}.`);
+          console.log(`FXGA verification passed: ${catalog.total} important FRED series, ${calendar.events.length} calendar events, ${signals.sessions.length} session signal blocks.`);
           NODE
