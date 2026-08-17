@@ -1,6 +1,7 @@
 import base, { FxgaCoordinator } from './index';
 import { buildEconomyAnalysis } from './analysis/economies';
-import type { Env, MacroObservation } from './types';
+import { buildSessionSignals } from './analysis/sessions';
+import type { CalendarEvent, Env, MacroObservation } from './types';
 
 export { FxgaCoordinator };
 
@@ -12,6 +13,10 @@ function securityHeaders() {
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
   };
+}
+
+function coordinator(env: Env) {
+  return env.FXGA_COORDINATOR.getByName('global-calendar-v3');
 }
 
 function groupedNativeFallback(observations: MacroObservation[]) {
@@ -38,16 +43,33 @@ function groupedNativeFallback(observations: MacroObservation[]) {
   };
 }
 
+async function schedulerPayload(env: Env) {
+  const response = await coordinator(env).fetch('https://fxga-coordinator.internal/scheduler/state?bootstrap=1');
+  if (!response.ok) throw new Error(`Scheduler state returned ${response.status}`);
+  return await response.json() as Record<string, any>;
+}
+
+function schedulerEvents(scheduler: Record<string, any>) {
+  const runtimes = [...(scheduler.active ?? []), ...(scheduler.upcoming ?? []), ...(scheduler.recent ?? [])];
+  const seen = new Set<string>();
+  const events: CalendarEvent[] = [];
+  for (const runtime of runtimes) {
+    const event = runtime?.event as CalendarEvent | undefined;
+    if (!event || seen.has(event.id)) continue;
+    seen.add(event.id);
+    events.push(event);
+  }
+  return events;
+}
+
 async function globalMacroPayload(env: Env) {
-  const coordinator = env.FXGA_COORDINATOR.getByName('global-calendar-v3');
+  const durable = coordinator(env);
   if (env.COLLECTOR_MODE === 'external-webhook') {
-    const upstream = await coordinator.fetch('https://fxga-coordinator.internal/collector/global-macro');
+    const upstream = await durable.fetch('https://fxga-coordinator.internal/collector/global-macro');
     if (!upstream.ok) throw new Error(`External global macro state returned ${upstream.status}`);
     return await upstream.json() as Record<string, any>;
   }
-  const schedulerResponse = await coordinator.fetch('https://fxga-coordinator.internal/scheduler/state?bootstrap=1');
-  if (!schedulerResponse.ok) throw new Error('Global macro state unavailable');
-  const scheduler = await schedulerResponse.json() as Record<string, any>;
+  const scheduler = await schedulerPayload(env);
   const observations = Array.isArray(scheduler?.baseline?.observations) ? scheduler.baseline.observations as MacroObservation[] : [];
   return groupedNativeFallback(observations);
 }
@@ -94,6 +116,22 @@ export default {
         });
       } catch (error) {
         return Response.json({ error: error instanceof Error ? error.message : 'Economy analysis unavailable' }, { status: 503, headers: securityHeaders() });
+      }
+    }
+
+    if (url.pathname === '/api/session-signals') {
+      if (request.method !== 'GET') return Response.json({ error: 'Method not allowed' }, { status: 405, headers: securityHeaders() });
+      try {
+        const [scheduler, globalMacro] = await Promise.all([schedulerPayload(env), globalMacroPayload(env)]);
+        if (!scheduler?.baseline?.analysis) throw new Error('Macro baseline is not initialized');
+        const observations = flattenEconomyObservations(globalMacro);
+        const economyAnalysis = buildEconomyAnalysis(observations);
+        const intelligence = buildSessionSignals(scheduler.baseline.analysis, schedulerEvents(scheduler), new Date(), economyAnalysis.economies);
+        return Response.json({ ...intelligence, collectorMode: globalMacro.mode, economyObservationCount: observations.length }, {
+          headers: { ...securityHeaders(), 'Cache-Control': 'public, max-age=30' },
+        });
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : 'Session intelligence unavailable' }, { status: 503, headers: securityHeaders() });
       }
     }
 
