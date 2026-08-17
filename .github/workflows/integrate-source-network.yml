@@ -1,6 +1,6 @@
 name: Integrate Institutional Source Network
 
-# revision 2: rebase-safe integration
+# revision 3: rerun after stylesheet validation repair
 on:
   push:
     paths:
