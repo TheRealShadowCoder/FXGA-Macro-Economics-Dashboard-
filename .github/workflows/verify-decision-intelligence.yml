@@ -13,31 +13,49 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Verify FXGA 9705 decision engine and frozen-audit contract
+      - name: Verify FXGA critical decision matrix and frozen-audit contract
         run: |
           node <<'NODE'
           const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
-          async function get(path){const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,800)}`);return JSON.parse(t);}
+          async function get(path){const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,900)}`);return JSON.parse(t);}
           const intel=await get('/api/super-economist');
+          if(intel.schemaVersion!==4)throw new Error(`Expected intelligence schema v4, got ${intel.schemaVersion}`);
           if(intel.registry?.totalMethods!==9705||intel.registry?.totalFamilies!==150)throw new Error('FXGA 9705 registry contract failed');
           if(intel.registry?.provenance?.sourceNative!==7705||intel.registry?.provenance?.reconstructedDiagnostics!==2000)throw new Error('Registry provenance contract failed');
-          if(!Array.isArray(intel.pipeline)||intel.pipeline.join('|')!=='independent-family-collapse|economic-actual|market-reaction|trade-probability|BUY-SELL-WAIT|frozen-audit')throw new Error('Master decision pipeline changed');
+          const requiredPipeline=['independent-family-collapse','economic-actual','central-bank-reaction','decayed-release-surprise','official-narrative','contradiction-audit','counterfactual-sensitivity','trade-probability','BUY-SELL-WAIT','frozen-audit'];
+          for(const stage of requiredPipeline)if(!intel.pipeline?.includes(stage))throw new Error(`Missing pipeline stage ${stage}`);
           if(intel.executionLocation!=='Google Cloud Run')throw new Error('Super Economist is not running on Google Cloud');
-          if(intel.researchGates?.tau!==0.60||intel.researchGates?.qMin!==60||intel.researchGates?.eventEdgeMin!==60||intel.researchGates?.waitFirstClass!==true)throw new Error('Research gate contract changed');
-          if(intel.edgeFormula?.forecast!==0.30||intel.edgeFormula?.surprise!==0.25||intel.edgeFormula?.pricingGap!==0.20||intel.edgeFormula?.positioning!==0.15||intel.edgeFormula?.technical!==0.10)throw new Error('Event Edge weighting changed');
+          if(intel.researchGates?.waitFirstClass!==true||intel.researchGates?.minimumDecisionConfidence!==38||intel.researchGates?.dynamicThreshold!==true)throw new Error('Critical decision gates changed');
+          const edge=intel.edgeFormula||{};
+          if(edge.structure!==0.44||edge.policy!==0.26||edge.release!==0.18||edge.narrative!==0.12||edge.marketConfirmation!==0)throw new Error('Critical matrix component weights changed');
           if(intel.coverage?.registeredMethods!==9705||intel.coverage?.registeredFamilies!==150)throw new Error('Coverage registry totals missing');
           if(!(intel.coverage?.eligibleMethods>0)||intel.coverage.eligibleMethods>9705)throw new Error('Data-eligibility accounting invalid');
-          const economy=intel.economyAnalysis;
-          if(economy?.economies?.length!==5)throw new Error('Five economy states missing');
-          const signals=intel.sessionSignals;
+          if(intel.economyAnalysis?.economies?.length!==5)throw new Error('Five economy states missing');
+
+          const signals=intel.sessionSignals,matrix=intel.intelligenceMatrix;
+          if(!matrix?.equations?.pairScore||!matrix?.equations?.confidence||!matrix?.equations?.decision)throw new Error('Decision equations missing');
+          if(!Array.isArray(matrix.criticalThinkingRules)||matrix.criticalThinkingRules.length<5)throw new Error('Critical-thinking rules missing');
           if(!Array.isArray(signals?.currencyStates)||signals.currencyStates.length!==5)throw new Error('Five ranked currency states missing');
-          if(!Array.isArray(signals?.rankedOpportunities)||signals.rankedOpportunities.length<8)throw new Error('Opportunity board incomplete');
-          const all=(signals.sessions||[]).flatMap(s=>s.signals||[]);
-          for(const symbol of ['EURUSD','GBPUSD','USDJPY','EURGBP','USDZAR','EURZAR','GBPZAR','XAUUSD'])if(!all.some(x=>x.symbol===symbol))throw new Error(`Missing ${symbol}`);
-          for(const signal of all){if(!['BUY','SELL','WAIT'].includes(signal.direction))throw new Error(`${signal.symbol} invalid direction`);if(!['WAIT_EVENT','NO_MACRO_EDGE','AWAIT_TECHNICAL_CONFIRMATION'].includes(signal.executionGate))throw new Error(`${signal.symbol} invalid gate`);if(signal.risk==='event-lockout'&&signal.direction!=='WAIT')throw new Error(`${signal.symbol} violated event lockout`);}
-          if(!intel.specialEventModels?.fomc||!intel.specialEventModels?.nfp||!intel.specialEventModels?.inflation)throw new Error('FOMC/NFP/inflation source-native models missing');
-          if(Number(intel.specialEventModels.fomc.components?.inflationPressure?.weight)!==0.30||Number(intel.specialEventModels.fomc.components?.labourPressure?.weight)!==0.25)throw new Error('FOMC source-native weights changed');
-          const nw=intel.specialEventModels.nfp.weights||{};
-          if(nw.weeklyClaims!==0.20||nw.joltsLabourDemand!==0.15||nw.ismEmploymentBreadth!==0.15||nw.revisionRisk!==0.10)throw new Error('NFP source-native weights changed');
-          console.log('FXGA 9705 Google decision intelligence verified:',JSON.stringify({eligibleMethods:intel.coverage.eligibleMethods,activeFamilies:intel.coverage.activeFamilies,frozen:intel.audit?.frozenThisRun,scored:intel.audit?.scoredThisRun,actionable:signals.decisionSummary?.actionableCount}));
+          const ranked=signals?.rankedOpportunities||[],required=['EURUSD','GBPUSD','USDJPY','EURGBP','USDZAR','EURZAR','GBPZAR','XAUUSD'];
+          if(ranked.length!==required.length)throw new Error(`Expected exactly ${required.length} unique ranked opportunities, got ${ranked.length}`);
+          if(new Set(ranked.map(x=>x.symbol)).size!==ranked.length)throw new Error('Ranked opportunities contain session duplicates');
+          for(const symbol of required)if(!ranked.some(x=>x.symbol===symbol))throw new Error(`Missing ${symbol}`);
+          for(const signal of ranked){
+            if(!['BUY','SELL','WAIT'].includes(signal.direction))throw new Error(`${signal.symbol} invalid direction`);
+            if(!['WAIT_EVENT','NO_MACRO_EDGE','AWAIT_TECHNICAL_CONFIRMATION'].includes(signal.executionGate))throw new Error(`${signal.symbol} invalid gate`);
+            if(signal.risk==='event-lockout'&&signal.direction!=='WAIT')throw new Error(`${signal.symbol} violated event lockout`);
+            for(const k of ['structuralDivergence','policyDivergence','releaseDivergence','narrativeDivergence'])if(!Number.isFinite(signal.components?.[k]))throw new Error(`${signal.symbol} missing ${k}`);
+            if(signal.components?.releaseDivergence===undefined)throw new Error(`${signal.symbol} release divergence placeholder returned`);
+            if(!Number.isFinite(signal.threshold)||signal.threshold<10)throw new Error(`${signal.symbol} dynamic threshold invalid`);
+            const p=signal.probabilities||{},sum=Number(p.buy||0)+Number(p.sell||0)+Number(p.wait||0);if(Math.abs(sum-1)>.015)throw new Error(`${signal.symbol} probabilities do not sum to one`);
+            const ct=signal.criticalThinking;if(!ct?.thesis||!ct?.counterThesis||!Array.isArray(ct.whatWouldChangeMyMind)||ct.whatWouldChangeMyMind.length<3||!Array.isArray(ct.scenarioSensitivity)||ct.scenarioSensitivity.length<4)throw new Error(`${signal.symbol} critical-thinking trace incomplete`);
+            if(!Number.isFinite(signal.equationTrace?.agreement)||!Number.isFinite(signal.equationTrace?.dataQuality))throw new Error(`${signal.symbol} equation trace incomplete`);
+          }
+          for(const session of signals.sessions||[])if((session.signals||[]).length!==required.length)throw new Error(`${session.id} session pair matrix incomplete`);
+          if(!intel.specialEventModels?.fomc||!intel.specialEventModels?.nfp||!intel.specialEventModels?.inflation)throw new Error('FOMC/NFP/inflation models missing');
+          if(Number(intel.specialEventModels.fomc.components?.federalReserveCommunication?.score)===0&&Number(signals.currencyStates.find(x=>x.currency==='USD')?.narrativeScore)!==0)throw new Error('FOMC communication failed to consume official narrative');
+          const health=intel.operationalHealth;if(!health||health.macroObservations<100||health.calendarEvents<1)throw new Error('Operational data health incomplete');
+          for(const economy of ['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN'])if(Number(health.economyCounts?.[economy]||0)<5)throw new Error(`${economy} operational coverage too low`);
+          const acquisition=await fetch(base+'/api/acquire?source=fred');if(acquisition.status!==409)throw new Error('Cloudflare direct acquisition must remain disabled');
+          console.log('FXGA v4 critical intelligence verified:',JSON.stringify({eligibleMethods:intel.coverage.eligibleMethods,activeFamilies:intel.coverage.activeFamilies,observations:health.macroObservations,staleRetained:health.staleMacroRetained,sourceChecks:health.sourceChecks?.length,actionable:signals.decisionSummary?.actionableCount,wait:signals.decisionSummary?.waitCount}));
           NODE
