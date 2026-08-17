@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Firestore } from '@google-cloud/firestore';
-import { buildSuperEconomist, registrySummary, searchRegistry, TARGET_ECONOMIES } from './super-economist.js';
+import { buildSuperEconomist, registrySummary, searchRegistry } from './super-economist.js';
+import { TARGET_ECONOMIES } from './super-economist-core.js';
 import { fetchOfficialNews } from './official-news.js';
 import { FRED_BASE_IDS } from './global-fred.js';
 
