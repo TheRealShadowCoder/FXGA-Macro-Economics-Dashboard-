@@ -107,6 +107,13 @@ jobs:
             --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
             --role=roles/secretmanager.secretAccessor >/dev/null
 
+      - name: Grant runtime self actAs for OIDC Cloud Tasks
+        run: |
+          gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SERVICE_ACCOUNT" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role=roles/iam.serviceAccountUser \
+            --project="$GCP_PROJECT_ID" >/dev/null
+
       - name: Build and push container
         run: |
           IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/$SERVICE:${GITHUB_SHA}"
