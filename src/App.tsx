@@ -131,11 +131,17 @@ export default function App() {
       socket.onopen = () => { reconnectAttempt.current = 0; setLiveStatus('connected'); };
       socket.onmessage = (event) => {
         try {
-          const payload = JSON.parse(String(event.data)) as { type?: string; sourceId?: string; fetchedAt?: string };
-          if (payload.type === 'source-update') {
-            setLastLiveEvent(`${payload.sourceId || 'Source'} updated ${payload.fetchedAt ? new Date(payload.fetchedAt).toLocaleTimeString() : 'now'}`);
+          const payload = JSON.parse(String(event.data)) as { type?: string; sourceId?: string; fetchedAt?: string; updateType?: string; timestamp?: string };
+          if (payload.type === 'source-update' || payload.type === 'google-cloud-update') {
+            const source = payload.sourceId || payload.updateType || 'Google Cloud';
+            const updatedAt = payload.fetchedAt || payload.timestamp;
+            setLastLiveEvent(`${source} updated ${updatedAt ? new Date(updatedAt).toLocaleTimeString() : 'now'}`);
             setAcquisitionCatalog(null);
             setSignals(null);
+            setAnalysis(null);
+            setCatalog(null);
+            setUniverseSeries([]);
+            void load();
           }
         } catch { /* Ignore non-JSON WebSocket messages. */ }
       };
@@ -165,7 +171,7 @@ export default function App() {
       .catch((err) => { if (!cancelled) setAnalysisError(err instanceof Error ? err.message : 'Unable to calculate macro analysis'); })
       .finally(() => { if (!cancelled) setAnalysisLoading(false); });
     return () => { cancelled = true; };
-  }, [view, analysis, analysisLoading]);
+  }, [view, analysis]);
 
   useEffect(() => {
     if (view !== 'signals' || signals || signalsLoading) return;
@@ -176,7 +182,7 @@ export default function App() {
       .catch((err) => { if (!cancelled) setSignalsError(err instanceof Error ? err.message : 'Unable to calculate session signals'); })
       .finally(() => { if (!cancelled) setSignalsLoading(false); });
     return () => { cancelled = true; };
-  }, [view, signals, signalsLoading]);
+  }, [view, signals]);
 
   useEffect(() => {
     if (view !== 'universe' || catalog || catalogLoading) return;
@@ -187,7 +193,7 @@ export default function App() {
       .catch((err) => { if (!cancelled) setCatalogError(err instanceof Error ? err.message : 'Unable to load FRED catalog'); })
       .finally(() => { if (!cancelled) setCatalogLoading(false); });
     return () => { cancelled = true; };
-  }, [view, catalog, catalogLoading]);
+  }, [view, catalog]);
 
   useEffect(() => {
     if (view !== 'universe' || !catalog) return;
@@ -209,7 +215,7 @@ export default function App() {
       .catch((err) => { if (!cancelled) setAcquisitionError(err instanceof Error ? err.message : 'Unable to load acquisition engine'); })
       .finally(() => { if (!cancelled) setAcquisitionLoading(false); });
     return () => { cancelled = true; };
-  }, [view, acquisitionCatalog, acquisitionLoading]);
+  }, [view, acquisitionCatalog]);
 
   const filteredNews = useMemo(() => {
     const q = query.trim().toLowerCase();
