@@ -92,6 +92,7 @@ export interface AcquisitionDocument {
 }
 
 export type ReleaseOutcome = 'beat' | 'miss' | 'in-line' | 'pending' | 'no-consensus';
+export type CurrencyBias = 'bullish' | 'bearish' | 'neutral' | 'pending';
 export interface ReleaseProbabilities {
   beat: number;
   miss: number;
@@ -131,6 +132,39 @@ export interface CalendarEvent {
   fxstreetAnalytics?: FxstreetStyleAnalytics;
   relation?: boolean | null; betterThanExpected?: boolean; worseThanExpected?: boolean;
   analysisConfidence?: number; analysisNote?: string;
+  currencyBias?: CurrencyBias;
+  currencyBiasScore?: number;
+  biasConfidence?: number;
+  currencyBiasReason?: string;
+  comparisonBasis?: 'forecast' | 'previous' | 'none';
+  surpriseValue?: number;
+  interpretationFamily?: string;
+}
+
+export interface MarketQuote {
+  id: string;
+  symbol: string;
+  label: string;
+  sourceName?: string;
+  assetClass?: string;
+  quoteKind?: 'price' | 'yield' | string;
+  currency?: string | null;
+  exchange?: string | null;
+  price: number | null;
+  change?: number | null;
+  changePercent?: number | null;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  previousClose?: number | null;
+  volume?: number | null;
+  source?: string;
+  sourceUrl?: string;
+  fetchedAt?: string;
+  mode?: string;
+  stale?: boolean;
+  staleSince?: string | null;
+  error?: string;
 }
 
 export interface ReleaseImpactAsset {
@@ -169,5 +203,11 @@ export interface NewsItem {
 }
 
 export interface DashboardPayload {
-  generatedAt: string; macro: MacroObservation[]; calendar: CalendarEvent[]; news: NewsItem[]; sources: SourceInfo[]; errors: Array<{ provider: string; message: string }>;
+  generatedAt: string;
+  macro: MacroObservation[];
+  calendar: CalendarEvent[];
+  market?: MarketQuote[];
+  news: NewsItem[];
+  sources: SourceInfo[];
+  errors: Array<{ provider: string; message: string }>;
 }
