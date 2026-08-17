@@ -1,0 +1,48 @@
+name: Apply FXGA CNBC and Calendar Upgrade
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-data-upgrade.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fxga-data-upgrade
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Apply source upgrade
+        run: node scripts/apply-data-upgrade.mjs
+
+      - name: Validate patched JavaScript
+        run: |
+          node --check cloud-run-collector/src/cnbc-market.js
+          node --check cloud-run-collector/src/server-v2.js
+
+      - name: Commit integrated upgrade
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No source changes were produced."
+            exit 0
+          fi
+          git add cloud-run-collector/src/server-v2.js worker/index-v3.ts
+          git commit -m "Add CNBC market prices and 7-day calendar intelligence"
+          git push origin HEAD:main
