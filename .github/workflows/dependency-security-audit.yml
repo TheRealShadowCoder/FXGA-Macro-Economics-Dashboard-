@@ -1,0 +1,54 @@
+name: Audit FXGA Dependency Security
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'package.json'
+      - 'cloud-run-collector/package.json'
+      - '.github/dependency-security-audit.trigger'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Audit application dependencies
+        run: |
+          npm install --ignore-scripts --no-fund --no-audit
+          npm audit --json > /tmp/root-audit.json || true
+
+      - name: Audit data-service dependencies
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts --no-fund --no-audit
+          npm audit --json > /tmp/collector-audit.json || true
+
+      - name: Summarize dependency risk
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const read=(p)=>{try{return JSON.parse(fs.readFileSync(p,'utf8'))}catch{return {metadata:{vulnerabilities:{}}}}};
+          const root=read('/tmp/root-audit.json'),collector=read('/tmp/collector-audit.json');
+          const counts=(x)=>x?.metadata?.vulnerabilities||{};
+          const items=(x)=>Object.entries(x?.vulnerabilities||{}).map(([name,v])=>({name,severity:v.severity,isDirect:v.isDirect,via:(v.via||[]).map(z=>typeof z==='string'?z:z?.title).filter(Boolean),range:v.range,fixAvailable:v.fixAvailable}));
+          const report={application:{counts:counts(root),items:items(root)},dataService:{counts:counts(collector),items:items(collector)}};
+          console.log(JSON.stringify(report,null,2));
+          const lines=['# FXGA Dependency Security Audit',''];
+          for(const [scope,data] of Object.entries(report)){
+            lines.push(`## ${scope}`,'',`* Info: ${data.counts.info||0}`,`* Low: ${data.counts.low||0}`,`* Moderate: ${data.counts.moderate||0}`,`* High: ${data.counts.high||0}`,`* Critical: ${data.counts.critical||0}`,'');
+            for(const item of data.items)lines.push(`* **${item.name}** — ${item.severity}${item.isDirect?' — direct':' — transitive'} — ${item.via.join('; ')||'dependency advisory'}`);
+            lines.push('');
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join('\n'));
+          const critical=(report.application.counts.critical||0)+(report.dataService.counts.critical||0);
+          if(critical>0)throw new Error(`Critical dependency vulnerabilities detected: ${critical}`);
+          NODE
