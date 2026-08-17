@@ -1,5 +1,5 @@
 import base, { FxgaCoordinator } from './index';
-import { buildEconomyAnalysis } from './analysis/economies';
+import { buildEconomyAnalysis, type EconomyMacroState } from './analysis/economies';
 import { buildSessionSignals } from './analysis/sessions';
 import type { CalendarEvent, Env, MacroObservation } from './types';
 
@@ -92,6 +92,43 @@ function flattenEconomyObservations(payload: Record<string, any>) {
   return [...byId.values()];
 }
 
+function economyQuality(state: EconomyMacroState) {
+  const dimensionsCovered = state.dimensions.filter((dimension) => dimension.coverage > 0).length;
+  const eligible = state.observationCount >= 3 && dimensionsCovered >= 2 && state.confidence >= 35;
+  return { eligible, dimensionsCovered, quality: eligible ? 'structural' as const : 'provisional' as const };
+}
+
+function economyPolicyScore(state: EconomyMacroState) {
+  const value = (id: string) => state.dimensions.find((dimension) => dimension.id === id)?.score ?? 0;
+  const raw = value('inflation') * 0.38 + value('labour') * 0.18 + value('growth') * 0.12 + value('policy') * 0.32;
+  return Math.round(Math.max(-100, Math.min(100, raw)));
+}
+
+function displayCurrencyStates(states: EconomyMacroState[]) {
+  return states
+    .map((state) => {
+      const quality = economyQuality(state);
+      return {
+        currency: state.currency,
+        economy: state.label,
+        centralBank: state.centralBank,
+        regime: state.regime,
+        policyStance: state.policyStance,
+        policyScore: economyPolicyScore(state),
+        score: state.currencyScore,
+        confidence: state.confidence,
+        observationCount: state.observationCount,
+        dimensionsCovered: quality.dimensionsCovered,
+        quality: quality.quality,
+      };
+    })
+    .sort((a, b) => {
+      if (a.quality !== b.quality) return a.quality === 'structural' ? -1 : 1;
+      return b.score - a.score;
+    })
+    .map((state, index) => ({ ...state, rank: index + 1 }));
+}
+
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -126,8 +163,21 @@ export default {
         if (!scheduler?.baseline?.analysis) throw new Error('Macro baseline is not initialized');
         const observations = flattenEconomyObservations(globalMacro);
         const economyAnalysis = buildEconomyAnalysis(observations);
-        const intelligence = buildSessionSignals(scheduler.baseline.analysis, schedulerEvents(scheduler), new Date(), economyAnalysis.economies);
-        return Response.json({ ...intelligence, collectorMode: globalMacro.mode, economyObservationCount: observations.length }, {
+        const eligibleEconomies = economyAnalysis.economies.filter((state) => economyQuality(state).eligible);
+        const provisionalEconomies = economyAnalysis.economies.filter((state) => !economyQuality(state).eligible);
+        const intelligence = buildSessionSignals(scheduler.baseline.analysis, schedulerEvents(scheduler), new Date(), eligibleEconomies);
+        return Response.json({
+          ...intelligence,
+          currencyStates: displayCurrencyStates(economyAnalysis.economies),
+          collectorMode: globalMacro.mode,
+          economyObservationCount: observations.length,
+          dataQuality: {
+            minimumStructuralObservations: 3,
+            minimumCoveredDimensions: 2,
+            structuralEconomies: eligibleEconomies.map((state) => state.id),
+            provisionalEconomies: provisionalEconomies.map((state) => state.id),
+          },
+        }, {
           headers: { ...securityHeaders(), 'Cache-Control': 'public, max-age=30' },
         });
       } catch (error) {
