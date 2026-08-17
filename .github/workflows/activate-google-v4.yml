@@ -1,4 +1,4 @@
-name: Activate Google Cloud FXGA 9705 Engine
+name: Activate FXGA Production Intelligence
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ env:
   GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
 
 jobs:
-  activate-v4:
+  activate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -25,7 +25,7 @@ jobs:
           node-version: '24'
       - run: npm install
 
-      - name: Require activation configuration
+      - name: Require production configuration
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER }}
@@ -46,13 +46,13 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
 
       - id: service
-        name: Resolve private Google Cloud Run service
+        name: Resolve private production data service
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
         run: |
           gcloud config set project "$PROJECT_ID"
           SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
-          test -n "$SERVICE_URL" || { echo '::error::Cloud Run service missing'; exit 1; }
+          test -n "$SERVICE_URL" || { echo '::error::Production data service missing'; exit 1; }
           echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
 
@@ -66,7 +66,7 @@ jobs:
           id_token_audience: ${{ steps.service.outputs.url }}
           id_token_include_email: true
 
-      - name: Prove data acquisition and build critical intelligence
+      - name: Refresh production data and intelligence
         env:
           TOKEN: ${{ steps.invoke.outputs.id_token }}
         run: |
@@ -80,34 +80,38 @@ jobs:
           req health GET "$SERVICE_URL/health"
           node - <<'NODE'
           const h=require('/tmp/health.json');
-          if(!h.ok||Number(h.version)<4)throw new Error(`Expected Google collector v4+, got ${h.version}`);
-          if(h.architecture!=='google-cloud-only-acquisition-and-intelligence')throw new Error('Google-only architecture marker missing');
-          if(h.methodRegistry?.totalMethods!==9705||h.methodRegistry?.totalFamilies!==150)throw new Error('9705 registry health contract failed');
+          if(!h.ok||Number(h.version)<4)throw new Error(`Production data service version is invalid: ${h.version}`);
+          if(h.architecture!=='google-cloud-only-acquisition-and-intelligence')throw new Error('Production acquisition architecture marker missing');
+          if(h.methodRegistry?.totalMethods!==9705||h.methodRegistry?.totalFamilies!==150)throw new Error('Internal methodology registry contract failed');
           NODE
 
           req bootstrap POST "$SERVICE_URL/bootstrap" '{}'
+          req market POST "$SERVICE_URL/market-sync" '{}'
           req prestate GET "$SERVICE_URL/state"
           if node - <<'NODE'
           const s=require('/tmp/prestate.json'),m=s?.macro?.payload,i=s?.intelligence?.payload;
           const fresh=Date.now()-Date.parse(m?.generatedAt||0)<6*3600000;
           process.exit((m?.observations?.length>=100&&fresh&&i?.schemaVersion>=4)?0:1);
           NODE
-          then echo 'Fresh Google macro state already present.'; else req macro POST "$SERVICE_URL/macro-sync?mode=full" '{"mode":"full"}'; fi
+          then echo 'Fresh macro state already present.'; else req macro POST "$SERVICE_URL/macro-sync?mode=full" '{"mode":"full"}'; fi
 
           req intelligence POST "$SERVICE_URL/refresh-intelligence" '{"forceNews":true}'
           req state GET "$SERVICE_URL/state"
           node - <<'NODE'
-          const s=require('/tmp/state.json'),events=s?.calendar?.payload?.events||[],obs=s?.macro?.payload?.observations||[],i=s?.intelligence?.payload,h=i?.operationalHealth||{},d=i?.sessionSignals;
-          if(events.length<1)throw new Error('Google calendar empty');
-          if(obs.length<100)throw new Error(`Google macro state too small: ${obs.length}`);
+          const s=require('/tmp/state.json'),events=s?.calendar?.payload?.events||[],obs=s?.macro?.payload?.observations||[],i=s?.intelligence?.payload,h=i?.operationalHealth||{},d=i?.sessionSignals,t=s?.technical?.payload;
+          if(events.length<1)throw new Error('Economic calendar is empty');
+          if(obs.length<100)throw new Error(`Macro state too small: ${obs.length}`);
           if(i?.schemaVersion!==4)throw new Error(`Expected schema v4, got ${i?.schemaVersion}`);
-          if(i?.registry?.totalMethods!==9705||i?.registry?.totalFamilies!==150)throw new Error('9705 registry missing');
-          if(i?.economyAnalysis?.economies?.length!==5)throw new Error('Five-economy engine missing');
+          if(i?.registry?.totalMethods!==9705||i?.registry?.totalFamilies!==150)throw new Error('Internal methodology registry missing');
+          if(i?.economyAnalysis?.economies?.length!==5)throw new Error('Five-economy research layer missing');
           if(!i?.intelligenceMatrix?.equations?.pairScore||!i?.intelligenceMatrix?.equations?.decision)throw new Error('Critical decision equations missing');
           if(d?.rankedOpportunities?.length!==8||new Set(d.rankedOpportunities.map(x=>x.symbol)).size!==8)throw new Error('Unique pair matrix incomplete');
           if(h.macroObservations<100||h.calendarEvents<1)throw new Error('Operational health incomplete');
           for(const e of ['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN'])if(Number(h.economyCounts?.[e]||0)<5)throw new Error(`${e} coverage too low`);
-          console.log(JSON.stringify({events:events.length,observations:obs.length,news:h.officialNewsItems,fredFailures:h.fredFailures,staleRetained:h.staleMacroRetained,eligible:i.coverage?.eligibleMethods,activeFamilies:i.coverage?.activeFamilies,actionable:d.decisionSummary?.actionableCount,wait:d.decisionSummary?.waitCount}));
+          if(!t?.assets||typeof t.assets!=='object')throw new Error('Technical market structure snapshot missing');
+          const technicalAssets=Object.keys(t.assets).length;
+          if(technicalAssets<5)throw new Error(`Technical asset coverage too low: ${technicalAssets}`);
+          console.log(JSON.stringify({events:events.length,observations:obs.length,news:h.officialNewsItems,fredFailures:h.fredFailures,staleRetained:h.staleMacroRetained,technicalAssets,technical:t.counts}));
           NODE
 
       - id: replay_auth
@@ -120,27 +124,33 @@ jobs:
           id_token_audience: ${{ steps.service.outputs.url }}
           id_token_include_email: true
 
-      - name: Replay Google state to passive Cloudflare
+      - name: Publish verified state to application edge
         env:
           TOKEN: ${{ steps.replay_auth.outputs.id_token }}
           WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
         run: |
-          curl -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state" > /tmp/google-state.json
+          curl -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state" > /tmp/production-state.json
           node <<'NODE'
-          const fs=require('fs'),crypto=require('crypto'),state=JSON.parse(fs.readFileSync('/tmp/google-state.json','utf8')),secret=process.env.WEBHOOK_SECRET,url='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook';
-          async function send(type,payload){const body=JSON.stringify({version:1,type,generatedAt:new Date().toISOString(),payload}),timestamp=String(Date.now()),requestId=crypto.randomUUID(),signature=crypto.createHmac('sha256',secret).update(`${timestamp}.${requestId}.${body}`).digest('hex'),r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-FXGA-Timestamp':timestamp,'X-FXGA-Request-Id':requestId,'X-FXGA-Signature':`sha256=${signature}`},body}),text=await r.text();if(!r.ok)throw new Error(`${type} ${r.status}: ${text.slice(0,500)}`);console.log(`${type}: ${r.status}`);}
-          (async()=>{await send('calendar-snapshot',state.calendar.payload);await send('macro-snapshot',state.macro.payload);await send('intelligence-snapshot',state.intelligence.payload);})().catch(err=>{console.error(err);process.exit(1);});
+          const fs=require('fs'),crypto=require('crypto'),state=JSON.parse(fs.readFileSync('/tmp/production-state.json','utf8')),secret=process.env.WEBHOOK_SECRET,url='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook';
+          async function send(type,payload){if(!payload)return;const body=JSON.stringify({version:1,type,generatedAt:new Date().toISOString(),payload}),timestamp=String(Date.now()),requestId=crypto.randomUUID(),signature=crypto.createHmac('sha256',secret).update(`${timestamp}.${requestId}.${body}`).digest('hex'),r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-FXGA-Timestamp':timestamp,'X-FXGA-Request-Id':requestId,'X-FXGA-Signature':`sha256=${signature}`},body}),text=await r.text();if(!r.ok)throw new Error(`${type} ${r.status}: ${text.slice(0,500)}`);console.log(`${type}: ${r.status}`);}
+          (async()=>{await send('calendar-snapshot',state.calendar?.payload);await send('macro-snapshot',state.macro?.payload);await send('market-snapshot',state.market?.payload);await send('technical-snapshot',state.technical?.payload);await send('intelligence-snapshot',state.intelligence?.payload);})().catch(err=>{console.error(err);process.exit(1);});
           NODE
 
-      - name: Verify passive edge and live v4 intelligence
+      - name: Verify live production contracts
         run: |
           node <<'NODE'
           const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
           async function get(path){const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,700)}`);return JSON.parse(t);}
           (async()=>{
             const health=await get('/api/health');for(const k of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests'])if(Number(health.safety?.[k]??-1)!==0)throw new Error(`${k} must remain zero`);
-            const intel=await get('/api/super-economist'),signals=await get('/api/session-signals');if(intel.schemaVersion!==4||intel.executionLocation!=='Google Cloud Run')throw new Error('v4 intelligence not live');if(signals.rankedOpportunities?.length!==8)throw new Error('v4 pair matrix not live');
-            const acq=await fetch(base+'/api/acquire?source=fred');if(acq.status!==409)throw new Error('Cloudflare acquisition unexpectedly enabled');
-            console.log(`V4 CUTOVER VERIFIED: ${intel.coverage?.eligibleMethods}/9705 eligible, ${signals.decisionSummary?.actionableCount} actionable, Cloudflare upstream requests = 0.`);
+            const intel=await get('/api/super-economist'),signals=await get('/api/session-signals'),technical=await get('/api/technical');
+            if(intel.schemaVersion!==4||intel.executionLocation!=='Google Cloud Run')throw new Error('Production intelligence is not live');
+            if(signals.rankedOpportunities?.length!==8)throw new Error('Pair matrix is not live');
+            if(!technical?.assets||Object.keys(technical.assets).length<5)throw new Error('Technical structure API is not live');
+            const eurusd=technical.assets.EURUSD;
+            if(!eurusd?.timeframes?.H1||!eurusd?.timeframes?.M5)throw new Error('EURUSD technical timeframe matrix is incomplete');
+            if(eurusd?.timeframes?.M1?.ready===true)throw new Error('One-minute structure must remain unavailable until a verified one-minute OHLC source is installed');
+            const acq=await fetch(base+'/api/acquire?source=fred');if(acq.status!==409)throw new Error('Application edge acquisition unexpectedly enabled');
+            console.log(`PRODUCTION VERIFIED: ${Object.keys(technical.assets).length} technical assets, ${technical.counts?.confirmed||0} confirmed structures, passive application edge.`);
           })().catch(err=>{console.error(err);process.exit(1);});
           NODE
