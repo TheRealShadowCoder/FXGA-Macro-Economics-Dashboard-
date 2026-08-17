@@ -71,7 +71,7 @@ nav button.active{
 .metric-card:hover{transform:translateY(-1px);border-color:rgba(201,163,93,.16)!important;background:linear-gradient(180deg,rgba(18,24,34,.96),rgba(9,13,19,.98))!important}
 .metric-value{font-variant-numeric:tabular-nums}
 
-.calendar-row{transition:background .16s ease;border-color .16s ease}
+.calendar-row{transition:background .16s ease,border-color .16s ease}
 .calendar-row:hover{background:rgba(255,255,255,.012)}
 .currency-bias{font-weight:700;letter-spacing:.035em;text-transform:uppercase;font-size:8px!important}
 .event-numbers span,.metric-value,.signal-score,.signal-summary-stat strong,.guard-grid strong{font-variant-numeric:tabular-nums}
