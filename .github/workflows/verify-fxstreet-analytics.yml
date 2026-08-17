@@ -12,6 +12,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
       - name: Verify live Google Cloud data contract
         run: |
           node <<'NODE'
@@ -30,7 +35,6 @@ jobs:
 
           const health = await getJson('/api/health');
           if (health?.collectorMode !== 'google-cloud-run-webhook') throw new Error(`Unexpected collectorMode: ${health?.collectorMode}`);
-          if (health?.executionLocation !== 'Google Cloud Run') throw new Error(`Unexpected executionLocation: ${health?.executionLocation}`);
           if (Number(health?.schemaVersion) !== 4) throw new Error(`Expected schemaVersion 4, got ${health?.schemaVersion}`);
           if (health?.configured?.browserRun !== false) throw new Error('Cloudflare browser acquisition must remain disabled');
           if (health?.configured?.calendarScraping !== false) throw new Error('Cloudflare calendar scraping must remain disabled');
@@ -39,6 +43,10 @@ jobs:
           if (Number(health?.safety?.normalStateUpstreamFredRequests ?? -1) !== 0) throw new Error('Cloudflare FRED upstream requests must remain zero');
           if (Number(health?.safety?.normalStateUpstreamNewsRequests ?? -1) !== 0) throw new Error('Cloudflare news upstream requests must remain zero');
           if (Number(health?.safety?.normalStateUpstreamMarketRequests ?? -1) !== 0) throw new Error('Cloudflare market upstream requests must remain zero');
+
+          const intelligence = await getJson('/api/super-economist');
+          if (intelligence?.executionLocation !== 'Google Cloud Run') throw new Error(`Unexpected intelligence executionLocation: ${intelligence?.executionLocation}`);
+          if (Number(intelligence?.schemaVersion) !== 4) throw new Error(`Expected intelligence schemaVersion 4, got ${intelligence?.schemaVersion}`);
 
           const acquisition = await getJson('/api/acquisition/catalog');
           if (acquisition?.policy?.bypassLogin !== false) throw new Error('Login-bypass policy regression');
