@@ -1,0 +1,141 @@
+name: Verify FXGA Full Macro Data Quality
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/force-data-quality-refresh.trigger'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  SERVICE: fxga-macro-collector
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - id: service
+        name: Resolve private production data service
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          test -n "$PROJECT_ID" || { echo '::error::GCP_PROJECT_ID is missing'; exit 1; }
+          gcloud config set project "$PROJECT_ID"
+          SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          test -n "$SERVICE_URL" || { echo '::error::Production data service missing'; exit 1; }
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+
+      - id: invoke
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service.outputs.url }}
+          id_token_include_email: true
+
+      - name: Force full macro refresh
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          STATUS=$(curl --max-time 900 -sS -o /tmp/full-macro.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{"mode":"full"}' \
+            "$SERVICE_URL/macro-sync?mode=full")
+          echo "full macro HTTP $STATUS"
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            cat /tmp/full-macro.json | head -c 2000
+            exit 1
+          fi
+          cat /tmp/full-macro.json
+
+      - name: Read classified production state
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          curl --max-time 60 -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state" > /tmp/state.json
+          node <<'NODE'
+          const fs=require('fs');
+          const state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8'));
+          const macro=state?.macro?.payload||{};
+          const q=macro.coverageQuality;
+          const d=macro.failureDiagnostics;
+          if(!q||!d)throw new Error('v4.4 macro data-quality diagnostics are missing');
+          if(Number(q.usableObservations||0)<100)throw new Error(`Usable macro observations too low: ${q.usableObservations}`);
+          if(Number(q.effectiveCoveragePercent||0)<75)throw new Error(`Effective macro coverage below safety floor: ${q.effectiveCoveragePercent}%`);
+          if(Number(d.total||0)!==Number((macro.failures||[]).length))throw new Error('Failure diagnostics do not reconcile with failure records');
+          const report={
+            generatedAt:macro.generatedAt,
+            requested:q.requested,
+            liveFetched:q.liveFetched,
+            retainedLastKnownGood:q.retainedLastKnownGood,
+            usableObservations:q.usableObservations,
+            unresolved:q.unresolved,
+            liveCoveragePercent:q.liveCoveragePercent,
+            effectiveCoveragePercent:q.effectiveCoveragePercent,
+            status:q.status,
+            failures:d.total,
+            retryable:d.retryable,
+            nonRetryable:d.nonRetryable,
+            byType:d.byType,
+            byEconomy:d.byEconomy,
+            byCategory:d.byCategory,
+            sampleFailures:(macro.failures||[]).slice(0,20),
+          };
+          console.log(JSON.stringify(report,null,2));
+          const lines=[
+            '# FXGA Full Macro Data Quality',
+            '',
+            `Generated: ${report.generatedAt}`,
+            '',
+            `* Requested: ${report.requested}`,
+            `* Live fetched: ${report.liveFetched}`,
+            `* Last-known-good retained: ${report.retainedLastKnownGood}`,
+            `* Usable observations: ${report.usableObservations}`,
+            `* Unresolved: ${report.unresolved}`,
+            `* Live coverage: ${report.liveCoveragePercent}%`,
+            `* Effective coverage: ${report.effectiveCoveragePercent}%`,
+            `* Status: ${report.status}`,
+            `* Failures: ${report.failures} (${report.retryable} retryable / ${report.nonRetryable} non-retryable)`,
+            '',
+            '## Failure types',
+            ...Object.entries(report.byType||{}).map(([k,v])=>`* ${k}: ${v}`),
+            '',
+            '## Economy impact',
+            ...Object.entries(report.byEconomy||{}).map(([k,v])=>`* ${k}: ${v}`),
+            '',
+            '## Category impact',
+            ...Object.entries(report.byCategory||{}).map(([k,v])=>`* ${k}: ${v}`),
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join('\n')+'\n');
+          NODE
+
+      - name: Verify public data-quality contract
+        run: |
+          node <<'NODE'
+          const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          (async()=>{
+            const r=await fetch(base+'/api/super-economist',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+            if(!r.ok)throw new Error(`Public research API ${r.status}`);
+            const x=await r.json(),q=x?.operationalHealth?.macroQuality;
+            if(!q)throw new Error('Public macro quality summary is not live');
+            if(Number(q.usableObservations||0)<100)throw new Error('Public usable macro coverage too low');
+            console.log('PUBLIC DATA QUALITY VERIFIED',JSON.stringify(q));
+          })().catch(err=>{console.error(err);process.exit(1);});
+          NODE
