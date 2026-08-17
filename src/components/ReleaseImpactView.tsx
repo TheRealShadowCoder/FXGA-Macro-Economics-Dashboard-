@@ -1,4 +1,5 @@
 import type { ReleaseImpactPayload } from '../lib/types';
+import './ReleaseImpactView.css';
 
 function probabilityEntries(probabilities: Record<string, number>) {
   return Object.entries(probabilities).map(([label, value]) => ({ label, value }));
