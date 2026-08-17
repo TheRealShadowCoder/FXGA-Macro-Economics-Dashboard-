@@ -68,7 +68,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 4f260a0775a3df407e08512610c9898b
-          wranglerVersion: '4.118.0'
+          wranglerVersion: '4.123.0'
           command: deploy
 
       - name: Verify passive application-edge contract
