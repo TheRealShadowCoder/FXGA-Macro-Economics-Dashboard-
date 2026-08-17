@@ -86,6 +86,18 @@ jobs:
           NODE
 
           req bootstrap POST "$SERVICE_URL/bootstrap" '{}'
+          node - <<'NODE'
+          const b=require('/tmp/bootstrap.json'),p=b?.scheduled?.samplingPolicy;
+          const eq=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+          if(!p)throw new Error('Release sampling policy telemetry missing');
+          if(!eq(p.highImpactSeconds,[-300,0,60,300,900,3600,14400]))throw new Error(`High-impact release sampling policy drifted: ${JSON.stringify(p.highImpactSeconds)}`);
+          if(!eq(p.mediumImpactSeconds,[-300,0,300,900,3600,14400]))throw new Error(`Medium-impact release sampling policy drifted: ${JSON.stringify(p.mediumImpactSeconds)}`);
+          if(!eq(p.lowImpactSeconds,[-900,0,900,3600]))throw new Error(`Low-impact release sampling policy drifted: ${JSON.stringify(p.lowImpactSeconds)}`);
+          if(p.preReleaseBaselineAwaited!==true)throw new Error('Pre-release market baseline is not awaited');
+          if(!eq(p.eventStudyHorizonsSeconds,[300,900,3600,14400]))throw new Error(`Event-study horizon policy drifted: ${JSON.stringify(p.eventStudyHorizonsSeconds)}`);
+          console.log('SAMPLING POLICY VERIFIED',JSON.stringify(p));
+          NODE
+
           req market POST "$SERVICE_URL/market-sync" '{}'
           req prestate GET "$SERVICE_URL/state"
           if node - <<'NODE'
