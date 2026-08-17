@@ -5,6 +5,7 @@ import { MarketsView } from './components/MarketsView';
 import { ResearchView } from './components/ResearchView';
 import { MetricCard } from './components/MetricCard';
 import { SignalsView } from './components/SignalsView';
+import { EventStudyPanel } from './components/EventStudyPanel';
 import { SourceNetworkView } from './components/SourceNetworkView';
 import { fetchAcquisitionCatalog, fetchDashboard, fetchFredCatalog, fetchFredCategory, fetchMacroAnalysis, fetchSessionSignals } from './lib/api';
 import type {
@@ -329,6 +330,7 @@ export default function App() {
               <div className="calendar-history-stat"><strong>{calendarHistoryStats.neutral}</strong><span>Neutral or context sensitive</span></div>
             </section>
             <section className="panel full"><div className="panel-title"><div><span className="eyebrow">Past 7 days + upcoming · Actual · Consensus · Previous · Currency bias</span><h2>Economic calendar and backtest history</h2></div><span>{filteredCalendar.length} events</span></div>{filteredCalendar.length ? filteredCalendar.map((event) => <CalendarRow key={event.id} event={event} />) : <div className="empty">No persisted calendar events are currently available in the selected window.</div>}</section>
+            <EventStudyPanel />
           </>
         )}
         {data && view === 'indicators' && <section className="metrics-grid wide">{data.macro.map((item) => <MetricCard key={item.seriesId} item={item} />)}</section>}
