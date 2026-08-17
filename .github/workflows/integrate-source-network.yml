@@ -1,5 +1,6 @@
 name: Integrate Institutional Source Network
 
+# revision 2: rebase-safe integration
 on:
   push:
     paths:
@@ -46,4 +47,5 @@ jobs:
           if git diff --quiet; then exit 0; fi
           git add src/App.tsx
           git commit -m "Integrate 83-source institutional research registry"
+          git pull --rebase origin main
           git push origin HEAD:main
