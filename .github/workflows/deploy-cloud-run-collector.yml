@@ -147,7 +147,7 @@ jobs:
           upsert_job() {
             NAME="$1"; SCHEDULE="$2"; URI="$3"; BODY="$4"
             if gcloud scheduler jobs describe "$NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
-              gcloud scheduler jobs update http "$NAME" --location "$GCP_REGION" --schedule="$SCHEDULE" --time-zone='Etc/UTC' --uri="$URI" --http-method=POST --headers='Content-Type=application/json' --message-body="$BODY" --oidc-service-account-email="$RUNTIME_SERVICE_ACCOUNT" --oidc-token-audience="$SERVICE_URL"
+              gcloud scheduler jobs update http "$NAME" --location "$GCP_REGION" --schedule="$SCHEDULE" --time-zone='Etc/UTC' --uri="$URI" --http-method=POST --update-headers='Content-Type=application/json' --message-body="$BODY" --oidc-service-account-email="$RUNTIME_SERVICE_ACCOUNT" --oidc-token-audience="$SERVICE_URL"
             else
               gcloud scheduler jobs create http "$NAME" --location "$GCP_REGION" --schedule="$SCHEDULE" --time-zone='Etc/UTC' --uri="$URI" --http-method=POST --headers='Content-Type=application/json' --message-body="$BODY" --oidc-service-account-email="$RUNTIME_SERVICE_ACCOUNT" --oidc-token-audience="$SERVICE_URL"
             fi
