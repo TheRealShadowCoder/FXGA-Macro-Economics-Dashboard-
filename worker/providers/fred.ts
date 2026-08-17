@@ -1,8 +1,21 @@
 import type { Env, MacroObservation } from '../types';
-import { DEFAULT_DASHBOARD_SERIES, FRED_CATEGORIES, FRED_SERIES, type FredSeriesDefinition } from './fred-catalog';
+import { DEFAULT_DASHBOARD_SERIES, FRED_CATEGORIES, FRED_SERIES as RAW_FRED_SERIES, type FredSeriesDefinition } from './fred-catalog';
 
-export { DEFAULT_DASHBOARD_SERIES, FRED_CATEGORIES, FRED_SERIES } from './fred-catalog';
+export { DEFAULT_DASHBOARD_SERIES, FRED_CATEGORIES } from './fred-catalog';
 export type { FredCategory, FredSeriesDefinition, MacroEconomy } from './fred-catalog';
+
+export const FRED_SERIES: FredSeriesDefinition[] = [
+  ...RAW_FRED_SERIES.filter((series) => series.id !== 'RRSFS'),
+  {
+    id: 'DEXSFUS',
+    title: 'South African Rand to U.S. Dollar Spot Exchange Rate',
+    units: 'ZAR/USD',
+    frequency: 'Daily',
+    categories: ['usd-fx'],
+    importance: 'critical',
+    economies: ['SOUTH_AFRICA', 'USA'],
+  },
+];
 
 export const MAX_SERIES_PER_REQUEST = 16;
 export const FRED_CONCURRENCY = 5;
