@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { refreshSuperEconomist, syncFullMacroFromUniverse, superHealth, fullState, intelligenceState, registrySearch } from './super-runtime.js';
+import { backfillEventStudies } from './event-study-backfill.js';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
@@ -102,6 +103,10 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='POST'&&url.pathname==='/refresh-intelligence'){
       const raw=await bodyOf(req);let input={};try{input=raw.length?JSON.parse(raw.toString('utf8')):{}}catch{}
       return sendJson(res,200,await refreshSuperEconomist({forceNews:Boolean(input.forceNews)}));
+    }
+    if(req.method==='POST'&&url.pathname==='/event-study-backfill'){
+      const raw=await bodyOf(req);let input={};try{input=raw.length?JSON.parse(raw.toString('utf8')):{}}catch{}
+      return sendJson(res,200,await backfillEventStudies({days:input.days,maxEvents:input.maxEvents}));
     }
     if(req.method==='POST'&&url.pathname==='/macro-sync'&&String(url.searchParams.get('mode')||'').toLowerCase()==='full'){
       await bodyOf(req);
