@@ -38,7 +38,7 @@ function groupedNativeFallback(observations: MacroObservation[]) {
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === '/api/global-macro') {
       if (request.method !== 'GET') return Response.json({ error: 'Method not allowed' }, { status: 405, headers: securityHeaders() });
@@ -56,7 +56,7 @@ export default {
       const observations = Array.isArray(scheduler?.baseline?.observations) ? scheduler.baseline.observations as MacroObservation[] : [];
       return Response.json(groupedNativeFallback(observations), { headers: { ...securityHeaders(), 'Cache-Control': 'public, max-age=60' } });
     }
-    return base.fetch(request, env, ctx);
+    return base.fetch(request, env);
   },
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     return base.scheduled(controller, env, ctx);
