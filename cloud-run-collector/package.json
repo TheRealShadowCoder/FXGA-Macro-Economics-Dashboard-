@@ -1,7 +1,7 @@
 {
   "name": "fxga-cloud-run-collector",
   "private": true,
-  "version": "4.6.2",
+  "version": "4.7.0",
   "type": "module",
   "engines": { "node": ">=24" },
   "scripts": {
@@ -9,7 +9,7 @@
     "check": "node --check src/global-fred.js && node --check src/cnbc-market.js && node --check src/technical-engine.js && node --check src/advanced-technical.js && node --check src/event-study.js && node --check src/event-study-backfill.js && node --check src/institutional-research.js && node --check src/server-v2.js && node --check src/fxga-registry.js && node --check src/super-economist-core.js && node --check src/intelligence-matrix.js && node --check src/super-economist.js && node --check src/official-news.js && node --check src/super-runtime.js && node --check src/launcher.js"
   },
   "dependencies": {
-    "@google-cloud/firestore": "^7.11.0",
+    "@google-cloud/firestore": "9.0.0",
     "@google-cloud/tasks": "^6.2.0",
     "cheerio": "^1.1.2",
     "express": "^5.1.0",
