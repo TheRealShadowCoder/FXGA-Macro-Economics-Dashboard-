@@ -1,4 +1,4 @@
-name: Verify FXStreet Analytics Contract
+name: Verify FXGA Google Data Contract
 
 on:
   push:
@@ -12,36 +12,33 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify live FXStreet analytics and extraction policy
+      - name: Verify live Google Cloud data contract
         run: |
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
           async function getJson(path) {
-            const response = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' } });
+            const response = await fetch(`${base}${path}`, {
+              headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
+            });
             const text = await response.text();
             if (!response.ok) throw new Error(`${path} returned ${response.status}: ${text.slice(0, 800)}`);
-            return JSON.parse(text);
+            try { return JSON.parse(text); }
+            catch { throw new Error(`${path} returned invalid JSON: ${text.slice(0, 400)}`); }
           }
 
-          let calendar;
-          for (let attempt = 1; attempt <= 12; attempt += 1) {
-            calendar = await getJson('/api/calendar?days=7&importance=1');
-            const ready = Array.isArray(calendar?.events) && calendar.events.length > 0 && calendar.events.every((event) =>
-              event?.fxstreetAnalytics?.methodology === 'fxga-transparent-fxstreet-style' &&
-              typeof event.fxstreetAnalytics.expectedImpact === 'string' &&
-              typeof event.fxstreetAnalytics.expectedImpactScore === 'number' &&
-              typeof event.fxstreetAnalytics.historicalReliability === 'number' &&
-              typeof event.fxstreetAnalytics.sampleSize === 'number' &&
-              event.fxstreetAnalytics.marketImpactAvailability?.trueRange === 'requires-market-price-history' &&
-              event.fxstreetAnalytics.marketImpactAvailability?.volatilityRatio === 'requires-market-price-history' &&
-              event.fxstreetAnalytics.marketImpactAvailability?.trueRangeVsDeviation === 'requires-market-price-history'
-            );
-            if (ready) break;
-            if (attempt === 12) throw new Error('FXStreet-style analytics contract is not live on all returned calendar events');
-            await sleep(2000);
-          }
+          const health = await getJson('/api/health');
+          if (health?.collectorMode !== 'google-cloud-run-webhook') throw new Error(`Unexpected collectorMode: ${health?.collectorMode}`);
+          if (health?.executionLocation !== 'Google Cloud Run') throw new Error(`Unexpected executionLocation: ${health?.executionLocation}`);
+          if (Number(health?.schemaVersion) !== 4) throw new Error(`Expected schemaVersion 4, got ${health?.schemaVersion}`);
+          if (health?.configured?.browserRun !== false) throw new Error('Cloudflare browser acquisition must remain disabled');
+          if (health?.configured?.calendarScraping !== false) throw new Error('Cloudflare calendar scraping must remain disabled');
+          if (health?.configured?.officialNewsScraping !== false) throw new Error('Cloudflare news scraping must remain disabled');
+          if (Number(health?.safety?.normalStateUpstreamCalendarRequests ?? -1) !== 0) throw new Error('Cloudflare calendar upstream requests must remain zero');
+          if (Number(health?.safety?.normalStateUpstreamFredRequests ?? -1) !== 0) throw new Error('Cloudflare FRED upstream requests must remain zero');
+          if (Number(health?.safety?.normalStateUpstreamNewsRequests ?? -1) !== 0) throw new Error('Cloudflare news upstream requests must remain zero');
+          if (Number(health?.safety?.normalStateUpstreamMarketRequests ?? -1) !== 0) throw new Error('Cloudflare market upstream requests must remain zero');
 
           const acquisition = await getJson('/api/acquisition/catalog');
           if (acquisition?.policy?.bypassLogin !== false) throw new Error('Login-bypass policy regression');
@@ -49,13 +46,60 @@ jobs:
           if (acquisition?.policy?.bypassPaywall !== false) throw new Error('Paywall-bypass policy regression');
           if (acquisition?.policy?.botEvasion !== false) throw new Error('Bot-evasion policy regression');
 
-          const health = await getJson('/api/health');
-          if (health?.safety?.releaseWindowPrimary !== 'FXStreet public calendar feed') throw new Error('FXStreet public feed is not the release-window primary');
-          if (health?.safety?.normalStateUpstreamCalendarRequests !== 0) throw new Error('Normal-state calendar polling regression');
-          if (health?.safety?.browserSoftBudgetSecondsPerUtcDay > 480) throw new Error('Browser safety budget regression');
+          const acquire = await fetch(`${base}/api/acquire?source=fred`, { headers: { Accept: 'application/json' } });
+          if (acquire.status !== 409) throw new Error(`Passive-edge acquisition contract regressed: expected 409, got ${acquire.status}`);
 
-          const events = calendar.events;
-          const withNativeDev = events.filter((event) => typeof event.deviation === 'number').length;
-          const historical = events.filter((event) => (event.fxstreetAnalytics?.sampleSize ?? 0) > 0).length;
-          console.log(`FXStreet analytics contract passed: ${events.length} events, ${withNativeDev} with native deviation, ${historical} with accumulated event history.`);
+          const dashboard = await getJson('/api/dashboard');
+          if (!Array.isArray(dashboard?.macro) || dashboard.macro.length === 0) throw new Error('Dashboard macro payload is empty');
+          if (!Array.isArray(dashboard?.calendar)) throw new Error('Dashboard calendar payload is missing');
+          if (!Array.isArray(dashboard?.market)) throw new Error('Dashboard market payload is missing');
+
+          const history = await getJson('/api/calendar-history?days=7');
+          if (Number(history?.days) !== 7 || !Array.isArray(history?.events)) throw new Error('Seven-day calendar history contract is invalid');
+          const now = Date.now();
+          const cutoff = now - 7 * 86_400_000;
+          for (const event of history.events) {
+            const time = Date.parse(event?.date);
+            if (!Number.isFinite(time) || time > now || time < cutoff - 5 * 60_000) throw new Error(`Calendar history contains an out-of-window event: ${event?.event}`);
+            if (event?.actual != null && String(event.actual).trim() !== '') {
+              const valid = ['bullish', 'bearish', 'neutral', 'pending'];
+              if (!valid.includes(event?.currencyBias)) throw new Error(`Completed event is missing currency bias: ${event?.currency || ''} ${event?.event || ''}`);
+              if (event.currencyBias !== 'pending' && typeof event?.currencyBiasReason !== 'string') throw new Error(`Completed event is missing currency-bias rationale: ${event?.event || ''}`);
+            }
+          }
+
+          let market = null;
+          for (let attempt = 1; attempt <= 18; attempt += 1) {
+            market = await getJson('/api/market-prices');
+            if (Array.isArray(market?.assets) && market.assets.length > 0) break;
+            if (attempt < 18) await sleep(5000);
+          }
+          if (!Array.isArray(market?.assets)) throw new Error('CNBC market payload is missing assets[]');
+          if (market.assets.length > 0) {
+            const ids = new Set(market.assets.map((asset) => asset?.id).filter(Boolean));
+            if (ids.size !== market.assets.length) throw new Error('CNBC market payload has duplicate asset IDs');
+            const usable = market.assets.filter((asset) => typeof asset?.price === 'number' && Number.isFinite(asset.price));
+            console.log(`CNBC snapshot: ${market.assets.length} configured assets, ${usable.length} currently priced, ${market.assets.filter((asset) => asset?.stale).length} last-good retained.`);
+          } else {
+            console.log('CNBC market route is live but awaiting its first Google Cloud market snapshot.');
+          }
+
+          const analysis = await getJson('/api/analysis');
+          if (!analysis || typeof analysis !== 'object' || !analysis.regime) throw new Error('Macro Analysis API contract is invalid');
+
+          const signals = await getJson('/api/session-signals');
+          if (!signals || typeof signals !== 'object' || !Array.isArray(signals.sessions)) throw new Error('Session Signals API contract is invalid');
+
+          const fred = await getJson('/api/fred/catalog');
+          if (!fred || typeof fred !== 'object' || !Array.isArray(fred.categories) || Number(fred.total) <= 0) throw new Error('Important FRED catalog contract is invalid');
+
+          const completed = history.events.filter((event) => event?.actual != null && String(event.actual).trim() !== '');
+          const biasCounts = completed.reduce((acc, event) => {
+            const key = event.currencyBias || 'missing';
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+          }, {});
+
+          console.log(`FXGA Google data contract passed: ${dashboard.macro.length} macro observations in dashboard, ${history.events.length} historical events, ${completed.length} completed releases.`);
+          console.log('Completed release currency-bias counts:', biasCounts);
           NODE
