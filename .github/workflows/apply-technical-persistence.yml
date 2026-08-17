@@ -1,0 +1,36 @@
+name: Apply FXGA Technical Persistence Hardening
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-technical-persistence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply persistence hardening
+        run: python3 scripts/fix_technical_persistence.py
+      - name: Validate collector
+        run: |
+          node --check cloud-run-collector/src/advanced-technical.js
+          node --check cloud-run-collector/src/technical-engine.js
+          node --check cloud-run-collector/src/server-v2.js
+      - name: Commit hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then exit 0; fi
+          git add cloud-run-collector/src/technical-engine.js cloud-run-collector/src/server-v2.js
+          git commit -m "Harden technical state persistence"
+          git push origin HEAD:main
