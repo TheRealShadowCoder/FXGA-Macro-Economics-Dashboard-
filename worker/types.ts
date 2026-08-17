@@ -36,6 +36,14 @@ export interface MacroObservation {
 
 export type ReleaseOutcome = 'beat' | 'miss' | 'in-line' | 'pending' | 'no-consensus';
 
+export interface ReleaseProbabilities {
+  beat: number;
+  miss: number;
+  inLine: number;
+  sampleSize: number;
+  method: 'empirical-bayesian';
+}
+
 export interface CalendarEvent {
   id: string;
   date: string;
@@ -60,10 +68,12 @@ export interface CalendarEvent {
   canonicalKey?: string;
   deviation?: number;
   normalizedSurprise?: number;
+  standardizedSurprise?: number;
   surprisePercent?: number;
   revisionDelta?: number;
   releaseScore?: number;
   outcome?: ReleaseOutcome;
+  probabilities?: ReleaseProbabilities;
   relation?: boolean | null;
   betterThanExpected?: boolean;
   worseThanExpected?: boolean;
