@@ -13,19 +13,63 @@ import type {
 import type { EconomyAnalysisPayload, GlobalMacroPayload } from './economy-types';
 import type { EventStudiesPayload } from './event-study-types';
 
+const REQUEST_TIMEOUT_MS = 12_000;
+const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+function responseError(path: string, status: number, text: string) {
+  try {
+    const parsed = JSON.parse(text) as { error?: string };
+    return new Error(parsed.error || `${path} failed with HTTP ${status}`);
+  } catch {
+    return new Error(text || `${path} failed with HTTP ${status}`);
+  }
+}
+
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: { Accept: 'application/json' } });
-  const text = await response.text();
-  if (!response.ok) {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const parsed = JSON.parse(text) as { error?: string };
-      throw new Error(parsed.error || `Request failed with ${response.status}`);
+      const response = await fetch(path, {
+        headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        const error = responseError(path, response.status, text);
+        if (attempt === 0 && TRANSIENT_STATUS.has(response.status)) {
+          lastError = error;
+          await sleep(350);
+          continue;
+        }
+        throw error;
+      }
+      if (!text.trim()) throw new Error(`${path} returned an empty response`);
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        throw new Error(`${path} returned invalid JSON`);
+      }
     } catch (error) {
-      if (error instanceof Error && error.message !== 'Unexpected end of JSON input') throw error;
-      throw new Error(text || `Request failed with ${response.status}`);
+      const normalized = error instanceof DOMException && error.name === 'AbortError'
+        ? new Error(`${path} timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds`)
+        : error instanceof Error ? error : new Error(`${path} request failed`);
+      lastError = normalized;
+      if (attempt === 0 && (normalized.name === 'TypeError' || normalized.message.includes('timed out'))) {
+        await sleep(350);
+        continue;
+      }
+      throw normalized;
+    } finally {
+      window.clearTimeout(timer);
     }
   }
-  return JSON.parse(text) as T;
+
+  throw lastError ?? new Error(`${path} request failed`);
 }
 
 export function fetchDashboard(): Promise<DashboardPayload> {
