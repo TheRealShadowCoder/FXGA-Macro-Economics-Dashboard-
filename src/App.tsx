@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AcquisitionView } from './components/AcquisitionView';
 import { AnalysisView } from './components/AnalysisView';
 import { MarketsView } from './components/MarketsView';
+import { ResearchView } from './components/ResearchView';
 import { MetricCard } from './components/MetricCard';
 import { SignalsView } from './components/SignalsView';
 import { fetchAcquisitionCatalog, fetchDashboard, fetchFredCatalog, fetchFredCategory, fetchMacroAnalysis, fetchSessionSignals } from './lib/api';
@@ -17,20 +18,21 @@ import type {
   SessionSignalsPayload,
 } from './lib/types';
 
-type View = 'overview' | 'markets' | 'analysis' | 'signals' | 'calendar' | 'indicators' | 'universe' | 'acquisition' | 'news' | 'sources';
+type View = 'overview' | 'markets' | 'analysis' | 'research' | 'signals' | 'calendar' | 'indicators' | 'universe' | 'acquisition' | 'news' | 'sources';
 type LiveStatus = 'connecting' | 'connected' | 'offline';
 
 const NAV: Array<{ id: View; label: string }> = [
-  { id: 'overview', label: 'Macro Pulse' },
+  { id: 'overview', label: 'Macro Dashboard' },
   { id: 'markets', label: 'Cross Asset Prices' },
   { id: 'analysis', label: 'Macro Analysis' },
-  { id: 'signals', label: 'Session Signals' },
+  { id: 'research', label: 'Research & Risk' },
+  { id: 'signals', label: 'Currency Outlook' },
   { id: 'calendar', label: 'Economic Calendar' },
   { id: 'indicators', label: 'Core Indicators' },
-  { id: 'universe', label: 'Important FRED Data' },
-  { id: 'acquisition', label: 'Acquisition Engine' },
+  { id: 'universe', label: 'Macro Data Library' },
+  { id: 'acquisition', label: 'Data Operations' },
   { id: 'news', label: 'Central Bank News' },
-  { id: 'sources', label: 'Source Health' },
+  { id: 'sources', label: 'Data Coverage' },
 ];
 
 function importanceLabel(value: number) {
@@ -143,8 +145,8 @@ export default function App() {
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(String(event.data)) as { type?: string; sourceId?: string; fetchedAt?: string; updateType?: string; timestamp?: string };
-          if (payload.type === 'source-update' || payload.type === 'google-cloud-update') {
-            const source = payload.sourceId || payload.updateType || 'Google Cloud';
+          if (payload.type === 'source-update' || payload.type === 'google-cloud-update' || payload.type === 'data-update') {
+            const source = payload.sourceId || payload.updateType || 'Data network';
             const updatedAt = payload.fetchedAt || payload.timestamp;
             setLastLiveEvent(`${source} updated ${updatedAt ? new Date(updatedAt).toLocaleTimeString() : 'now'}`);
             setAcquisitionCatalog(null);
@@ -282,9 +284,9 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><div className="brand-mark">FX</div><div><strong>FXGA</strong><span>Macro Intelligence</span></div></div>
+        <div className="brand"><div className="brand-mark"></div><div><strong>FX Global Avengers</strong><span>Trading Academy · Macro Intelligence</span></div></div>
         <nav>{NAV.map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}><span className="nav-dot"></span>{item.label}</button>)}</nav>
-        <div className="sidebar-foot"><span className={`system-light ${liveStatus}`}></span><div><strong>Collection Engine</strong><small>{liveSources}/{configuredSources || '—'} sources live · WS {liveStatus}</small></div></div>
+        <div className="sidebar-foot"><span className={`system-light ${liveStatus}`}></span><div><strong>Data Network</strong><small>{liveSources}/{configuredSources || '—'} sources available · Live {liveStatus}</small></div></div>
       </aside>
 
       <main>
@@ -300,8 +302,8 @@ export default function App() {
         {data && view === 'overview' && (
           <>
             <section className="hero-grid">
-              <div className="hero-card"><span className="eyebrow">Global Macro Feed</span><h2>One causal view of growth, inflation, labour, policy and cross-asset risk.</h2><p>Important official data and scraped calendar intelligence are normalized into the FXGA decision pipeline.</p><div className="hero-stats"><div><strong>{data.macro.length}</strong><span>Core indicators</span></div><div><strong>{highImpact}</strong><span>Upcoming high-impact events</span></div><div><strong>{data.market?.filter((item) => item.price != null).length ?? 0}</strong><span>CNBC assets</span></div></div></div>
-              <div className="pipeline-card"><span className="eyebrow">FXGA Causal Chain</span>{['Growth', 'Inflation', 'Employment', 'Central Banks', 'Rates & Yields', 'Currencies', 'Risk Assets'].map((step, index) => <div className="pipeline-step" key={step}><span>{String(index + 1).padStart(2, '0')}</span><strong>{step}</strong></div>)}</div>
+              <div className="hero-card"><span className="eyebrow">Global Macro Feed</span><h2>One causal view of growth, inflation, labour, policy and cross-asset risk.</h2><p>Official economic data, release history and cross-asset intelligence are normalized into a consistent decision framework.</p><div className="hero-stats"><div><strong>{data.macro.length}</strong><span>Core indicators</span></div><div><strong>{highImpact}</strong><span>Upcoming high-impact events</span></div><div><strong>{data.market?.filter((item) => item.price != null).length ?? 0}</strong><span>Cross-asset quotes</span></div></div></div>
+              <div className="pipeline-card"><span className="eyebrow">Macro Transmission</span>{['Growth', 'Inflation', 'Employment', 'Central Banks', 'Rates & Yields', 'Currencies', 'Risk Assets'].map((step, index) => <div className="pipeline-step" key={step}><span>{String(index + 1).padStart(2, '0')}</span><strong>{step}</strong></div>)}</div>
             </section>
             <section className="section-head"><div><span className="eyebrow">Live Macro Board</span><h2>Core economic indicators</h2></div></section>
             <section className="metrics-grid">{data.macro.map((item) => <MetricCard key={item.seriesId} item={item} />)}</section>
@@ -314,6 +316,7 @@ export default function App() {
 
         {data && view === 'markets' && <MarketsView assets={filteredMarket} />}
         {view === 'analysis' && <AnalysisView data={analysis} loading={analysisLoading} error={analysisError} />}
+        {view === 'research' && <ResearchView />}
         {view === 'signals' && <SignalsView data={signals} loading={signalsLoading} error={signalsError} />}
 
         {data && view === 'calendar' && (
@@ -324,7 +327,7 @@ export default function App() {
               <div className="calendar-history-stat"><strong>{calendarHistoryStats.bearish}</strong><span>Base currency bearish</span></div>
               <div className="calendar-history-stat"><strong>{calendarHistoryStats.neutral}</strong><span>Neutral or context sensitive</span></div>
             </section>
-            <section className="panel full"><div className="panel-title"><div><span className="eyebrow">Past 7 days + upcoming · Actual · Consensus · Previous · Currency bias</span><h2>Economic calendar and backtest history</h2></div><span>{filteredCalendar.length} events</span></div>{filteredCalendar.length ? filteredCalendar.map((event) => <CalendarRow key={event.id} event={event} />) : <div className="empty">No persisted calendar events are currently available from the scraped calendar consensus.</div>}</section>
+            <section className="panel full"><div className="panel-title"><div><span className="eyebrow">Past 7 days + upcoming · Actual · Consensus · Previous · Currency bias</span><h2>Economic calendar and backtest history</h2></div><span>{filteredCalendar.length} events</span></div>{filteredCalendar.length ? filteredCalendar.map((event) => <CalendarRow key={event.id} event={event} />) : <div className="empty">No persisted calendar events are currently available in the selected window.</div>}</section>
           </>
         )}
         {data && view === 'indicators' && <section className="metrics-grid wide">{data.macro.map((item) => <MetricCard key={item.seriesId} item={item} />)}</section>}
@@ -332,15 +335,15 @@ export default function App() {
         {view === 'universe' && (
           <>
             {catalogError && <div className="alert error">{catalogError}</div>}
-            {catalogLoading && !catalog ? <div className="loading-panel">Loading important FRED indicators…</div> : null}
-            {catalog && <><section className="panel universe-panel"><div className="universe-summary"><div><span className="eyebrow">Decision Relevant FRED Set</span><h2>{catalog.total} important macro series</h2><p>{catalog.policy?.scope}</p></div><div className="catalog-stats"><strong>{catalog.categories.length}</strong><span>macro categories</span><strong>{catalog.maxSeriesPerRequest}</strong><span>max live series/request</span></div></div><div className="category-strip">{catalog.categories.map((category) => <button key={category.id} className={universeCategory === category.id ? 'active' : ''} onClick={() => setUniverseCategory(category.id)}><strong>{category.label}</strong><span>{category.count}</span></button>)}</div></section><section className="section-head universe-heading"><div><span className="eyebrow">{activeCategory?.label}</span><h2>{activeCategory?.description}</h2></div><span>{universeLoading ? 'Syncing live observations…' : `${filteredUniverse.length} important series`}</span></section>{universeError && <div className="alert error">{universeError}</div>}{universeLoading && !universeSeries.length ? <div className="loading-panel">Fetching live FRED observations…</div> : null}{!universeLoading && !filteredUniverse.length ? <div className="empty">No important series match this category or search.</div> : null}<section className="metrics-grid wide">{filteredUniverse.map((item) => <MetricCard key={item.seriesId} item={item} />)}</section></>}
+            {catalogLoading && !catalog ? <div className="loading-panel">Loading important macro indicators…</div> : null}
+            {catalog && <><section className="panel universe-panel"><div className="universe-summary"><div><span className="eyebrow">Decision Relevant Macro Library</span><h2>{catalog.total} important macro series</h2><p>{catalog.policy?.scope}</p></div><div className="catalog-stats"><strong>{catalog.categories.length}</strong><span>macro categories</span><strong>{catalog.maxSeriesPerRequest}</strong><span>max live series/request</span></div></div><div className="category-strip">{catalog.categories.map((category) => <button key={category.id} className={universeCategory === category.id ? 'active' : ''} onClick={() => setUniverseCategory(category.id)}><strong>{category.label}</strong><span>{category.count}</span></button>)}</div></section><section className="section-head universe-heading"><div><span className="eyebrow">{activeCategory?.label}</span><h2>{activeCategory?.description}</h2></div><span>{universeLoading ? 'Syncing live observations…' : `${filteredUniverse.length} important series`}</span></section>{universeError && <div className="alert error">{universeError}</div>}{universeLoading && !universeSeries.length ? <div className="loading-panel">Fetching live macro observations…</div> : null}{!universeLoading && !filteredUniverse.length ? <div className="empty">No important series match this category or search.</div> : null}<section className="metrics-grid wide">{filteredUniverse.map((item) => <MetricCard key={item.seriesId} item={item} />)}</section></>}
           </>
         )}
 
         {view === 'acquisition' && <AcquisitionView catalog={acquisitionCatalog} loading={acquisitionLoading} error={acquisitionError} liveStatus={liveStatus} lastLiveEvent={lastLiveEvent} />}
         {data && view === 'news' && <section className="panel full"><div className="panel-title"><div><span className="eyebrow">Primary-source intelligence</span><h2>Official releases and speeches</h2></div><span>{filteredNews.length} items</span></div>{filteredNews.map((item) => <NewsRow key={item.id} item={item} />)}</section>}
         {data && view === 'sources' && <section className="source-grid">{data.sources.map((source) => <article className="source-card" key={source.id}><div className="source-status"><span className={`status ${source.status}`}></span>{source.status.replace('_', ' ')}</div><h3>{source.name}</h3><p>{source.category} · {source.region}</p>{source.note && <small>{source.note}</small>}</article>)}</section>}
-        <footer>Generated {data?.generatedAt ? new Date(data.generatedAt).toLocaleString() : '—'} · FXGA Macro Intelligence</footer>
+        <footer>Generated {data?.generatedAt ? new Date(data.generatedAt).toLocaleString() : '—'} · FX Global Avengers Trading Academy</footer>
       </main>
     </div>
   );

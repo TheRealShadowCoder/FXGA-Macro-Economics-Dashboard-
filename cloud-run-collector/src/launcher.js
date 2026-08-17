@@ -100,7 +100,8 @@ const server=http.createServer(async(req,res)=>{
     const status=await proxy(req,res,url);
     if(status>=200&&status<300&&req.method==='POST'&&['/bootstrap','/release-check','/macro-sync'].includes(url.pathname)){
       const forceNews=url.pathname==='/bootstrap';
-      refreshSuperEconomist({forceNews}).then(x=>console.log('FXGA 9705 intelligence refresh',JSON.stringify({trigger:url.pathname,...x}))).catch(e=>console.error('FXGA 9705 intelligence refresh failed',e));
+      if(url.pathname==='/release-check')fetch(`http://127.0.0.1:${internalPort}/market-sync`,{method:'POST'}).catch(e=>console.warn('Release-aligned market snapshot deferred',String(e?.message||e)));
+      refreshSuperEconomist({forceNews}).then(x=>console.log('Intelligence refresh',JSON.stringify({trigger:url.pathname,...x}))).catch(e=>console.error('Intelligence refresh failed',e));
     }
   }catch(error){
     console.error(error);
@@ -108,4 +109,4 @@ const server=http.createServer(async(req,res)=>{
     else res.end();
   }
 });
-server.listen(publicPort,()=>console.log(`FXGA Google Cloud gateway v3 on :${publicPort}; collector v2 internal :${internalPort}`));
+server.listen(publicPort,()=>console.log(`Macro research gateway on :${publicPort}; collector internal :${internalPort}`));

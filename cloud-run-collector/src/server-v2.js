@@ -312,9 +312,9 @@ function mergeEvents(primary,secondary) {
 }
 
 function taskOffsets(maxImportance) {
-  if (maxImportance>=3) return [0,5,15,30,60,120,300];
-  if (maxImportance===2) return [0,15,60,180];
-  return [0,60,180];
+  if (maxImportance>=3) return [0,60,300,900,3600,14400];
+  if (maxImportance===2) return [0,300,900,3600];
+  return [0,900,3600];
 }
 async function createReleaseTask(releaseAt,offsetSeconds,eventIds) {
   if (!cfg.projectId||!cfg.serviceUrl||!cfg.taskInvokerSa) return {created:false,reason:'tasks-not-configured'};
