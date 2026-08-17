@@ -48,7 +48,8 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Prove Cloud Run collector is deployed and ready
+      - id: service
+        name: Resolve deployed Cloud Run service
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
         run: |
@@ -58,7 +59,24 @@ jobs:
             echo '::error::Cloud Run collector service is not deployed.'
             exit 1
           fi
-          TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+
+      - id: invoke_auth
+        name: Mint Cloud Run ID token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service.outputs.url }}
+          id_token_include_email: true
+
+      - name: Prove Cloud Run collector is deployed and ready
+        env:
+          TOKEN: ${{ steps.invoke_auth.outputs.id_token }}
+        run: |
           HEALTH=$(curl -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/health")
           echo "$HEALTH" | node -e '
             let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
@@ -80,7 +98,6 @@ jobs:
               if((universe?.curatedBase||0)<109) throw new Error(`Curated FRED base is below 109: ${universe?.curatedBase||0}`);
               console.log(`Cloud Run v2 ready: ${events} calendar events, ${observations} macro observations, ${universe?.total||0} discovered series.`);
             });'
-          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
 
       - name: Sync collector webhook secret to Cloudflare
         env:
@@ -89,12 +106,22 @@ jobs:
           COLLECTOR_WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
         run: printf '%s' "$COLLECTOR_WEBHOOK_SECRET" | npx wrangler secret put COLLECTOR_WEBHOOK_SECRET
 
+      - id: replay_auth
+        name: Refresh Cloud Run ID token for replay
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service.outputs.url }}
+          id_token_include_email: true
+
       - name: Replay fresh Cloud Run state into Cloudflare
         env:
-          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          TOKEN: ${{ steps.replay_auth.outputs.id_token }}
           COLLECTOR_WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
         run: |
-          TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
           STATE=$(curl -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state")
           printf '%s' "$STATE" > /tmp/cloud-run-state.json
           node <<'NODE'
