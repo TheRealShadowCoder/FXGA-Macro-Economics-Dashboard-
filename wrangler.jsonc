@@ -4,13 +4,10 @@
   "account_id": "4f260a0775a3df407e08512610c9898b",
   "compatibility_date": "2026-08-16",
   "compatibility_flags": ["nodejs_compat"],
-  "main": "./worker/index-v2.ts",
+  "main": "./worker/index-v3.ts",
   "workers_dev": true,
   "assets": {
     "not_found_handling": "single-page-application"
-  },
-  "browser": {
-    "binding": "BROWSER"
   },
   "durable_objects": {
     "bindings": [
@@ -26,16 +23,13 @@
       "new_sqlite_classes": ["FxgaCoordinator"]
     }
   ],
-  "triggers": {
-    "crons": ["5 0 * * *"]
-  },
   "observability": {
     "enabled": true
   },
   "vars": {
     "APP_NAME": "FXGA Macro Intelligence",
     "CACHE_TTL_SECONDS": "300",
-    "BROWSER_SOFT_BUDGET_SECONDS": "480",
-    "COLLECTOR_MODE": "cloudflare-native"
+    "BROWSER_SOFT_BUDGET_SECONDS": "0",
+    "COLLECTOR_MODE": "external-webhook"
   }
 }

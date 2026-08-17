@@ -1,8 +1,8 @@
-name: Verify FXGA Decision Intelligence
+name: Verify FXGA Google Decision Intelligence
 
 on:
   workflow_run:
-    workflows: ['Deploy FXGA Macro Intelligence']
+    workflows: ["Activate Google Cloud FXGA 9705 Engine"]
     types: [completed]
 
 permissions:
@@ -13,95 +13,31 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Verify live five-economy decision engine
+      - name: Verify FXGA 9705 decision engine and frozen-audit contract
         run: |
           node <<'NODE'
-          const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
-          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-          async function getJson(path) {
-            let last;
-            for (let attempt = 1; attempt <= 8; attempt += 1) {
-              try {
-                const response = await fetch(base + path, { headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } });
-                const text = await response.text();
-                if (!response.ok) throw new Error(`${path} returned ${response.status}: ${text.slice(0, 800)}`);
-                return JSON.parse(text);
-              } catch (error) {
-                last = error;
-                if (attempt < 8) await sleep(1500);
-              }
-            }
-            throw last;
-          }
-
-          const economy = await getJson('/api/economy-analysis');
-          if (!Array.isArray(economy?.economies) || economy.economies.length !== 5) throw new Error(`Expected five economy states, got ${economy?.economies?.length ?? 0}`);
-          const expectedEconomies = new Map([
-            ['USA', ['USD', 'Federal Reserve']],
-            ['EUROPE', ['EUR', 'European Central Bank']],
-            ['UK', ['GBP', 'Bank of England']],
-            ['SOUTH_AFRICA', ['ZAR', 'South African Reserve Bank']],
-            ['JAPAN', ['JPY', 'Bank of Japan']],
-          ]);
-          for (const [id, [currency, bank]] of expectedEconomies) {
-            const state = economy.economies.find((item) => item.id === id);
-            if (!state || state.currency !== currency || state.centralBank !== bank) throw new Error(`Economy mapping failed for ${id}`);
-            if (!Array.isArray(state.dimensions) || state.dimensions.length !== 5) throw new Error(`${id} must have five macro dimensions`);
-            if (typeof state.currencyScore !== 'number' || typeof state.confidence !== 'number') throw new Error(`${id} missing score/confidence`);
-          }
-
-          const signals = await getJson('/api/session-signals');
-          if (!Array.isArray(signals?.currencyStates) || signals.currencyStates.length !== 5) throw new Error(`Expected five ranked currency states, got ${signals?.currencyStates?.length ?? 0}`);
-          const currencies = signals.currencyStates.map((item) => item.currency).sort().join(',');
-          if (currencies !== ['EUR','GBP','JPY','USD','ZAR'].sort().join(',')) throw new Error(`Unexpected structural currency set: ${currencies}`);
-          if (!signals?.decisionSummary || typeof signals.decisionSummary.actionableCount !== 'number') throw new Error('Decision summary missing');
-          if (!Array.isArray(signals?.rankedOpportunities) || signals.rankedOpportunities.length < 8) throw new Error('Ranked opportunity board is incomplete');
-
-          if (!signals?.dataQuality) throw new Error('Macro data-quality gate is missing');
-          if (signals.dataQuality.minimumStructuralObservations !== 3 || signals.dataQuality.minimumCoveredDimensions !== 2) throw new Error('Unexpected structural coverage thresholds');
-          if (!Array.isArray(signals.dataQuality.structuralEconomies) || !Array.isArray(signals.dataQuality.provisionalEconomies)) throw new Error('Structural/provisional economy lists are missing');
-          if (signals.dataQuality.structuralEconomies.length + signals.dataQuality.provisionalEconomies.length !== 5) throw new Error('Five economies are not fully classified by data quality');
-
-          for (const state of signals.currencyStates) {
-            if (!['structural','provisional'].includes(state.quality)) throw new Error(`${state.currency} has invalid quality ${state.quality}`);
-            if (typeof state.dimensionsCovered !== 'number' || typeof state.observationCount !== 'number') throw new Error(`${state.currency} is missing coverage diagnostics`);
-            const meetsGate = state.observationCount >= 3 && state.dimensionsCovered >= 2 && state.confidence >= 35;
-            if ((state.quality === 'structural') !== meetsGate) throw new Error(`${state.currency} quality label does not match its actual coverage`);
-          }
-
-          const allSignals = signals.sessions.flatMap((session) => session.signals ?? []);
-          for (const required of ['EURUSD','GBPUSD','USDJPY','EURGBP','USDZAR','EURZAR','GBPZAR','XAUUSD']) {
-            if (!allSignals.some((item) => item.symbol === required)) throw new Error(`Required decision instrument missing: ${required}`);
-          }
-
-          const qualityByCurrency = new Map(signals.currencyStates.map((item) => [item.currency, item.quality]));
-          const validCoverage = new Set(['full','partial','event-only','asset-model']);
-          const validGates = new Set(['WAIT_EVENT','NO_MACRO_EDGE','AWAIT_TECHNICAL_CONFIRMATION']);
-          for (const signal of allSignals) {
-            if (!signal.components || ['structuralDivergence','policyDivergence','releaseDivergence'].some((field) => typeof signal.components[field] !== 'number')) throw new Error(`${signal.symbol} is missing auditable divergence components`);
-            if (!validCoverage.has(signal.coverage)) throw new Error(`${signal.symbol} has invalid coverage ${signal.coverage}`);
-            if (!validGates.has(signal.executionGate)) throw new Error(`${signal.symbol} has invalid execution gate ${signal.executionGate}`);
-            if (typeof signal.conviction !== 'number' || signal.conviction < 0 || signal.conviction > 100) throw new Error(`${signal.symbol} has invalid conviction`);
-            if (signal.risk === 'event-lockout' && (signal.direction !== 'WAIT' || signal.executionGate !== 'WAIT_EVENT')) throw new Error(`${signal.symbol} violated event lockout`);
-            if ((signal.direction === 'BUY' || signal.direction === 'SELL') && signal.executionGate !== 'AWAIT_TECHNICAL_CONFIRMATION') throw new Error(`${signal.symbol} exposed an executable direction without the technical-confirmation gate`);
-
-            if (/^[A-Z]{6}$/.test(signal.symbol)) {
-              const baseCurrency = signal.symbol.slice(0, 3);
-              const quoteCurrency = signal.symbol.slice(3, 6);
-              const hasProvisionalSide = qualityByCurrency.get(baseCurrency) === 'provisional' || qualityByCurrency.get(quoteCurrency) === 'provisional';
-              if (hasProvisionalSide && signal.coverage === 'full') throw new Error(`${signal.symbol} incorrectly received full coverage despite a provisional economy`);
-            }
-          }
-
-          if (!String(signals.methodology ?? '').includes('base-versus-quote')) throw new Error('Session methodology does not identify base-versus-quote macro divergence');
-          console.log('FXGA decision intelligence verified:', JSON.stringify({
-            collectorMode: signals.collectorMode,
-            economyObservationCount: signals.economyObservationCount,
-            structuralEconomies: signals.dataQuality.structuralEconomies,
-            provisionalEconomies: signals.dataQuality.provisionalEconomies,
-            strongest: signals.decisionSummary.strongestCurrency,
-            weakest: signals.decisionSummary.weakestCurrency,
-            actionable: signals.decisionSummary.actionableCount,
-            ranked: signals.rankedOpportunities.length,
-          }));
+          const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          async function get(path){const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,800)}`);return JSON.parse(t);}
+          const intel=await get('/api/super-economist');
+          if(intel.registry?.totalMethods!==9705||intel.registry?.totalFamilies!==150)throw new Error('FXGA 9705 registry contract failed');
+          if(intel.registry?.provenance?.sourceNative!==7705||intel.registry?.provenance?.reconstructedDiagnostics!==2000)throw new Error('Registry provenance contract failed');
+          if(!Array.isArray(intel.pipeline)||intel.pipeline.join('|')!=='independent-family-collapse|economic-actual|market-reaction|trade-probability|BUY-SELL-WAIT|frozen-audit')throw new Error('Master decision pipeline changed');
+          if(intel.executionLocation!=='Google Cloud Run')throw new Error('Super Economist is not running on Google Cloud');
+          if(intel.researchGates?.tau!==0.60||intel.researchGates?.qMin!==60||intel.researchGates?.eventEdgeMin!==60||intel.researchGates?.waitFirstClass!==true)throw new Error('Research gate contract changed');
+          if(intel.edgeFormula?.forecast!==0.30||intel.edgeFormula?.surprise!==0.25||intel.edgeFormula?.pricingGap!==0.20||intel.edgeFormula?.positioning!==0.15||intel.edgeFormula?.technical!==0.10)throw new Error('Event Edge weighting changed');
+          if(intel.coverage?.registeredMethods!==9705||intel.coverage?.registeredFamilies!==150)throw new Error('Coverage registry totals missing');
+          if(!(intel.coverage?.eligibleMethods>0)||intel.coverage.eligibleMethods>9705)throw new Error('Data-eligibility accounting invalid');
+          const economy=intel.economyAnalysis;
+          if(economy?.economies?.length!==5)throw new Error('Five economy states missing');
+          const signals=intel.sessionSignals;
+          if(!Array.isArray(signals?.currencyStates)||signals.currencyStates.length!==5)throw new Error('Five ranked currency states missing');
+          if(!Array.isArray(signals?.rankedOpportunities)||signals.rankedOpportunities.length<8)throw new Error('Opportunity board incomplete');
+          const all=(signals.sessions||[]).flatMap(s=>s.signals||[]);
+          for(const symbol of ['EURUSD','GBPUSD','USDJPY','EURGBP','USDZAR','EURZAR','GBPZAR','XAUUSD'])if(!all.some(x=>x.symbol===symbol))throw new Error(`Missing ${symbol}`);
+          for(const signal of all){if(!['BUY','SELL','WAIT'].includes(signal.direction))throw new Error(`${signal.symbol} invalid direction`);if(!['WAIT_EVENT','NO_MACRO_EDGE','AWAIT_TECHNICAL_CONFIRMATION'].includes(signal.executionGate))throw new Error(`${signal.symbol} invalid gate`);if(signal.risk==='event-lockout'&&signal.direction!=='WAIT')throw new Error(`${signal.symbol} violated event lockout`);}
+          if(!intel.specialEventModels?.fomc||!intel.specialEventModels?.nfp||!intel.specialEventModels?.inflation)throw new Error('FOMC/NFP/inflation source-native models missing');
+          if(Number(intel.specialEventModels.fomc.components?.inflationPressure?.weight)!==0.30||Number(intel.specialEventModels.fomc.components?.labourPressure?.weight)!==0.25)throw new Error('FOMC source-native weights changed');
+          const nw=intel.specialEventModels.nfp.weights||{};
+          if(nw.weeklyClaims!==0.20||nw.joltsLabourDemand!==0.15||nw.ismEmploymentBreadth!==0.15||nw.revisionRisk!==0.10)throw new Error('NFP source-native weights changed');
+          console.log('FXGA 9705 Google decision intelligence verified:',JSON.stringify({eligibleMethods:intel.coverage.eligibleMethods,activeFamilies:intel.coverage.activeFamilies,frozen:intel.audit?.frozenThisRun,scored:intel.audit?.scoredThisRun,actionable:signals.decisionSummary?.actionableCount}));
           NODE

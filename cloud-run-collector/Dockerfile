@@ -14,4 +14,4 @@ COPY src ./src
 
 USER node
 EXPOSE 8080
-CMD ["node", "src/server-v2.js"]
+CMD ["node", "src/launcher.js"]

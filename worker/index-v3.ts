@@ -1,0 +1,217 @@
+import { DurableObject } from 'cloudflare:workers';
+import { verifyCollectorWebhook } from './collector-webhook';
+import type { CalendarEvent, Env, MacroObservation } from './types';
+
+const CALENDAR_KEY='google:calendar';
+const MACRO_KEY='google:macro';
+const INTELLIGENCE_KEY='google:intelligence';
+const META_KEY='google:meta';
+const REPLAY_KEY='google:recent-request-ids';
+const TARGET_ECONOMIES=['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN'] as const;
+
+const SECURITY_HEADERS={
+  'X-Content-Type-Options':'nosniff',
+  'Referrer-Policy':'strict-origin-when-cross-origin',
+  'Permissions-Policy':'camera=(), microphone=(), geolocation=()',
+};
+function json(data:unknown,init:ResponseInit={}){
+  const headers=new Headers(init.headers);
+  headers.set('Content-Type','application/json; charset=utf-8');
+  for(const [k,v] of Object.entries(SECURITY_HEADERS)) headers.set(k,v);
+  return new Response(JSON.stringify(data),{...init,headers});
+}
+function error(message:string,status=400){return json({error:message},{status,headers:{'Cache-Control':'no-store'}});}
+function coordinator(env:Env){return env.FXGA_COORDINATOR.getByName('global-calendar-v3');}
+function normalizeObservation(item:any):MacroObservation{
+  return {
+    seriesId:String(item?.seriesId??''),title:String(item?.title??item?.seriesId??''),value:typeof item?.value==='number'?item.value:null,
+    date:typeof item?.date==='string'?item.date:null,previous:typeof item?.previous==='number'?item.previous:null,change:typeof item?.change==='number'?item.change:null,
+    units:String(item?.units??''),frequency:String(item?.frequency??''),categories:Array.isArray(item?.categories)?item.categories.map(String):[],
+    economy:typeof item?.economy==='string'?item.economy:undefined,economies:Array.isArray(item?.economies)?item.economies.map(String):undefined,
+    importance:item?.importance==='critical'?'critical':'high',source:typeof item?.source==='string'?item.source:'Google Cloud',
+    lastUpdated:typeof item?.lastUpdated==='string'?item.lastUpdated:undefined,
+    history:Array.isArray(item?.history)?item.history.filter((x:any)=>x&&typeof x.date==='string'&&typeof x.value==='number'):[],
+  } as MacroObservation;
+}
+function groupMacro(observations:MacroObservation[],generatedAt:string|null=null){
+  const economies:Record<string,MacroObservation[]>=Object.fromEntries(TARGET_ECONOMIES.map(e=>[e,[]]));
+  const global:MacroObservation[]=[];
+  for(const observation of observations){
+    const tags=Array.isArray((observation as any).economies)&&(observation as any).economies.length?(observation as any).economies.map(String):[String((observation as any).economy??'GLOBAL')];
+    let assigned=false;
+    for(const economy of TARGET_ECONOMIES) if(tags.includes(economy)){economies[economy].push(observation);assigned=true;}
+    if(!assigned||tags.includes('GLOBAL'))global.push(observation);
+  }
+  return {generatedAt,mode:'google-cloud-run-webhook',targetEconomies:TARGET_ECONOMIES,totalObservations:observations.length,counts:Object.fromEntries(TARGET_ECONOMIES.map(e=>[e,economies[e].length])),economies,global};
+}
+const SOURCE_VIEW=[
+  {id:'fred-google',name:'FRED via Google Cloud Run',category:'Macro Data API',region:'Global',status:'live',note:'Fetched only by Google Cloud Run. Cloudflare never calls FRED.'},
+  {id:'fxstreet-google',name:'FXStreet Calendar via Google Cloud Run',category:'Economic Calendar',region:'Global',status:'live',note:'Fetched only by Google Cloud Run.'},
+  {id:'myfxbook-google',name:'Myfxbook Calendar via Google Cloud Run',category:'Economic Calendar',region:'Global',status:'live',note:'Fetched only by Google Cloud Run; browser fallback runs in the Google container.'},
+  {id:'official-news-google',name:'Official Central Bank & Statistics Feeds via Google Cloud',category:'Official News',region:'Global',status:'live',note:'RSS/Atom collection is Google Cloud only.'},
+  {id:'super-economist-google',name:'FXGA 9705 Super Economist',category:'Decision Engine',region:'Google Cloud',status:'live',note:'9,705-method registry, family collapse, forecasts and BUY/SELL/WAIT are computed in Google Cloud.'},
+] as const;
+
+export class FxgaCoordinator extends DurableObject<Env>{
+  constructor(ctx:DurableObjectState,env:Env){super(ctx,env);}
+  private broadcast(payload:unknown){
+    const message=JSON.stringify(payload);
+    for(const socket of this.ctx.getWebSockets()) if(socket.readyState===WebSocket.OPEN){try{socket.send(message);}catch{}}
+  }
+  private async remember(requestId:string){
+    const recent=(await this.ctx.storage.get<string[]>(REPLAY_KEY))??[];
+    if(recent.includes(requestId))return false;
+    await this.ctx.storage.put(REPLAY_KEY,[...recent,requestId].slice(-500));return true;
+  }
+  private async applyWebhook(requestId:string,envelope:Record<string,any>){
+    if(!(await this.remember(requestId)))return {duplicate:true};
+    const type=String(envelope.type??''),payload=envelope.payload as Record<string,any>;
+    if(type==='calendar-snapshot'){
+      if(!Array.isArray(payload?.events))throw new Error('calendar-snapshot missing events');
+      await this.ctx.storage.put(CALENDAR_KEY,payload);
+    }else if(type==='release-delta'){
+      const existing=(await this.ctx.storage.get<Record<string,any>>(CALENDAR_KEY))??{events:[]};
+      const byId=new Map<string,CalendarEvent>((existing.events??[]).map((e:CalendarEvent)=>[e.id,e]));
+      for(const event of Array.isArray(payload?.events)?payload.events:[]){
+        if(!event?.id)continue;
+        byId.set(event.id,{...(byId.get(event.id)??{}),...event} as CalendarEvent);
+        const historyKey=`google-release:${event.id}`;
+        const history=(await this.ctx.storage.get<any[]>(historyKey))??[];
+        await this.ctx.storage.put(historyKey,[...history,{capturedAt:envelope.generatedAt??new Date().toISOString(),event}].slice(-30));
+      }
+      await this.ctx.storage.put(CALENDAR_KEY,{...existing,generatedAt:envelope.generatedAt??new Date().toISOString(),events:[...byId.values()]});
+    }else if(type==='macro-snapshot'){
+      const observations=(Array.isArray(payload?.observations)?payload.observations:[]).filter((x:any)=>x?.seriesId).map(normalizeObservation);
+      if(!observations.length)throw new Error('macro-snapshot missing observations');
+      await this.ctx.storage.put(MACRO_KEY,{...payload,observations});
+    }else if(type==='intelligence-snapshot'){
+      if(Number(payload?.registry?.totalMethods)!==9705||Number(payload?.registry?.totalFamilies)!==150)throw new Error('intelligence-snapshot registry contract failed');
+      await this.ctx.storage.put(INTELLIGENCE_KEY,payload);
+    }else{
+      throw new Error(`Unsupported collector webhook type: ${type}`);
+    }
+    const previous=(await this.ctx.storage.get<Record<string,any>>(META_KEY))??{};
+    const meta={...previous,lastWebhookAt:new Date().toISOString(),lastType:type,lastRequestId:requestId,updates:Number(previous.updates??0)+1};
+    await this.ctx.storage.put(META_KEY,meta);
+    this.broadcast({type:'google-cloud-update',updateType:type,timestamp:meta.lastWebhookAt});
+    return {accepted:true,type,updates:meta.updates};
+  }
+  private async state(){
+    const [calendar,macro,intelligence,meta]=await Promise.all([
+      this.ctx.storage.get<Record<string,any>>(CALENDAR_KEY),
+      this.ctx.storage.get<Record<string,any>>(MACRO_KEY),
+      this.ctx.storage.get<Record<string,any>>(INTELLIGENCE_KEY),
+      this.ctx.storage.get<Record<string,any>>(META_KEY),
+    ]);
+    const events=Array.isArray(calendar?.events)?calendar!.events as CalendarEvent[]:[];
+    const now=Date.now();
+    const upcoming=events.filter(e=>Date.parse(e.date)>=now).slice(0,250).map(event=>({event,releaseAt:event.date}));
+    const active=events.filter(e=>Math.abs(Date.parse(e.date)-now)<=10*60000).map(event=>({event,releaseAt:event.date}));
+    const recent=events.filter(e=>Date.parse(e.date)<now&&Date.parse(e.date)>=now-6*3600000).slice(-100).map(event=>({event,releaseAt:event.date}));
+    return {calendar,macro,intelligence,meta,events,upcoming,active,recent,initialized:Boolean(events.length&&(macro?.observations?.length||intelligence?.globalMacro?.totalObservations))};
+  }
+  async fetch(request:Request):Promise<Response>{
+    const url=new URL(request.url);
+    if(url.pathname==='/ws'){
+      if(request.headers.get('Upgrade')?.toLowerCase()!=='websocket')return new Response('Expected WebSocket upgrade',{status:426});
+      const pair=new WebSocketPair(),[client,server]=Object.values(pair);this.ctx.acceptWebSocket(server);
+      server.serializeAttachment({connectedAt:Date.now()});server.send(JSON.stringify({type:'connected',channel:'fxga-google-webhook-live',timestamp:new Date().toISOString()}));
+      return new Response(null,{status:101,webSocket:client});
+    }
+    if(url.pathname==='/collector/webhook'&&request.method==='POST'){
+      if(request.headers.get('X-FXGA-Verified')!=='1')return json({error:'Unverified internal collector request'},{status:403});
+      try{return json(await this.applyWebhook(request.headers.get('X-FXGA-Request-Id')?.trim()??'',await request.json() as Record<string,any>));}
+      catch(e){return json({error:e instanceof Error?e.message:'Collector update failed'},{status:400});}
+    }
+    if(url.pathname==='/state')return json(await this.state());
+    if(url.pathname==='/status'){
+      const s=await this.state();
+      return json({collectorMode:'external-webhook',websocketClients:this.ctx.getWebSockets().length,lastWebhookAt:s.meta?.lastWebhookAt??null,initialized:s.initialized,
+        safety:{upstreamCalendarRequestsFromCloudflare:0,upstreamFredRequestsFromCloudflare:0,upstreamNewsRequestsFromCloudflare:0,upstreamMarketRequestsFromCloudflare:0,browserSecondsFromCloudflare:0}});
+    }
+    if(url.pathname==='/release'){
+      const id=url.searchParams.get('id')?.trim()??'';return json({id,snapshots:id?(await this.ctx.storage.get<any[]>(`google-release:${id}`))??[]:[]});
+    }
+    return new Response('Not found',{status:404});
+  }
+  async alarm(){return;}
+}
+
+async function getState(env:Env){
+  const response=await coordinator(env).fetch('https://fxga-coordinator.internal/state');
+  if(!response.ok)throw new Error(`Passive state ${response.status}`);
+  return await response.json() as Record<string,any>;
+}
+function eventsFromState(s:Record<string,any>){return Array.isArray(s?.events)?s.events as CalendarEvent[]:[];}
+function macroFromState(s:Record<string,any>){
+  const raw=Array.isArray(s?.macro?.observations)?s.macro.observations:[];
+  return raw.map(normalizeObservation);
+}
+function intelligenceFromState(s:Record<string,any>){return s?.intelligence??null;}
+function filterMacro(observations:MacroObservation[],url:URL){
+  const raw=url.searchParams.get('series');
+  let selected=observations;
+  if(raw){const ids=new Set(raw.split(',').map(x=>x.trim().toUpperCase()).filter(Boolean));selected=selected.filter(x=>ids.has(x.seriesId.toUpperCase()));}
+  const category=url.searchParams.get('category');if(category)selected=selected.filter(x=>x.categories?.includes(category));
+  const q=url.searchParams.get('q')?.toLowerCase();if(q)selected=selected.filter(x=>`${x.seriesId} ${x.title} ${(x.categories||[]).join(' ')}`.toLowerCase().includes(q));
+  const limit=Math.min(220,Math.max(1,Number(url.searchParams.get('limit')||16)));return selected.slice(0,limit);
+}
+
+export default{
+  async fetch(request:Request,env:Env):Promise<Response>{
+    const url=new URL(request.url);
+    if(!url.pathname.startsWith('/api/'))return new Response(null,{status:404});
+    if(url.pathname==='/api/collector-webhook'){
+      if(request.method!=='POST')return error('Method not allowed',405);
+      if(!env.COLLECTOR_WEBHOOK_SECRET)return error('Collector webhook is not configured',503);
+      try{
+        const verified=await verifyCollectorWebhook(request,env.COLLECTOR_WEBHOOK_SECRET);
+        const upstream=await coordinator(env).fetch(new Request('https://fxga-coordinator.internal/collector/webhook',{method:'POST',headers:{'Content-Type':'application/json','X-FXGA-Verified':'1','X-FXGA-Request-Id':verified.requestId},body:verified.rawBody}));
+        return new Response(upstream.body,{status:upstream.status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store',...SECURITY_HEADERS}});
+      }catch(e){return error(e instanceof Error?e.message:'Collector webhook rejected',401);}
+    }
+    if(url.pathname==='/api/live'){
+      if(request.method!=='GET')return error('Method not allowed',405);
+      return coordinator(env).fetch(new Request('https://fxga-coordinator.internal/ws',request));
+    }
+    if(request.method!=='GET')return error('Method not allowed',405);
+    try{
+      const s=await getState(env),events=eventsFromState(s),observations=macroFromState(s),intel=intelligenceFromState(s);
+      if(url.pathname==='/api/health'){
+        return json({ok:true,app:'FXGA Macro Intelligence',collectorMode:'google-cloud-run-webhook',timestamp:new Date().toISOString(),configured:{
+          fred:false,calendarScraping:false,externalCollectorWebhook:Boolean(env.COLLECTOR_WEBHOOK_SECRET),calendarSources:['Myfxbook','FXStreet','CNBC'],browserRun:false,durableCoordinator:Boolean(env.FXGA_COORDINATOR),officialNewsScraping:false,
+        },methodRegistry:intel?.registry??null,scheduler:{initialized:s.initialized,mode:'external-cloud-run-webhook',calendarSyncedAt:s.calendar?.generatedAt??null,nextReleaseAt:s.upcoming?.[0]?.event?.date??null,active:s.active,upcoming:s.upcoming,recent:s.recent,baseline:intel?.macroAnalysis?{generatedAt:intel.generatedAt,analysis:intel.macroAnalysis,observations}:null},
+          safety:{workerSubrequestCeiling:0,collectorMaxConcurrentConnections:0,browserSoftBudgetSecondsPerUtcDay:0,browserSessionReuse:false,releaseMode:'Google Cloud Tasks -> signed webhook',normalStateUpstreamCalendarRequests:0,normalStateUpstreamFredRequests:0,normalStateUpstreamNewsRequests:0,normalStateUpstreamMarketRequests:0,releaseWindowPrimary:'Google Cloud Run collector',cloudflareRole:'receive signed webhooks, persist, serve API/UI and WebSockets only'}},{headers:{'Cache-Control':'no-store'}});
+      }
+      if(url.pathname==='/api/sources')return json({sources:SOURCE_VIEW});
+      if(url.pathname==='/api/dashboard'){
+        const now=Date.now(),calendar=events.filter(e=>Date.parse(e.date)>=now-6*3600000).slice(0,150);
+        return json({generatedAt:intel?.generatedAt??s.meta?.lastWebhookAt??new Date().toISOString(),macro:observations.slice(0,80),calendar,news:intel?.news??[],sources:SOURCE_VIEW,errors:[]});
+      }
+      if(url.pathname==='/api/analysis')return intel?.macroAnalysis?json(intel.macroAnalysis):error('Google intelligence snapshot is not initialized',503);
+      if(url.pathname==='/api/economy-analysis')return intel?.economyAnalysis?json(intel.economyAnalysis):error('Google economy analysis is not initialized',503);
+      if(url.pathname==='/api/session-signals')return intel?.sessionSignals?json({...intel.sessionSignals,collectorMode:'google-cloud-run-webhook',economyObservationCount:observations.length}):error('Google session intelligence is not initialized',503);
+      if(url.pathname==='/api/release-impact')return intel?.releaseImpact?json(intel.releaseImpact):error('Google release impact is not initialized',503);
+      if(url.pathname==='/api/super-economist'||url.pathname==='/api/decision-intelligence')return intel?json(intel):error('Google Super Economist is not initialized',503);
+      if(url.pathname==='/api/global-macro')return json(intel?.globalMacro??groupMacro(observations,s.macro?.generatedAt??null));
+      if(url.pathname==='/api/release-state')return json({initialized:s.initialized,mode:'external-cloud-run-webhook',calendarSources:['Myfxbook','FXStreet','CNBC'],calendarSyncedAt:s.calendar?.generatedAt??null,nextReleaseAt:s.upcoming?.[0]?.event?.date??null,nextAlarmAt:null,active:s.active,upcoming:s.upcoming,recent:s.recent,
+        baseline:intel?.macroAnalysis?{generatedAt:intel.generatedAt,analysis:intel.macroAnalysis,observations}:null,stats:{upstreamCalendarRequestsFromCloudflare:0,upstreamFredRequestsFromCloudflare:0,upstreamNewsRequestsFromCloudflare:0,externalWebhookUpdates:s.meta?.updates??0},externalCollector:s.meta??null});
+      if(url.pathname==='/api/release-history'){
+        const id=url.searchParams.get('id')?.trim()??'';if(!id)return error('id is required');
+        return coordinator(env).fetch(`https://fxga-coordinator.internal/release?id=${encodeURIComponent(id)}`);
+      }
+      if(url.pathname==='/api/calendar'){
+        const days=Math.min(31,Math.max(1,Number(url.searchParams.get('days')||7))),importance=Math.min(3,Math.max(1,Number(url.searchParams.get('importance')||1))),cutoff=Date.now()+days*86400000;
+        return json({events:events.filter(e=>Number(e.importance??1)>=importance&&Date.parse(e.date)<=cutoff).sort((a,b)=>Date.parse(a.date)-Date.parse(b.date)),cached:true,mode:'google-cloud-run-webhook',calendarSources:['Myfxbook','FXStreet','CNBC'],calendarSyncedAt:s.calendar?.generatedAt??null});
+      }
+      if(url.pathname==='/api/news')return json({items:Array.isArray(intel?.news)?intel.news:[],mode:'google-cloud-run-webhook'});
+      if(url.pathname==='/api/fred/catalog')return intel?.fredCatalog?json(intel.fredCatalog):json({total:observations.length,series:observations.map(x=>({id:x.seriesId,title:x.title,units:x.units,frequency:x.frequency,categories:x.categories})),categories:[],policy:{importantOnly:true,scope:'persisted Google Cloud data only'}});
+      if(url.pathname==='/api/fred'){const series=filterMacro(observations,url);return json({series,selection:{cachedOnly:true,source:'Google Cloud webhook',count:series.length}});}
+      if(url.pathname==='/api/acquisition/catalog')return json({methods:[],sources:SOURCE_VIEW,status:{websocketClients:0,inFlightSources:0,browserBudget:{dayUtc:new Date().toISOString().slice(0,10),usedSeconds:0,softLimitSeconds:0,remainingSeconds:0,browserSessionReuse:false,reason:'All acquisition moved to Google Cloud',nextLaunchAllowedAt:null},sources:SOURCE_VIEW.length},
+        limits:{externalSubrequestsPerInvocation:0,simultaneousOutgoingConnections:0,collectorMaxConcurrentConnections:0,browserSoftBudgetSecondsPerUtcDay:0,browserConcurrentJobsInFxga:0,minBrowserLaunchGapSeconds:0},policy:{publicPagesOnly:true,robotsAware:true,bypassLogin:false,bypassCaptcha:false,bypassPaywall:false,botEvasion:false,cloudflareAcquisitionDisabled:true}});
+      if(url.pathname==='/api/acquire')return error('Direct acquisition is disabled on Cloudflare. Google Cloud is the only acquisition tier.',409);
+      return error('API route not found',404);
+    }catch(e){return error(e instanceof Error?e.message:'Passive webhook state unavailable',503);}
+  },
+  async scheduled(_controller:ScheduledController,_env:Env,_ctx:ExecutionContext){return;},
+};

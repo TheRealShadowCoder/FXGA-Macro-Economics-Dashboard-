@@ -1,12 +1,21 @@
-name: Deploy FXGA Macro Intelligence
+name: Deploy FXGA Passive Cloudflare Edge
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'worker/**'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'index.html'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 concurrency:
-  group: fxga-production
+  group: fxga-cloudflare-production
   cancel-in-progress: true
 
 permissions:
@@ -20,121 +29,69 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+
       - name: Install dependencies
         run: npm install
-      - name: Build
+
+      - name: Build dashboard and passive Worker
         run: npm run build
-      - name: Sync FRED API key to Cloudflare Worker
+
+      - name: Require passive-edge configuration
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          COLLECTOR_WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo '::error::CLOUDFLARE_API_TOKEN is missing'; exit 1; }
+          test -n "$COLLECTOR_WEBHOOK_SECRET" || { echo '::error::COLLECTOR_WEBHOOK_SECRET is missing'; exit 1; }
+          node <<'NODE'
+          const fs=require('fs');
+          const text=fs.readFileSync('wrangler.jsonc','utf8');
+          if(!text.includes('worker/index-v3.ts')) throw new Error('Cloudflare must deploy passive worker/index-v3.ts');
+          if(!text.includes('"COLLECTOR_MODE": "external-webhook"')) throw new Error('Cloudflare must default to external-webhook mode');
+          if(/"browser"\s*:/.test(text)) throw new Error('Cloudflare Browser binding must be removed');
+          if(/"triggers"\s*:/.test(text)) throw new Error('Cloudflare scheduled collection must be removed');
+          NODE
+
+      - name: Sync only webhook authentication secret to Cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 4f260a0775a3df407e08512610c9898b
-          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          COLLECTOR_WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
         run: |
-          if [ -n "$FRED_API_KEY" ]; then
-            printf '%s' "$FRED_API_KEY" | npx wrangler secret put FRED_API_KEY
-          else
-            echo "::error::FRED_API_KEY repository secret is not configured."
-            exit 1
-          fi
-      - name: Deploy to Cloudflare Workers
+          printf '%s' "$COLLECTOR_WEBHOOK_SECRET" | npx wrangler secret put COLLECTOR_WEBHOOK_SECRET
+          npx wrangler secret delete FRED_API_KEY >/dev/null 2>&1 || true
+          npx wrangler secret delete NEWS_API_KEY >/dev/null 2>&1 || true
+          npx wrangler secret delete TRADING_ECONOMICS_API_KEY >/dev/null 2>&1 || true
+
+      - name: Deploy passive Cloudflare Worker and UI
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 4f260a0775a3df407e08512610c9898b
           wranglerVersion: '4.118.0'
           command: deploy
-      - name: Verify live macro intelligence stack
+
+      - name: Verify zero-acquisition Cloudflare contract
         run: |
           node <<'NODE'
-          const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
-          const expectedEngine = 'scraped-consensus-v5';
-          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-          async function getJson(path) {
-            const response = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' } });
-            const text = await response.text();
-            if (!response.ok) throw new Error(`${path} returned ${response.status}: ${text.slice(0, 1000)}`);
-            try { return JSON.parse(text); } catch { throw new Error(`${path} did not return valid JSON`); }
-          }
-
-          let health = null;
-          for (let attempt = 1; attempt <= 12; attempt += 1) {
-            try {
-              health = await getJson('/api/health');
-              if (health?.calendarEngineVersion === expectedEngine && health?.configured?.fred && health?.configured?.browserRun && health?.configured?.durableCoordinator && health?.configured?.calendarScraping) break;
-            } catch (error) {
-              if (attempt === 12) throw error;
+          const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          async function raw(path,opts={}){
+            let last;
+            for(let i=0;i<10;i++){
+              try{const r=await fetch(base+path,{...opts,headers:{Accept:'application/json',...(opts.headers||{})}});return r;}catch(e){last=e;await sleep(1200)}
             }
-            if (attempt < 12) await sleep(2000);
+            throw last;
           }
-
-          if (health?.calendarEngineVersion !== expectedEngine) throw new Error(`Live Worker is stale: expected ${expectedEngine}, got ${health?.calendarEngineVersion ?? 'none'}`);
-          if (!health?.configured?.fred) throw new Error('FRED is not configured');
-          if (!health?.configured?.browserRun || !health?.configured?.durableCoordinator) throw new Error('Cloudflare browser/coordinator bindings are not live');
-          if (!Array.isArray(health?.configured?.calendarSources) || !['Myfxbook', 'FXStreet', 'CNBC'].every((name) => health.configured.calendarSources.includes(name))) throw new Error('Expected all requested calendar sources');
-          if (health?.safety?.releaseWindowPrimary !== 'FXStreet public calendar feed') throw new Error('FXStreet public feed is not the release-window primary');
-          if (health?.safety?.workerSubrequestCeiling > 45 || health?.safety?.collectorMaxConcurrentConnections > 5 || health?.safety?.browserSoftBudgetSecondsPerUtcDay > 480) throw new Error('Safety budget regression');
-
-          const catalog = await getJson('/api/fred/catalog');
-          if (catalog?.policy?.importantOnly !== true) throw new Error('FRED catalog is not marked curated/important-only');
-          if (!Array.isArray(catalog?.series) || catalog.series.length !== 109) throw new Error(`Expected 109-series curated FRED base, got ${catalog?.series?.length ?? 0}`);
-          if (!Array.isArray(catalog?.categories) || catalog.categories.length !== 17) throw new Error(`Expected 17 FRED categories, got ${catalog?.categories?.length ?? 0}`);
-          if (!Array.isArray(catalog?.policy?.globalCoverage) || !['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN'].every((name) => catalog.policy.globalCoverage.includes(name))) throw new Error('Global FRED coverage policy is incomplete');
-          if (catalog.series.some((series) => !['critical','high'].includes(series.importance))) throw new Error('FRED catalog contains a non-important series');
-
-          const sampleCategories = ['inflation','labour','growth','liquidity','credit','housing','manufacturing','policy-rates','treasury-yields','yield-spreads','recession-risk','financial-conditions','usd-fx','volatility','consumption','business-activity','leading-indicators'];
-          for (const category of sampleCategories) {
-            const payload = await getJson(`/api/fred?category=${encodeURIComponent(category)}&limit=1`);
-            const first = payload?.series?.[0];
-            if (!first || first.value === null || !first.date) throw new Error(`Live curated FRED category ${category} returned no observation`);
-          }
-
-          const analysis = await getJson('/api/analysis');
-          if (!analysis?.regime?.name || !Array.isArray(analysis?.dimensions) || analysis.dimensions.length < 7) throw new Error('Macro analysis endpoint is incomplete');
-          if (!Array.isArray(analysis?.assets) || analysis.assets.length < 4 || analysis?.coverage?.observed < 20) throw new Error('Macro analysis coverage is unexpectedly low');
-
-          const releaseState = await getJson('/api/release-state');
-          console.log('SCRAPED_CALENDAR_DIAGNOSTICS=' + JSON.stringify({ initialized: releaseState?.initialized, mode: releaseState?.mode, sourceStatus: releaseState?.calendarSourceStatus, upcoming: releaseState?.upcoming?.length ?? 0, active: releaseState?.active?.length ?? 0 }));
-          if (!releaseState?.initialized || releaseState?.mode !== 'scraped-calendar-consensus') throw new Error('Event-driven release scheduler is not initialized in scraped consensus mode');
-          const sourceStatus = releaseState?.calendarSourceStatus;
-          if (!sourceStatus?.sources?.myfxbook || !sourceStatus?.sources?.fxstreet || !sourceStatus?.sources?.cnbc) throw new Error('Per-source calendar status is incomplete');
-          if (!(sourceStatus.sources.myfxbook.ok || sourceStatus.sources.fxstreet.ok) || !(sourceStatus.mergedEvents > 0)) throw new Error(`No primary calendar source returned events: ${JSON.stringify(sourceStatus)}`);
-
-          const calendar = await getJson('/api/calendar?days=7&importance=1');
-          if (!Array.isArray(calendar?.events) || calendar.events.length < 1) throw new Error('Cached scraped economic calendar returned no events');
-          if (calendar?.mode !== 'scraped-calendar-consensus') throw new Error('Calendar endpoint is not using scraped consensus state');
-          if (!calendar?.analytics?.fxstreetDeviation || !calendar?.analytics?.normalizedSurprise || !calendar?.analytics?.standardizedSurprise || !calendar?.analytics?.beatMissInlineProbabilities || !calendar?.analytics?.revisionDelta) throw new Error('Calendar analytics flags are incomplete');
-          if (calendar.events.some((event) => !event.probabilities || typeof event.probabilities.sampleSize !== 'number')) throw new Error('Calendar events are missing calibrated beat/miss/in-line probabilities');
-
-          const impact = await getJson('/api/release-impact');
-          if (!Array.isArray(impact?.assets) || impact.assets.length !== 5) throw new Error(`Expected five release-impact assets, got ${impact?.assets?.length ?? 0}`);
-          for (const id of ['usd','rates','gold','equities','crypto']) {
-            const asset = impact.assets.find((item) => item.id === id);
-            if (!asset || typeof asset.score !== 'number' || typeof asset.releaseImpulse !== 'number' || !asset.probabilities) throw new Error(`Release impact missing for ${id}`);
-            const total = Object.values(asset.probabilities).reduce((sum, value) => sum + Number(value), 0);
-            if (Math.abs(total - 100) > 0.2) throw new Error(`Release probabilities for ${id} do not sum to 100: ${total}`);
-          }
-
-          const signals = await getJson('/api/session-signals');
-          if (!Array.isArray(signals?.sessions) || signals.sessions.length !== 5) throw new Error(`Expected five session blocks, got ${signals?.sessions?.length ?? 0}`);
-          for (const id of ['sydney','tokyo','london','new-york','overlap']) {
-            const session = signals.sessions.find((item) => item.id === id);
-            if (!session || !Array.isArray(session.signals) || session.signals.length < 4) throw new Error(`Session signals missing for ${id}`);
-            if (session.signals.some((signal) => !['BUY','SELL','WAIT'].includes(signal.direction))) throw new Error(`Invalid signal direction in ${id}`);
-          }
-
-          const acquisition = await getJson('/api/acquisition/catalog');
-          if (!Array.isArray(acquisition?.methods) || acquisition.methods.length < 10) throw new Error('Acquisition method stack is incomplete');
-          const requiredSources = ['myfxbook-calendar', 'fxstreet-calendar', 'cnbc-economy'];
-          if (!Array.isArray(acquisition?.sources) || !requiredSources.every((id) => acquisition.sources.some((source) => source.id === id))) throw new Error('Calendar source registry is incomplete');
-
-          await new Promise((resolve, reject) => {
-            if (typeof WebSocket === 'undefined') return reject(new Error('Node runner has no WebSocket implementation'));
-            const ws = new WebSocket(base.replace('https://', 'wss://') + '/api/live');
-            const timer = setTimeout(() => { try { ws.close(); } catch {} reject(new Error('WebSocket verification timed out')); }, 8000);
-            ws.addEventListener('message', (event) => { try { const payload = JSON.parse(String(event.data)); if (payload?.type === 'connected') { clearTimeout(timer); ws.close(1000, 'CI verification complete'); resolve(); } } catch {} });
-            ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket verification failed')); });
-          });
-
-          console.log(`FXGA verification passed: ${catalog.total} curated FRED series across ${catalog.categories.length} categories, ${calendar.events.length} calendar events, ${impact.assets.length} release-impact assets, ${signals.sessions.length} session signal blocks.`);
+          const hres=await raw('/api/health');
+          if(!hres.ok) throw new Error(`/api/health ${hres.status}: ${(await hres.text()).slice(0,500)}`);
+          const h=await hres.json();
+          if(h.collectorMode!=='google-cloud-run-webhook') throw new Error(`Wrong collector mode ${h.collectorMode}`);
+          if(h.configured?.browserRun!==false||h.configured?.calendarScraping!==false||h.configured?.officialNewsScraping!==false) throw new Error('Cloudflare acquisition is not fully disabled');
+          const s=h.safety||{};
+          for(const k of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests']) if(Number(s[k]??-1)!==0) throw new Error(`${k} must be zero`);
+          if(Number(s.browserSoftBudgetSecondsPerUtcDay??-1)!==0) throw new Error('Cloudflare Browser budget must be zero');
+          const acquire=await raw('/api/acquire?source=fred');
+          if(acquire.status!==409) throw new Error(`Cloudflare acquisition endpoint must be disabled, got ${acquire.status}`);
+          console.log('Passive Cloudflare verified: signed webhook receive/persist/serve only; all upstream acquisition counters are zero.');
           NODE
