@@ -1,0 +1,42 @@
+name: Apply FXGA Sampling Policy Telemetry
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/sampling-telemetry.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Add sampling policy telemetry
+        run: python3 scripts/patch-sampling-telemetry.py
+
+      - name: Validate collector
+        working-directory: cloud-run-collector
+        run: |
+          npm install --ignore-scripts --no-fund --no-audit
+          npm run check
+          npm audit --omit=dev --audit-level=moderate
+
+      - name: Commit sampling telemetry
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/server-v2.js cloud-run-collector/package.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Expose release sampling policy telemetry'
+          git pull --rebase origin main
+          git push origin HEAD:main
