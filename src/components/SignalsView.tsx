@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchReleaseImpact } from '../lib/api';
 import type { ReleaseImpactPayload, SessionSignalsPayload } from '../lib/types';
+import { DecisionIntelligence } from './DecisionIntelligence';
 import { ReleaseImpactView } from './ReleaseImpactView';
 
 function scoreClass(score: number) {
@@ -24,21 +25,22 @@ export function SignalsView({ data, loading, error }: { data: SessionSignalsPayl
     return () => { cancelled = true; };
   }, [data?.generatedAt]);
 
-  if (loading && !data) return <div className="loading-panel">Calculating session signals from macro and release state…</div>;
+  if (loading && !data) return <div className="loading-panel">Calculating five-economy macro divergence and session intelligence…</div>;
   if (error) return <div className="alert error">{error}</div>;
   if (!data) return null;
 
   return (
     <>
+      <DecisionIntelligence data={data} />
       <ReleaseImpactView data={impact} loading={impactLoading} error={impactError} />
 
       <section className="panel signals-summary">
         <div>
-          <span className="eyebrow">Report based directional engine</span>
+          <span className="eyebrow">Session execution layer</span>
           <h2>{data.macroRegime}</h2>
           <p>{data.methodology}</p>
         </div>
-        <div className="signal-summary-stat"><strong>{data.macroConfidence}%</strong><span>Macro confidence</span></div>
+        <div className="signal-summary-stat"><strong>{data.macroConfidence}%</strong><span>U.S. structural confidence</span></div>
       </section>
 
       <section className="session-grid">
@@ -55,17 +57,30 @@ export function SignalsView({ data, loading, error }: { data: SessionSignalsPayl
             </div>
             {session.nextCatalyst && <div className="next-catalyst"><small>Next catalyst</small>{session.nextCatalyst}</div>}
             <div className="signal-list">
-              {session.signals.map((signal) => (
-                <div className="signal-row" key={signal.symbol}>
-                  <div className="signal-symbol"><strong>{signal.symbol}</strong><span>{signal.confidence}% confidence</span></div>
-                  <div className={`signal-score ${scoreClass(signal.score)}`}>{signal.score > 0 ? '+' : ''}{signal.score}</div>
-                  <div className={`signal-direction ${signal.direction.toLowerCase()}`}>{signal.direction}</div>
-                  <div className="signal-rationale">
-                    {signal.rationale.slice(0, 3).map((item) => <span key={item}>{item}</span>)}
-                    <small>{signal.invalidation}</small>
+              {session.signals.map((signal) => {
+                const enhanced = signal as typeof signal & {
+                  conviction?: number;
+                  convictionLabel?: string;
+                  coverage?: string;
+                  risk?: string;
+                  executionGate?: string;
+                  components?: { structuralDivergence: number; policyDivergence: number; releaseDivergence: number };
+                };
+                return (
+                  <div className="signal-row" key={signal.symbol}>
+                    <div className="signal-symbol"><strong>{signal.symbol}</strong><span>{signal.confidence}% confidence{typeof enhanced.conviction === 'number' ? ` · ${enhanced.conviction}/100 conviction` : ''}</span></div>
+                    <div className={`signal-score ${scoreClass(signal.score)}`}>{signal.score > 0 ? '+' : ''}{signal.score}</div>
+                    <div className={`signal-direction ${signal.direction.toLowerCase()}`}>{signal.direction}</div>
+                    <div className="signal-rationale">
+                      {enhanced.components && (
+                        <span>Structure {enhanced.components.structuralDivergence >= 0 ? '+' : ''}{enhanced.components.structuralDivergence} · Policy {enhanced.components.policyDivergence >= 0 ? '+' : ''}{enhanced.components.policyDivergence} · Release {enhanced.components.releaseDivergence >= 0 ? '+' : ''}{enhanced.components.releaseDivergence}</span>
+                      )}
+                      {signal.rationale.slice(0, 2).map((item) => <span key={item}>{item}</span>)}
+                      <small>{enhanced.executionGate ? enhanced.executionGate.replaceAll('_', ' ').toLowerCase() : signal.invalidation}</small>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </article>
         ))}
