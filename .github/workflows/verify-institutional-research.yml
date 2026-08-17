@@ -1,0 +1,73 @@
+name: Verify Institutional Research Platform
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-institutional-research.yml'
+      - 'src/**'
+      - 'worker/**'
+      - 'cloud-run-collector/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Check professional public language
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const files=['src/App.tsx','src/components/AcquisitionView.tsx','src/components/DecisionIntelligence.tsx','src/components/ResearchView.tsx'];
+          const banned=[/FXGA\s*9705/i,/Google Cloud/i,/Cloudflare/i,/Super Economist/i,/\bWS\b/];
+          for(const file of files){
+            const text=fs.readFileSync(file,'utf8');
+            for(const pattern of banned)if(pattern.test(text))throw new Error(`${file} exposes internal wording matched by ${pattern}`);
+          }
+          const brand=fs.readFileSync('src/brand.ts','utf8');
+          if(!brand.includes('FX_GLOBAL_AVENGERS_LOGO')||brand.length<1000)throw new Error('FX Global Avengers brand asset is not integrated');
+          console.log('Public-language and brand contract passed.');
+          NODE
+
+      - name: Verify live research contracts
+        run: |
+          node <<'NODE'
+          const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          async function get(path){const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}});const t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,800)}`);return JSON.parse(t)}
+          let research;
+          for(let i=0;i<12;i++){
+            try{research=await get('/api/research');if(research?.risk?.categories?.length>=10)break;}catch(e){if(i===11)throw e;}
+            await sleep(3000);
+          }
+          if(!research||Number(research.schemaVersion)!==1)throw new Error('Research schema is unavailable');
+          if(typeof research.dataQuality?.overall!=='number')throw new Error('Data-quality score missing');
+          if(!Array.isArray(research.features)||research.features.length===0)throw new Error('Feature-engineering output missing');
+          if(!Array.isArray(research.forecasts)||research.forecasts.length===0)throw new Error('Forecast ensemble output missing');
+          if(!Array.isArray(research.regimes)||research.regimes.length===0)throw new Error('Regime map missing');
+          if(!Array.isArray(research.risk?.categories)||research.risk.categories.length<10)throw new Error('Independent risk categories incomplete');
+          if(!Array.isArray(research.scenarios)||research.scenarios.length<10)throw new Error('Scenario laboratory incomplete');
+          if(Number(research.capabilityCoverage?.total)!==40)throw new Error('Upgrade-domain coverage registry incomplete');
+          if(!research.provenance?.reproducibilityHash)throw new Error('Reproducibility hash missing');
+          if(!Array.isArray(research.operatingStandards?.slos)||research.operatingStandards.slos.length<7)throw new Error('Operating SLOs incomplete');
+          const quality=await get('/api/data-quality');
+          if(typeof quality?.overall!=='number')throw new Error('Data-quality endpoint invalid');
+          const scenarios=await get('/api/scenarios');
+          if(!Array.isArray(scenarios?.scenarios)||scenarios.scenarios.length<10)throw new Error('Scenario endpoint invalid');
+          const releases=await get('/api/release-analytics');
+          if(!Array.isArray(releases?.profiles))throw new Error('Release analytics endpoint invalid');
+          const calendar=await get('/api/calendar-history?days=7');
+          if(!Array.isArray(calendar?.events))throw new Error('Seven-day release memory invalid');
+          const market=await get('/api/market-prices');
+          if(!Array.isArray(market?.assets)||market.assets.length===0)throw new Error('Cross-asset market snapshot invalid');
+          console.log(JSON.stringify({dataQuality:research.dataQuality.overall,features:research.features.length,forecasts:research.forecasts.length,regimes:research.regimes.length,riskCategories:research.risk.categories.length,scenarios:research.scenarios.length,releaseProfiles:research.releaseAnalytics?.profiles?.length||0,calendarHistory:calendar.events.length,marketAssets:market.assets.length}));
+          NODE
