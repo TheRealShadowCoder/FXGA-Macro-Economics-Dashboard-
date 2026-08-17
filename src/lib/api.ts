@@ -8,6 +8,7 @@ import type {
   ReleaseImpactPayload,
   SessionSignalsPayload,
 } from './types';
+import type { EconomyAnalysisPayload, GlobalMacroPayload } from './economy-types';
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { headers: { Accept: 'application/json' } });
@@ -30,6 +31,14 @@ export function fetchDashboard(): Promise<DashboardPayload> {
 
 export function fetchMacroAnalysis(): Promise<MacroAnalysisPayload> {
   return getJson<MacroAnalysisPayload>('/api/analysis');
+}
+
+export function fetchEconomyAnalysis(): Promise<EconomyAnalysisPayload> {
+  return getJson<EconomyAnalysisPayload>('/api/economy-analysis');
+}
+
+export function fetchGlobalMacro(): Promise<GlobalMacroPayload> {
+  return getJson<GlobalMacroPayload>('/api/global-macro');
 }
 
 export function fetchReleaseImpact(): Promise<ReleaseImpactPayload> {
