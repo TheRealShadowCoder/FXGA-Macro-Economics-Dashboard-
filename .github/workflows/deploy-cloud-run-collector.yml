@@ -56,9 +56,7 @@ jobs:
             echo '::error::Missing COLLECTOR_WEBHOOK_SECRET. Add it under repository Settings > Secrets and variables > Actions > Secrets.'
             missing=1
           fi
-          if [ "$missing" -ne 0 ]; then
-            exit 1
-          fi
+          if [ "$missing" -ne 0 ]; then exit 1; fi
           echo 'ready=true' >> "$GITHUB_OUTPUT"
           echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
           echo 'Google Cloud deployment configuration is present.'
@@ -91,21 +89,14 @@ jobs:
         run: |
           gcloud secrets describe fxga-collector-webhook-secret >/dev/null 2>&1 || gcloud secrets create fxga-collector-webhook-secret --replication-policy=automatic
           printf '%s' "$COLLECTOR_WEBHOOK_SECRET" | gcloud secrets versions add fxga-collector-webhook-secret --data-file=-
-          if [ -z "$FRED_API_KEY" ]; then
-            echo '::error::FRED_API_KEY repository secret is not configured.'
-            exit 1
-          fi
+          if [ -z "$FRED_API_KEY" ]; then echo '::error::FRED_API_KEY repository secret is not configured.'; exit 1; fi
           gcloud secrets describe fxga-fred-api-key >/dev/null 2>&1 || gcloud secrets create fxga-fred-api-key --replication-policy=automatic
           printf '%s' "$FRED_API_KEY" | gcloud secrets versions add fxga-fred-api-key --data-file=-
 
       - name: Grant runtime secret access before deploy
         run: |
-          gcloud secrets add-iam-policy-binding fxga-collector-webhook-secret \
-            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
-            --role=roles/secretmanager.secretAccessor >/dev/null
-          gcloud secrets add-iam-policy-binding fxga-fred-api-key \
-            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
-            --role=roles/secretmanager.secretAccessor >/dev/null
+          gcloud secrets add-iam-policy-binding fxga-collector-webhook-secret --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/secretmanager.secretAccessor >/dev/null
+          gcloud secrets add-iam-policy-binding fxga-fred-api-key --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/secretmanager.secretAccessor >/dev/null
 
       - name: Build and push container
         run: |
@@ -128,7 +119,7 @@ jobs:
             --concurrency 20 \
             --min 0 \
             --max 2 \
-            --timeout 300 \
+            --timeout 900 \
             --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,CLOUD_TASKS_QUEUE=$TASK_QUEUE,CLOUD_TASKS_INVOKER_SA=$RUNTIME_SERVICE_ACCOUNT,CALENDAR_DAYS=14,MAX_BROWSER_SECONDS=25,GLOBAL_FRED_TARGET=180,CLOUDFLARE_WEBHOOK_URL=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook" \
             --set-secrets "COLLECTOR_WEBHOOK_SECRET=fxga-collector-webhook-secret:latest,FRED_API_KEY=fxga-fred-api-key:latest"
           SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
@@ -137,31 +128,29 @@ jobs:
 
       - name: Configure Cloud Run invocation IAM
         run: |
-          gcloud run services add-iam-policy-binding "$SERVICE" \
-            --region "$GCP_REGION" \
-            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
-            --role=roles/run.invoker >/dev/null
+          gcloud run services add-iam-policy-binding "$SERVICE" --region "$GCP_REGION" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/run.invoker >/dev/null
 
       - name: Configure three free-tier scheduler jobs
         run: |
           upsert_job() {
-            NAME="$1"; SCHEDULE="$2"; URI="$3"; BODY="$4"
+            NAME="$1"; SCHEDULE="$2"; URI="$3"; BODY="$4"; DEADLINE="$5"
             if gcloud scheduler jobs describe "$NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
-              gcloud scheduler jobs update http "$NAME" --location "$GCP_REGION" --schedule="$SCHEDULE" --time-zone='Etc/UTC' --uri="$URI" --http-method=POST --update-headers='Content-Type=application/json' --message-body="$BODY" --oidc-service-account-email="$RUNTIME_SERVICE_ACCOUNT" --oidc-token-audience="$SERVICE_URL"
+              gcloud scheduler jobs update http "$NAME" --location "$GCP_REGION" --schedule="$SCHEDULE" --time-zone='Etc/UTC' --uri="$URI" --http-method=POST --update-headers='Content-Type=application/json' --message-body="$BODY" --oidc-service-account-email="$RUNTIME_SERVICE_ACCOUNT" --oidc-token-audience="$SERVICE_URL" --attempt-deadline="$DEADLINE"
             else
-              gcloud scheduler jobs create http "$NAME" --location "$GCP_REGION" --schedule="$SCHEDULE" --time-zone='Etc/UTC' --uri="$URI" --http-method=POST --headers='Content-Type=application/json' --message-body="$BODY" --oidc-service-account-email="$RUNTIME_SERVICE_ACCOUNT" --oidc-token-audience="$SERVICE_URL"
+              gcloud scheduler jobs create http "$NAME" --location "$GCP_REGION" --schedule="$SCHEDULE" --time-zone='Etc/UTC' --uri="$URI" --http-method=POST --headers='Content-Type=application/json' --message-body="$BODY" --oidc-service-account-email="$RUNTIME_SERVICE_ACCOUNT" --oidc-token-audience="$SERVICE_URL" --attempt-deadline="$DEADLINE"
             fi
           }
-          upsert_job fxga-calendar-bootstrap '5 0 * * *' "$SERVICE_URL/bootstrap" '{}'
-          upsert_job fxga-fast-global-macro '0 * * * *' "$SERVICE_URL/macro-sync?mode=fast" '{"mode":"fast"}'
-          upsert_job fxga-full-global-macro '20 0 * * *' "$SERVICE_URL/macro-sync?mode=full" '{"mode":"full"}'
+          upsert_job fxga-calendar-bootstrap '5 0 * * *' "$SERVICE_URL/bootstrap" '{}' '180s'
+          upsert_job fxga-fast-global-macro '0 * * * *' "$SERVICE_URL/macro-sync?mode=fast" '{"mode":"fast"}' '180s'
+          upsert_job fxga-full-global-macro '20 0 * * *' "$SERVICE_URL/macro-sync?mode=full" '{"mode":"full"}' '900s'
 
       - name: Deployment summary
         run: |
           echo "Cloud Run collector: $SERVICE_URL"
           echo "Google project: $GCP_PROJECT_ID"
           echo "Runtime identity: $RUNTIME_SERVICE_ACCOUNT"
+          echo "Cloud Run request timeout: 900 seconds"
           echo "Calendar bootstrap: daily at 00:05 UTC"
           echo "Fast macro/rates/FX/risk sync: hourly"
-          echo "Full 109+ dynamic USA/Europe/UK/South Africa/Japan FRED sync: daily at 00:20 UTC"
+          echo "Full cached-universe USA/Europe/UK/South Africa/Japan FRED sync: daily at 00:20 UTC with 900-second Scheduler deadline"
           echo "Release checks: exact event-time Cloud Tasks"
