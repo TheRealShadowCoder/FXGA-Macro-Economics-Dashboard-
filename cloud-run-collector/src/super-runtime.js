@@ -11,6 +11,7 @@ const audit=db.collection('fxga_super_economist_audit');
 const NEWS_TTL_MS=15*60_000;
 const webhookUrl=process.env.CLOUDFLARE_WEBHOOK_URL||'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook';
 const webhookSecret=process.env.COLLECTOR_WEBHOOK_SECRET||'';
+const fredApiKey=process.env.FRED_API_KEY||'';
 
 function hash(value){return crypto.createHash('sha256').update(typeof value==='string'?value:JSON.stringify(value)).digest('hex');}
 function numeric(value){
@@ -34,8 +35,59 @@ async function safeWebhook(type,payload){
     }catch(e){last=e;}
     await new Promise(r=>setTimeout(r,300*(2**attempt)));
   }
-  console.warn('Intelligence webhook deferred:',String(last?.message||last).slice(0,220));return {sent:false,error:String(last?.message||last).slice(0,220)};
+  console.warn(`${type} webhook deferred:`,String(last?.message||last).slice(0,220));return {sent:false,error:String(last?.message||last).slice(0,220)};
 }
+
+async function fetchFredDescriptor(descriptor){
+  if(!fredApiKey)throw new Error('FRED_API_KEY not configured');
+  const seriesId=String(descriptor.seriesId||'').trim();
+  if(!seriesId)throw new Error('FRED descriptor missing seriesId');
+  const url=new URL('https://api.stlouisfed.org/fred/series/observations');
+  url.searchParams.set('series_id',seriesId);
+  url.searchParams.set('api_key',fredApiKey);
+  url.searchParams.set('file_type','json');
+  url.searchParams.set('sort_order','desc');
+  url.searchParams.set('limit','24');
+  const response=await fetch(url,{headers:{Accept:'application/json','User-Agent':'FXGA-Google-Super-Economist/3.0'}});
+  if(!response.ok)throw new Error(`FRED ${seriesId} HTTP ${response.status}`);
+  const payload=await response.json();
+  const history=(payload.observations||[])
+    .map(row=>({date:row.date,value:row.value==='.'?null:Number(row.value)}))
+    .filter(row=>Number.isFinite(row.value)).reverse();
+  const latest=history.at(-1),previous=history.at(-2);
+  return {
+    seriesId,title:descriptor.title||seriesId,value:latest?.value??null,date:latest?.date??null,previous:previous?.value??null,
+    change:latest&&previous?latest.value-previous.value:null,units:descriptor.units||'',frequency:descriptor.frequency||'',
+    categories:[descriptor.category||'fxga-core'],economy:descriptor.economy||'USA',economies:[descriptor.economy||'USA'],
+    importance:descriptor.curated?'critical':'high',source:descriptor.source||'FRED',lastUpdated:descriptor.lastUpdated||undefined,history,
+  };
+}
+
+export async function syncFullMacroFromUniverse(){
+  const universeState=await get('fred-universe');
+  const universe=universeState?.payload;
+  const descriptors=Array.isArray(universe?.series)?universe.series:[];
+  if(descriptors.length<FRED_BASE_IDS.length)throw new Error(`Persisted FRED universe is incomplete: ${descriptors.length}`);
+  const started=Date.now(),observations=[],failures=[];
+  for(let i=0;i<descriptors.length;i+=8){
+    const batch=descriptors.slice(i,i+8);
+    const settled=await Promise.allSettled(batch.map(fetchFredDescriptor));
+    settled.forEach((result,index)=>{
+      if(result.status==='fulfilled'&&result.value.value!==null)observations.push(result.value);
+      else failures.push({seriesId:batch[index]?.seriesId||'unknown',error:result.status==='rejected'?String(result.reason?.message||result.reason).slice(0,180):'No current numeric observation'});
+    });
+  }
+  const snapshot={
+    generatedAt:new Date().toISOString(),mode:'full',importantOnly:true,dynamicInternational:true,
+    targetEconomies:TARGET_ECONOMIES,requested:descriptors.length,observations,
+    universeSummary:universe.summary,failures:failures.slice(0,40),officialSources:universe.officialSources||[],
+    collectionArchitecture:'google-cloud-cached-universe-observation-sync',
+  };
+  const changed=await putChanged('macro',snapshot);
+  const webhook=changed?await safeWebhook('macro-snapshot',snapshot):{sent:false,reason:'unchanged'};
+  return {changed,webhook,mode:'full',observations:observations.length,fetchedNow:observations.length,requested:descriptors.length,failures:failures.length,universe:universe.summary,durationMs:Date.now()-started};
+}
+
 async function ensureNews(force=false){
   const saved=await get('news');
   if(!force&&saved?.payload?.items&&Date.parse(saved.updatedAt||0)>Date.now()-NEWS_TTL_MS)return saved.payload;
