@@ -115,8 +115,8 @@ jobs:
           }
 
           const signals = await getJson('/api/session-signals');
-          if (!Array.isArray(signals?.sessions) || signals.sessions.length !== 4) throw new Error(`Expected four session blocks, got ${signals?.sessions?.length ?? 0}`);
-          for (const id of ['asia','london','new-york','overlap']) {
+          if (!Array.isArray(signals?.sessions) || signals.sessions.length !== 5) throw new Error(`Expected five session blocks, got ${signals?.sessions?.length ?? 0}`);
+          for (const id of ['sydney','tokyo','london','new-york','overlap']) {
             const session = signals.sessions.find((item) => item.id === id);
             if (!session || !Array.isArray(session.signals) || session.signals.length < 4) throw new Error(`Session signals missing for ${id}`);
             if (session.signals.some((signal) => !['BUY','SELL','WAIT'].includes(signal.direction))) throw new Error(`Invalid signal direction in ${id}`);
