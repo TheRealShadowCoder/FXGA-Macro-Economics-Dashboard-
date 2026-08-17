@@ -316,9 +316,12 @@ function mergeEvents(primary,secondary) {
 }
 
 function taskOffsets(maxImportance) {
-  if (maxImportance>=3) return [0,60,300,900,3600,14400];
-  if (maxImportance===2) return [0,300,900,3600,14400];
-  return [0,900,3600];
+  // Negative offsets intentionally capture a verified pre-release market baseline.
+  // The release-check gateway triggers market-sync after every successful check,
+  // so the -5m task seeds the strict event-study baseline without fabricating prices.
+  if (maxImportance>=3) return [-300,0,60,300,900,3600,14400];
+  if (maxImportance===2) return [-300,0,300,900,3600,14400];
+  return [-900,0,900,3600];
 }
 async function createReleaseTask(releaseAt,offsetSeconds,eventIds) {
   if (!cfg.projectId||!cfg.serviceUrl||!cfg.taskInvokerSa) return {created:false,reason:'tasks-not-configured'};
