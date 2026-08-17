@@ -1,81 +1,23 @@
+import { useEffect, useMemo, useState } from 'react';
 import type { AcquisitionCatalogPayload } from '../lib/types';
 
-type PassiveSource = {
-  id: string;
-  name: string;
-  category: string;
-  region: string;
-  status?: 'live' | 'error' | 'stale' | 'partial';
-  note?: string;
-};
+type PassiveSource={id:string;name:string;category:string;region:string;status?:'live'|'error'|'stale'|'partial';note?:string};
+type SourceCheck={id:string;layer:string;ok:boolean;details?:Record<string,unknown>};
+type OperationalHealth={status?:'healthy'|'degraded';criticalIssues?:string[];calendarEvents?:number;macroObservations?:number;fredRequested?:number;fredLiveFetched?:number|null;fredFailures?:number;staleMacroRetained?:number;officialNewsItems?:number;staleNewsRetained?:number;economyCounts?:Record<string,number>;sourceChecks?:SourceCheck[];agesMinutes?:Record<string,number|null>};
 
-export function AcquisitionView({
-  catalog,
-  loading,
-  error,
-  liveStatus,
-  lastLiveEvent,
-}: {
-  catalog: AcquisitionCatalogPayload | null;
-  loading: boolean;
-  error: string;
-  liveStatus: 'connecting' | 'connected' | 'offline';
-  lastLiveEvent: string;
-}) {
-  if (loading && !catalog) return <div className="loading-panel">Loading Google Cloud ingestion state…</div>;
-  if (error) return <div className="alert error">{error}</div>;
-  if (!catalog) return null;
+function statusFor(source:PassiveSource,health:OperationalHealth|null){if(!health)return source.status??'live';const checks=health.sourceChecks??[];if(source.id==='fred-google')return (health.macroObservations??0)>=100?(health.fredFailures??0)>20?'partial':'live':'error';if(source.id==='fxstreet-google')return checks.find(x=>x.id==='fxstreet')?.ok===false?'error':'live';if(source.id==='myfxbook-google')return checks.find(x=>x.id==='myfxbook')?.ok===false?'partial':'live';if(source.id==='official-news-google'){const news=checks.filter(x=>x.layer==='official-news');return !news.length?'partial':news.every(x=>!x.ok)?'error':news.some(x=>!x.ok)?'partial':'live';}if(source.id==='super-economist-google')return health.status==='degraded'?'partial':'live';return source.status??'live';}
 
-  const sources = catalog.sources as unknown as PassiveSource[];
-  const live = sources.filter((source) => !source.status || source.status === 'live').length;
+export function AcquisitionView({catalog,loading,error,liveStatus,lastLiveEvent}:{catalog:AcquisitionCatalogPayload|null;loading:boolean;error:string;liveStatus:'connecting'|'connected'|'offline';lastLiveEvent:string}){
+  const [health,setHealth]=useState<OperationalHealth|null>(null),[healthError,setHealthError]=useState('');
+  useEffect(()=>{let cancelled=false;void fetch('/api/super-economist',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}).then(async r=>{if(!r.ok)throw new Error(`Operational health ${r.status}`);return r.json();}).then((x:{operationalHealth?:OperationalHealth})=>{if(!cancelled)setHealth(x.operationalHealth??null);}).catch(e=>{if(!cancelled)setHealthError(e instanceof Error?e.message:'Operational health unavailable');});return()=>{cancelled=true};},[lastLiveEvent]);
+  if(loading&&!catalog)return <div className="loading-panel">Loading Google Cloud ingestion state…</div>;if(error)return <div className="alert error">{error}</div>;if(!catalog)return null;
+  const sources=catalog.sources as unknown as PassiveSource[],states=useMemo(()=>sources.map(source=>({...source,derivedStatus:statusFor(source,health)})),[sources,health]),live=states.filter(x=>x.derivedStatus==='live').length,failedChecks=(health?.sourceChecks??[]).filter(x=>!x.ok);
+  return <>
+    <section className="acquisition-hero"><div className="panel acquisition-summary"><span className="eyebrow">FXGA Google Cloud Ingestion Matrix</span><h2>Real collection health, not decorative source labels.</h2><p>FRED, calendars, official central-bank/statistics feeds, browser fallback and intelligence execute in Google Cloud. Cloudflare serves the signed snapshots only.</p><div className="guard-grid"><div><strong>{health?.macroObservations??'—'}</strong><span>macro observations</span></div><div><strong>{health?.calendarEvents??'—'}</strong><span>calendar events</span></div><div><strong>{health?.officialNewsItems??'—'}</strong><span>official news items</span></div><div><strong>{live}/{states.length}</strong><span>Google source groups healthy</span></div></div></div><div className="panel browser-budget-card"><div className="panel-title"><div><span className="eyebrow">Signed Webhook Transport</span><h2>{liveStatus==='connected'?'Connected':liveStatus}</h2></div><span className={`live-pill ${liveStatus}`}>{liveStatus}</span></div><p>Changed Google state is pushed through authenticated webhooks. The active dashboard view refreshes when a Google update arrives.</p><small>{lastLiveEvent||'Waiting for the next Google Cloud state update.'}</small></div></section>
 
-  return (
-    <>
-      <section className="acquisition-hero">
-        <div className="panel acquisition-summary">
-          <span className="eyebrow">FXGA Google Cloud Ingestion Matrix</span>
-          <h2>Acquisition happens in Google Cloud. Cloudflare only receives signed state updates.</h2>
-          <p>FRED, economic calendars, official central-bank/statistics feeds, browser fallback and the FXGA intelligence engine run upstream in Google Cloud. This page is an observability console, not a Cloudflare fetch control.</p>
-          <div className="guard-grid">
-            <div><strong>{sources.length}</strong><span>registered Google sources</span></div>
-            <div><strong>{live}</strong><span>sources reporting live</span></div>
-            <div><strong>0</strong><span>Cloudflare upstream fetches</span></div>
-            <div><strong>0s</strong><span>Cloudflare browser budget</span></div>
-          </div>
-        </div>
-        <div className="panel browser-budget-card">
-          <div className="panel-title"><div><span className="eyebrow">Signed Webhook Transport</span><h2>{liveStatus === 'connected' ? 'Connected' : liveStatus}</h2></div><span className={`live-pill ${liveStatus}`}>{liveStatus}</span></div>
-          <p>Google publishes changed calendar, macro and intelligence snapshots through authenticated webhooks. WebSocket updates then tell the dashboard to refresh its cached views.</p>
-          <small>{lastLiveEvent || 'Waiting for the next Google Cloud state update.'}</small>
-        </div>
-      </section>
+    {healthError&&<div className="alert warn">{healthError}</div>}{health?.criticalIssues?.length?<div className="alert warn">Google collection degraded: {health.criticalIssues.join(' · ')}</div>:null}
+    <section className="section-head"><div><span className="eyebrow">Google Cloud Sources</span><h2>Functional ingestion dependencies</h2></div><span>{live}/{states.length} healthy</span></section><section className="acquisition-source-grid">{states.map(source=><article className="acquisition-source-card" key={source.id}><div className="acq-source-head"><div><span className="eyebrow">{source.region}</span><h3>{source.name}</h3></div><span className={`source-status ${source.derivedStatus}`}>{source.derivedStatus}</span></div><p>{source.category}</p>{source.note&&<small>{source.note}</small>}<div className="source-guards"><span>Execution: Google Cloud</span><span>Edge fetch: disabled</span></div></article>)}</section>
 
-      <section className="section-head"><div><span className="eyebrow">Google Cloud Sources</span><h2>Ingestion and decision dependencies</h2></div><span>{live}/{sources.length} live</span></section>
-      <section className="acquisition-source-grid">
-        {sources.map((source) => (
-          <article className="acquisition-source-card" key={source.id}>
-            <div className="acq-source-head">
-              <div><span className="eyebrow">{source.region}</span><h3>{source.name}</h3></div>
-              <span className={`source-status ${source.status ?? 'live'}`}>{source.status ?? 'live'}</span>
-            </div>
-            <p>{source.category}</p>
-            {source.note && <small>{source.note}</small>}
-            <div className="source-guards"><span>Execution: Google Cloud</span><span>Edge fetch: disabled</span></div>
-          </article>
-        ))}
-      </section>
-
-      <section className="panel policy-panel">
-        <span className="eyebrow">Architecture Contract</span>
-        <div className="policy-pills">
-          <span className="enabled">Google acquisition: yes</span>
-          <span className="enabled">Google intelligence: yes</span>
-          <span className="enabled">signed webhook replay: yes</span>
-          <span className="disabled">Cloudflare acquisition: no</span>
-          <span className="disabled">Cloudflare browser: no</span>
-          <span className="disabled">Cloudflare FRED/news/calendar requests: no</span>
-        </div>
-      </section>
-    </>
-  );
+    <section className="panel policy-panel"><span className="eyebrow">Collection Diagnostics</span><div className="policy-pills"><span className={(health?.macroObservations??0)>=100?'enabled':'disabled'}>Macro {health?.macroObservations??'—'} / requested {health?.fredRequested??'—'}</span><span className={(health?.fredFailures??0)===0?'enabled':'disabled'}>FRED failures {health?.fredFailures??'—'}</span><span className={(health?.staleMacroRetained??0)===0?'enabled':'disabled'}>Last-known-good retained {health?.staleMacroRetained??'—'}</span><span className={failedChecks.length?'disabled':'enabled'}>Failed source checks {failedChecks.length}</span>{Object.entries(health?.economyCounts??{}).map(([economy,count])=><span key={economy} className={count>=5?'enabled':'disabled'}>{economy}: {count}</span>)}</div>{failedChecks.length>0&&<div className="alert warn">Source failures: {failedChecks.map(x=>`${x.id} (${x.layer})`).join(' · ')}</div>}<span className="eyebrow">Architecture Contract</span><div className="policy-pills"><span className="enabled">Google acquisition: yes</span><span className="enabled">Google intelligence: yes</span><span className="enabled">signed webhooks: yes</span><span className="disabled">Cloudflare acquisition: no</span><span className="disabled">Cloudflare browser: no</span><span className="disabled">Cloudflare FRED/news/calendar requests: no</span></div></section>
+  </>;
 }
