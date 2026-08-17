@@ -6,8 +6,10 @@ import type { Env } from '../types';
 const DAILY_SOFT_CAP_SECONDS = 480;
 const RESERVATION_SECONDS = 45;
 const MIN_LAUNCH_GAP_MS = 22_000;
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const DOCUMENT_TTL_MS = 6 * 60 * 60 * 1000;
+const FXSTREET_PAYLOAD_TIMEOUT_MS = 2_500;
+const GENERIC_SETTLE_MS = 2_500;
 
 export interface RenderedCalendarDocument {
   sourceId: string;
@@ -30,6 +32,7 @@ export interface RenderedCalendarDocument {
   };
   warnings: string[];
   networkTrace: Array<{ url: string; status: number; contentType: string }>;
+  fetchDurationMs: number;
 }
 
 interface StoredDocument {
@@ -98,6 +101,7 @@ function parseFxstreetRenderedText(text: string) {
 
     const values = tokens.slice(timeIndex + 3);
     const actual = values[0] && values[0] !== '-' ? values[0] : undefined;
+    const deviation = values[1] && values[1] !== '-' ? values[1] : undefined;
     const consensus = values[2] && values[2] !== '-' ? values[2] : undefined;
     const previous = values[3] && values[3] !== '-' ? values[3] : undefined;
 
@@ -106,6 +110,7 @@ function parseFxstreetRenderedText(text: string) {
       name,
       currency,
       actual,
+      deviation,
       consensus,
       previous,
       impact: 1,
@@ -159,6 +164,20 @@ function shouldCaptureJson(url: string, contentType: string) {
   return contentType.toLowerCase().includes('json') && shouldTrace(url);
 }
 
+function isFxstreetCalendarPayload(url: string) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'calendar-api.fxsstatic.com' && /\/eventDates\//i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isNonessentialRequest(url: string, resourceType: string) {
+  if (['image', 'font', 'media'].includes(resourceType)) return true;
+  return /doubleclick|google-analytics|googletagmanager|facebook\.net|tiktok\.com|taboola|adservice|securepubads/i.test(url);
+}
+
 async function renderPage(
   browser: Awaited<ReturnType<typeof launch>>,
   sourceId: string,
@@ -166,10 +185,21 @@ async function renderPage(
   const source = getAcquisitionSource(sourceId);
   if (!source) throw new Error(`Unknown calendar browser source: ${sourceId}`);
 
+  const startedAt = Date.now();
   const page = await browser.newPage();
   const captured: Array<{ kind: string; value: unknown }> = [];
   const networkTrace: Array<{ url: string; status: number; contentType: string }> = [];
   const captures: Promise<void>[] = [];
+  let resolveFxstreetPayload: (() => void) | null = null;
+  const fxstreetPayloadReady = new Promise<void>((resolve) => { resolveFxstreetPayload = resolve; });
+
+  if (sourceId === 'fxstreet-calendar') {
+    await page.route('**/*', async (route) => {
+      const request = route.request();
+      if (isNonessentialRequest(request.url(), request.resourceType())) await route.abort();
+      else await route.continue();
+    });
+  }
 
   page.on('response', (response) => {
     const task = (async () => {
@@ -185,6 +215,7 @@ async function renderPage(
         const serialized = JSON.stringify(value);
         if (serialized.length > 1_000_000) return;
         captured.push({ kind: `network-json:${new URL(url).hostname}`, value });
+        if (isFxstreetCalendarPayload(url)) resolveFxstreetPayload?.();
       } catch {
         // Ignore non-JSON, inaccessible, or already-consumed responses.
       }
@@ -194,8 +225,15 @@ async function renderPage(
 
   try {
     await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
-    const settleMs = sourceId === 'fxstreet-calendar' ? 7_000 : 5_000;
-    await page.waitForTimeout(settleMs);
+    if (sourceId === 'fxstreet-calendar') {
+      await Promise.race([
+        fxstreetPayloadReady,
+        page.waitForTimeout(FXSTREET_PAYLOAD_TIMEOUT_MS),
+      ]);
+      await page.waitForTimeout(150);
+    } else {
+      await page.waitForTimeout(GENERIC_SETTLE_MS);
+    }
     await Promise.allSettled(captures);
 
     const html = await page.content();
@@ -221,6 +259,7 @@ async function renderPage(
       },
       warnings: [],
       networkTrace,
+      fetchDurationMs: Date.now() - startedAt,
     };
   } finally {
     await page.close().catch(() => undefined);
@@ -240,6 +279,7 @@ async function persistDebug(storage: DurableObjectStorage, sourceId: string, doc
       ? (document.embeddedJson.find((payload) => payload.kind === 'fxstreet-rendered-text-events')!.value as unknown[]).length
       : 0,
     networkTrace: document.networkTrace.slice(0, 60),
+    fetchDurationMs: document.fetchDurationMs,
   } : {
     fetchedAt: new Date().toISOString(),
     error: error instanceof Error ? error.message.slice(0, 800) : String(error ?? 'Browser render unavailable').slice(0, 800),
