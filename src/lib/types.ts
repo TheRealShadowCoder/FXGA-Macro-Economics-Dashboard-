@@ -133,7 +133,7 @@ export interface SessionTradeSignal {
   symbol: string; direction: 'BUY' | 'SELL' | 'WAIT'; score: number; confidence: number; rationale: string[]; invalidation: string; catalyst?: string;
 }
 export interface SessionSignal {
-  id: 'asia' | 'london' | 'new-york' | 'overlap'; label: string; windowUtc: string; active: boolean;
+  id: 'sydney' | 'tokyo' | 'london' | 'new-york' | 'overlap'; label: string; windowUtc: string; active: boolean;
   state: 'active' | 'upcoming' | 'closed'; risk: 'normal' | 'elevated' | 'event-lockout';
   focusCurrencies: string[]; nextCatalyst?: string; eventCount: number; signals: SessionTradeSignal[];
 }
