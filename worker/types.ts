@@ -44,6 +44,28 @@ export interface ReleaseProbabilities {
   method: 'empirical-bayesian';
 }
 
+export interface FxstreetStyleAnalytics {
+  expectedImpact: 'none' | 'low' | 'medium' | 'high';
+  expectedImpactScore: number;
+  nativeDeviation?: number;
+  deviationPercentile?: number;
+  consensusErrorZ?: number;
+  revisionZ?: number;
+  revisionAdjustedScore?: number;
+  surpriseMomentum: 'accelerating' | 'decelerating' | 'stable' | 'insufficient-history';
+  directionalConsistency?: number;
+  historicalReliability: number;
+  historicalMeanDeviation?: number;
+  historicalDeviationStd?: number;
+  sampleSize: number;
+  methodology: 'fxga-transparent-fxstreet-style';
+  marketImpactAvailability: {
+    trueRange: 'requires-market-price-history';
+    volatilityRatio: 'requires-market-price-history';
+    trueRangeVsDeviation: 'requires-market-price-history';
+  };
+}
+
 export interface CalendarEvent {
   id: string;
   date: string;
@@ -74,6 +96,7 @@ export interface CalendarEvent {
   releaseScore?: number;
   outcome?: ReleaseOutcome;
   probabilities?: ReleaseProbabilities;
+  fxstreetAnalytics?: FxstreetStyleAnalytics;
   relation?: boolean | null;
   betterThanExpected?: boolean;
   worseThanExpected?: boolean;
