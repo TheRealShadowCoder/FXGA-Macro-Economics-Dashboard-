@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchReleaseImpact } from '../lib/api';
 import type { ReleaseImpactPayload, SessionSignalsPayload } from '../lib/types';
+import { DecisionDesk } from './DecisionDesk';
 import { DecisionIntelligence } from './DecisionIntelligence';
 import { ReleaseImpactView } from './ReleaseImpactView';
 
@@ -25,22 +26,23 @@ export function SignalsView({ data, loading, error }: { data: SessionSignalsPayl
     return () => { cancelled = true; };
   }, [data?.generatedAt]);
 
-  if (loading && !data) return <div className="loading-panel">Calculating five-economy macro divergence and session intelligence…</div>;
+  if (loading && !data) return <div className="loading-panel">Calculating macro divergence and currency intelligence…</div>;
   if (error) return <div className="alert error">{error}</div>;
   if (!data) return null;
 
   return (
     <>
       <DecisionIntelligence data={data} />
+      <DecisionDesk data={data} />
       <ReleaseImpactView data={impact} loading={impactLoading} error={impactError} />
 
       <section className="panel signals-summary">
         <div>
-          <span className="eyebrow">Session execution layer</span>
+          <span className="eyebrow">Session intelligence</span>
           <h2>{data.macroRegime}</h2>
           <p>{data.methodology}</p>
         </div>
-        <div className="signal-summary-stat"><strong>{data.macroConfidence}%</strong><span>U.S. structural confidence</span></div>
+        <div className="signal-summary-stat"><strong>{data.macroConfidence}%</strong><span>Structural confidence</span></div>
       </section>
 
       <section className="session-grid">
