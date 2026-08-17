@@ -77,27 +77,45 @@ jobs:
         env:
           TOKEN: ${{ steps.invoke_auth.outputs.id_token }}
         run: |
-          HEALTH=$(curl -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/health")
-          echo "$HEALTH" | node -e '
-            let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-              const h=JSON.parse(s);
-              if(!h.ok || h.service!=="fxga-cloud-run-collector" || Number(h.version||0)<2) throw new Error("Collector v2 health check failed");
-            });'
+          request_json() {
+            NAME="$1"; METHOD="$2"; URL="$3"; BODY="${4:-}"
+            OUT="/tmp/${NAME}.json"
+            if [ "$METHOD" = "POST" ]; then
+              STATUS=$(curl -sS -o "$OUT" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$BODY" "$URL")
+            else
+              STATUS=$(curl -sS -o "$OUT" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$URL")
+            fi
+            echo "$NAME HTTP $STATUS"
+            if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+              node -e 'const fs=require("fs");let s=fs.readFileSync(process.argv[1],"utf8");try{const j=JSON.parse(s);console.error(JSON.stringify({error:j.error||"collector request failed"}))}catch{console.error(s.slice(0,500))}' "$OUT"
+              exit 1
+            fi
+          }
 
-          curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' "$SERVICE_URL/bootstrap" >/tmp/bootstrap.json
-          curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"mode":"full"}' "$SERVICE_URL/macro-sync?mode=full" >/tmp/macro.json
-          STATE=$(curl -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state")
-          echo "$STATE" | node -e '
-            let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-              const state=JSON.parse(s);
-              const events=state?.calendar?.payload?.events?.length||0;
-              const observations=state?.macro?.payload?.observations?.length||0;
-              const universe=state?.fredUniverse?.payload?.summary;
-              if(events<1) throw new Error("Collector calendar state is empty");
-              if(observations<100) throw new Error(`Collector full macro state is too small: ${observations}`);
-              if((universe?.curatedBase||0)<109) throw new Error(`Curated FRED base is below 109: ${universe?.curatedBase||0}`);
-              console.log(`Cloud Run v2 ready: ${events} calendar events, ${observations} macro observations, ${universe?.total||0} discovered series.`);
-            });'
+          request_json health GET "$SERVICE_URL/health"
+          node -e '
+            const h=require("/tmp/health.json");
+            if(!h.ok || h.service!=="fxga-cloud-run-collector" || Number(h.version||0)<2) throw new Error("Collector v2 health check failed");
+            console.log(`Collector v${h.version} health passed; FRED=${Boolean(h.fredConfigured)} tasks=${Boolean(h.tasksConfigured)} webhook=${Boolean(h.webhookConfigured)}`);
+          '
+
+          request_json bootstrap POST "$SERVICE_URL/bootstrap" '{}'
+          node -e 'const b=require("/tmp/bootstrap.json");console.log(`Bootstrap returned ${b.events||0} events; changed=${Boolean(b.changed)}; task clusters=${b.scheduled?.clusters||0}; tasks=${b.scheduled?.tasksCreated||0}`)'
+
+          request_json macro POST "$SERVICE_URL/macro-sync?mode=full" '{"mode":"full"}'
+          node -e 'const m=require("/tmp/macro.json");console.log(`Full macro sync returned ${m.observations||0} observations from ${m.requested||0} requested; failures=${m.failures||0}`)'
+
+          request_json state GET "$SERVICE_URL/state"
+          node -e '
+            const state=require("/tmp/state.json");
+            const events=state?.calendar?.payload?.events?.length||0;
+            const observations=state?.macro?.payload?.observations?.length||0;
+            const universe=state?.fredUniverse?.payload?.summary;
+            console.log(`Collector state proof: events=${events}, observations=${observations}, curatedBase=${universe?.curatedBase||0}, universeTotal=${universe?.total||0}`);
+            if(events<1) throw new Error("Collector calendar state is empty");
+            if(observations<100) throw new Error(`Collector full macro state is too small: ${observations}`);
+            if((universe?.curatedBase||0)<109) throw new Error(`Curated FRED base is below 109: ${universe?.curatedBase||0}`);
+          '
 
       - name: Sync collector webhook secret to Cloudflare
         env:
