@@ -10,21 +10,30 @@ DEPLOY_SA_NAME="fxga-github-deployer"
 RUNTIME_SA_NAME="fxga-collector-runtime"
 
 gcloud config set project "$PROJECT_ID"
+
+# These control-plane APIs must be enabled by the project owner/admin before the
+# GitHub deployer can manage the rest of the runtime services itself.
+gcloud services enable \
+  serviceusage.googleapis.com cloudresourcemanager.googleapis.com \
+  iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
+
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
 DEPLOY_SA="$DEPLOY_SA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
 RUNTIME_SA="$RUNTIME_SA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
 
 gcloud services enable \
   run.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com \
-  cloudtasks.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com \
-  iamcredentials.googleapis.com sts.googleapis.com
+  cloudtasks.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
 
 gcloud iam service-accounts describe "$DEPLOY_SA" >/dev/null 2>&1 || \
   gcloud iam service-accounts create "$DEPLOY_SA_NAME" --display-name='FXGA GitHub deployer'
 gcloud iam service-accounts describe "$RUNTIME_SA" >/dev/null 2>&1 || \
   gcloud iam service-accounts create "$RUNTIME_SA_NAME" --display-name='FXGA Cloud Run collector runtime'
 
-for ROLE in roles/run.admin roles/artifactregistry.admin roles/secretmanager.admin roles/cloudtasks.admin roles/cloudscheduler.admin roles/datastore.owner roles/iam.serviceAccountUser; do
+# The deployer is allowed to create/update the specific infrastructure used by
+# this repository. Service Usage Admin is required because the workflow verifies
+# and enables the APIs it depends on before each deployment.
+for ROLE in roles/run.admin roles/artifactregistry.admin roles/secretmanager.admin roles/cloudtasks.admin roles/cloudscheduler.admin roles/datastore.owner roles/iam.serviceAccountUser roles/serviceusage.serviceUsageAdmin; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$DEPLOY_SA" --role="$ROLE" >/dev/null
 done
 for ROLE in roles/datastore.user roles/cloudtasks.enqueuer; do
