@@ -1,2 +1,2 @@
-activate=2026-08-17T05:07:00Z
-reason=Retry guarded full-sync and Cloudflare cutover after Firestore optional-field persistence fix.
+activate=2026-08-17T11:55:00Z
+reason=Activate Google Cloud FXGA 9705 engine after v3 deployment and verified passive Cloudflare edge.
