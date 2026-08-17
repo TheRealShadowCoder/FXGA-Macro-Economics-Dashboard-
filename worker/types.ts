@@ -22,6 +22,8 @@ export interface SourceInfo {
   note?: string;
 }
 
+export type MacroEconomy = 'USA' | 'EUROPE' | 'UK' | 'SOUTH_AFRICA' | 'JAPAN' | 'GLOBAL';
+
 export interface MacroObservation {
   seriesId: string;
   title: string;
@@ -32,6 +34,10 @@ export interface MacroObservation {
   units?: string;
   frequency?: string;
   categories?: string[];
+  economy?: MacroEconomy | string;
+  economies?: Array<MacroEconomy | string>;
+  importance?: 'critical' | 'high';
+  source?: string;
   lastUpdated?: string;
   history: Array<{ date: string; value: number }>;
 }
