@@ -1,7 +1,5 @@
-verified_at=2026-08-18T04:29:41Z
+verified_at=2026-08-18T12:23:46Z
 contract=v4.14-source
-collector_version=4.14.0
-decision_governance_version=1.4.0
 reaction_function_gap=present
 cross_asset_confirmation=present
 evidence_completeness=present
