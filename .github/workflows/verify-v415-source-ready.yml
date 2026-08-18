@@ -43,7 +43,7 @@ jobs:
           import { buildEventReactionResearch } from './src/event-reaction-research.js';
           import { buildPolicyPathResearch } from './src/policy-path-research.js';
           const measured=(agreement,move)=>({quality:'measured',directionalAgreement:agreement,meanBaseCurrencyMovePct:move});
-          const now=new Date(),studies=Array.from({length:10},(_,i)=>({eventId:`study-${i}`,event:i%2?'Nonfarm Payrolls':'Consumer Price Index',category:i%2?'employment':'inflation',currency:'USD',importance:3,releaseAt:new Date(now.getTime()-(i+1)*86400000).toISOString(),horizons:{'5m':measured(.66,.03),'15m':measured(.69,.05),'1h':measured(.72,.07),'4h':measured(i===9?.44:.64,.06)}}));
+          const now=new Date(),studies=Array.from({length:10},(_,i)=>({eventId:`study-${i}`,event:i%2?'Nonfarm Payrolls':'Consumer Price Index',category:i%2?'employment':'inflation',currency:'USD',importance:3,releaseAt:new Date(now.getTime()-(i+1)*86400000).toISOString(),horizons:{'5m':measured(.66,.03),'15m':measured(.69,.05),'1h':measured(.72,.07),'4h':measured(i===9 ? .44 : .64,.06)}}));
           const reactions=buildEventReactionResearch({studies},now);
           if(reactions.studyCount!==10||!reactions.byCurrency.USD||!reactions.byCategory.inflation||!reactions.byCategory.labour)throw new Error('Event reaction source contract failed');
           const dims=(g,i,l,p,f)=>[{id:'growth',score:g},{id:'inflation',score:i},{id:'labour',score:l},{id:'policy',score:p},{id:'financial',score:f}];
