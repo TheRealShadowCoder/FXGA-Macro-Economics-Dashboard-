@@ -1,0 +1,59 @@
+name: Apply Cross Pair Portfolio Governance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-portfolio-consistency-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply portfolio consistency patch
+        run: python3 scripts/apply_portfolio_consistency_upgrade.py
+      - name: Validate triangular and concentration governance
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
+          const pair=(symbol,score,confidence=75)=>({symbol,direction:score>0?'BUY':'SELL',score,confidence,conviction:70,risk:'normal',components:{structuralDivergence:score,policyDivergence:score*.8,releaseDivergence:score*.5,narrativeDivergence:score*.3},probabilities:score>0?{buy:.64,sell:.15,wait:.21}:{buy:.15,sell:.64,wait:.21}});
+          const primary={rankedOpportunities:[pair('EURUSD',45,82),pair('GBPUSD',35,78),pair('EURGBP',-40,55),pair('USDZAR',-32,74),pair('EURZAR',42,70),pair('GBPZAR',38,68),pair('USDJPY',28,66),pair('XAUUSD',22,61)],sessions:[],decisionSummary:{actionableCount:8}};
+          const history=Array.from({length:16},(_,i)=>({date:new Date(Date.now()-(16-i)*86400000).toISOString(),value:100+i*.2}));
+          const observations=[{seriesId:'P',title:'Portfolio test',value:103,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',history}];
+          const research={dataQuality:{overall:90},risk:{aggregate:15},modelHealth:{score:90,status:'healthy',calibratedForecasts:20},scenarios:[{label:'Base',pairs:primary.rankedOpportunities.map(p=>({symbol:p.symbol,direction:p.direction,score:p.score}))}]};
+          const core=buildDecisionIntelligenceCore({decision:primary,observations,events:[],news:[],marketData:[],research});
+          if(!core.crossPairConsistency||core.crossPairConsistency.checks.length<3)throw new Error('Triangle consistency checks missing');
+          if(!core.portfolioInteraction||!core.portfolioInteraction.pairControls)throw new Error('Portfolio interaction missing');
+          const governed=governDecisionMatrix(primary,core);
+          const triangle=core.crossPairConsistency.checks.find(x=>x.target==='EURGBP');
+          if(!triangle?.signConflict)throw new Error('Synthetic EURGBP inconsistency was not detected');
+          const weakest=governed.rankedOpportunities.find(x=>x.symbol===triangle.weakestSymbol);
+          if(weakest?.direction!=='WAIT'||weakest?.executionGate!=='CROSS_PAIR_CONSISTENCY_WAIT')throw new Error('Weaker triangular leg was not vetoed');
+          console.log(JSON.stringify({triangles:core.crossPairConsistency,portfolio:core.portfolioInteraction,summary:governed.decisionSummary},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit portfolio governance
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add cross-pair and portfolio consistency governance'
+          git pull --rebase origin main
+          git push origin HEAD:main
