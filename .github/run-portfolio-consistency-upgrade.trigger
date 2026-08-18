@@ -1,2 +1,2 @@
-run=2026-08-18T05:43:00+02:00
-reason=Run registered guarded triangular-consistency and common-currency concentration workflow.
+run=2026-08-18T06:12:00+02:00
+reason=Run corrected guarded triangular FX consistency and common-currency concentration workflow while preserving all advanced governance fields.
