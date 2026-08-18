@@ -1,0 +1,59 @@
+name: Apply Decision Memory Calibration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-decision-memory-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply decision memory integration
+        run: python3 scripts/apply_decision_memory_integration.py
+      - name: Validate collector and historical calibration controls
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
+          const now=new Date(),history=Array.from({length:16},(_,i)=>({date:new Date(now.getTime()-(16-i)*86400000).toISOString(),value:100+i*.2}));
+          const observations=[{seriesId:'MEM_A',title:'Memory Test',value:103,date:now.toISOString(),lastUpdated:now.toISOString(),frequency:'Monthly',source:'Primary',history}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:44,confidence:78,conviction:70,risk:'normal',components:{structuralDivergence:48,policyDivergence:39,releaseDivergence:18,narrativeDivergence:10},probabilities:{buy:.64,sell:.16,wait:.20}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const decisionMemory={horizons:{h1:{count:30,hitRate:36,brier:.38,averageSignedBps:-2},h4:{count:30,hitRate:38,brier:.35,averageSignedBps:-1},h24:{count:20,hitRate:40,brier:.34,averageSignedBps:0}},bySymbol:{EURUSD:{horizons:{h1:{count:20,hitRate:35,brier:.39,averageSignedBps:-3},h4:{count:20,hitRate:37,brier:.36,averageSignedBps:-2},h24:{count:12,hitRate:40,brier:.34,averageSignedBps:-1}}}}};
+          const research={dataQuality:{overall:90},risk:{aggregate:20,severity:'low'},modelHealth:{score:85,status:'healthy',calibratedForecasts:20,drifting:1,watch:2},scenarios:[{id:'base',label:'Base',pairs:[{symbol:'EURUSD',direction:'BUY',score:30}]}]};
+          const core=buildDecisionIntelligenceCore({decision:primary,observations,events:[],news:[],marketData:[],research,decisionMemory,now});
+          const pair=core.pairDecisions[0];
+          if(!pair?.historicalCalibration)throw new Error('Historical calibration control missing');
+          if(pair.historicalCalibration.samples<20)throw new Error('Historical samples not consumed');
+          if(pair.historicalCalibration.status!=='degraded')throw new Error(`Expected degraded calibration in synthetic test, got ${pair.historicalCalibration.status}`);
+          if(pair.final.direction!=='WAIT')throw new Error('Degraded historical calibration must veto directional execution at sufficient sample size');
+          const governed=governDecisionMatrix(primary,core);
+          if(governed.rankedOpportunities[0].direction!=='WAIT')throw new Error('Historical calibration veto not propagated');
+          console.log(JSON.stringify({historicalCalibration:pair.historicalCalibration,final:pair.final},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit decision memory integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-memory.js cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/super-economist.js cloud-run-collector/src/super-runtime.js cloud-run-collector/package.json
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add persistent decision calibration memory'
+          git pull --rebase origin main
+          git push origin HEAD:main
