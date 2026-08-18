@@ -128,16 +128,30 @@ function buildFeatures(observations=[]){
     const changePct=Number.isFinite(previous)&&Math.abs(previous)>1e-12?100*momentum/Math.abs(previous):0;
     const z=zscore(latest,values),rz=robustZ(latest,values);
     const short=values.slice(-4),long=values.slice(-12);
-    const shortMean=mean(short),longMean=mean(long);
+    const shortMean=mean(short),longMean=mean(long),diffs=[];for(let i=1;i<values.length;i++)diffs.push(values[i]-values[i-1]);
+    const recentSlope=diffs.length?mean(diffs.slice(-3)):0,priorSlope=diffs.length>=4?mean(diffs.slice(-6,-3)):0,acceleration=recentSlope-priorSlope,slopeScale=Math.max(stdev(diffs.slice(-12)),Math.abs(mean(diffs.slice(-12)))*.25,1e-9),normalizedAcceleration=clamp(acceleration/slopeScale,-4,4),slopeReversal=recentSlope&&priorSlope&&Math.sign(recentSlope)!==Math.sign(priorSlope),turningPointScore=clamp((slopeReversal?55:0)+Math.min(35,Math.abs(normalizedAcceleration)*12)+Math.min(10,Math.abs(rz)*1.5),0,100);
     features.push({
       seriesId:item.seriesId,title:item.title,economy:item.economy||item.economies?.[0]||'GLOBAL',family:macroFamily(item),
       value:latest,previous:Number.isFinite(previous)?previous:null,momentum,changePct,zScore:z,robustZ:rz,
-      shortMean,longMean,trend:shortMean>longMean?'rising':shortMean<longMean?'falling':'flat',
+      shortMean,longMean,trend:shortMean>longMean?'rising':shortMean<longMean?'falling':'flat',recentSlope,priorSlope,acceleration,normalizedAcceleration,slopeReversal:Boolean(slopeReversal),turningPointScore:Math.round(turningPointScore),
       volatility:stdev(values.slice(-12)),sampleSize:values.length,
       freshnessMinutes:ageMinutes(item?.collectedAt||item?.lastUpdated||item?.date),
     });
   }
   return features;
+}
+
+function buildTurningPoints(features=[]){
+  const groups={};
+  for(const feature of features){const key=`${feature.economy}:${feature.family}`;(groups[key]??=[]).push(feature);}
+  const rows=[];
+  for(const [key,items] of Object.entries(groups)){
+    const [economy,family]=key.split(':'),eligible=items.filter(x=>Number(x.sampleSize||0)>=5),reversals=eligible.filter(x=>x.slopeReversal).length,averageTurning=eligible.length?mean(eligible.map(x=>Number(x.turningPointScore||0))):0,averageAcceleration=eligible.length?mean(eligible.map(x=>Number(x.normalizedAcceleration||0))):0,rising=eligible.filter(x=>Number(x.recentSlope||0)>0).length,falling=eligible.filter(x=>Number(x.recentSlope||0)<0).length,breadth=eligible.length?(rising-falling)/eligible.length:0,risk=Math.round(clamp(.55*averageTurning+.25*Math.abs(averageAcceleration)*18+.20*(eligible.length?100*reversals/eligible.length:0),0,100));
+    rows.push({economy,family,series:eligible.length,risk,status:risk>=70?'high':risk>=45?'watch':'stable',reversals,averageAcceleration:Number(averageAcceleration.toFixed(3)),breadth:Number(breadth.toFixed(3)),direction:breadth>.2?'improving':breadth<-.2?'weakening':'mixed',topSeries:[...eligible].sort((a,b)=>Number(b.turningPointScore||0)-Number(a.turningPointScore||0)).slice(0,5).map(x=>({seriesId:x.seriesId,title:x.title,turningPointScore:x.turningPointScore,recentSlope:x.recentSlope,priorSlope:x.priorSlope,acceleration:x.normalizedAcceleration,slopeReversal:x.slopeReversal}))});
+  }
+  const economySummary={};for(const row of rows){const arr=economySummary[row.economy]??=[];arr.push(row);economySummary[row.economy]=arr;}
+  const economies=Object.entries(economySummary).map(([economy,items])=>({economy,risk:Math.round(mean(items.map(x=>x.risk))),highFamilies:items.filter(x=>x.status==='high').length,watchFamilies:items.filter(x=>x.status==='watch').length,direction:mean(items.map(x=>x.breadth))>.15?'improving':mean(items.map(x=>x.breadth))<-.15?'weakening':'mixed',families:items.sort((a,b)=>b.risk-a.risk)})).sort((a,b)=>b.risk-a.risk);
+  return {generatedAt:iso(),economies,rows:rows.sort((a,b)=>b.risk-a.risk),highRisk:rows.filter(x=>x.status==='high').length,watch:rows.filter(x=>x.status==='watch').length};
 }
 
 function ar1Forecast(values){
@@ -253,7 +267,15 @@ function buildReleaseAnalytics(events=[]){
     bullishRate:pct(g.bullish||0,g.count),bearishRate:pct(g.bearish||0,g.count),
     meanAbsSurprise:g.meanAbsSurprise/Math.max(1,g.count),meanWeightedSurprise:mean(g.weighted),
   })).sort((a,b)=>b.count-a.count);
-  return {generatedAt:iso(),completed:enriched.length,events:enriched.slice(-250),profiles};
+  const persistence=[];
+  for(const profile of profiles){const rows=enriched.filter(x=>x.currency===profile.currency&&x.family===profile.family).sort((a,b)=>Date.parse(b.date)-Date.parse(a.date)).slice(0,12),signed=rows.map(x=>Math.sign(Number(x.importanceWeightedSurprise||0))).filter(Boolean);let streak=0,sign=signed[0]||0;for(const value of signed){if(value===sign)streak++;else break;}const recent=rows.slice(0,3),prior=rows.slice(3,6),recentMean=recent.length?mean(recent.map(x=>Number(x.importanceWeightedSurprise||0))):0,priorMean=prior.length?mean(prior.map(x=>Number(x.importanceWeightedSurprise||0))):0,acceleration=recentMean-priorMean,consistency=rows.length?Math.abs(mean(rows.map(x=>Math.sign(Number(x.importanceWeightedSurprise||0))))):0;persistence.push({currency:profile.currency,family:profile.family,count:rows.length,streak:sign*streak,recentMean:Number(recentMean.toFixed(3)),priorMean:Number(priorMean.toFixed(3)),acceleration:Number(acceleration.toFixed(3)),consistency:Number(consistency.toFixed(3)),status:streak>=3?'persistent-positive':streak<=-3?'persistent-negative':Math.abs(acceleration)>=1?'accelerating':'mixed'});}
+  return {generatedAt:iso(),completed:enriched.length,events:enriched.slice(-250),profiles,persistence:persistence.sort((a,b)=>Math.abs(b.streak)-Math.abs(a.streak)||Math.abs(b.acceleration)-Math.abs(a.acceleration))};
+}
+
+function buildCatalystSequence(events=[]){
+  const now=Date.now(),upcoming=(events||[]).filter(e=>{const t=Date.parse(e?.date||'');return Number.isFinite(t)&&t>=now&&t<=now+72*3600000;}).sort((a,b)=>Date.parse(a.date)-Date.parse(b.date)),byCurrency={};for(const e of upcoming){const c=String(e.currency||'NA').toUpperCase();(byCurrency[c]??=[]).push(e);}
+  const currencies=Object.entries(byCurrency).map(([currency,items])=>{let nearestGap=null,clusters=0;for(let i=1;i<items.length;i++){const gap=(Date.parse(items[i].date)-Date.parse(items[i-1].date))/60000;if(nearestGap==null||gap<nearestGap)nearestGap=gap;if(gap<=90)clusters++;}const high=items.filter(x=>Number(x.importance||1)>=3),densityScore=Math.round(clamp(items.length*7+high.length*13+clusters*10+(nearestGap!=null&&nearestGap<=30?15:0),0,100));return {currency,events:items.length,highImpact:high.length,clusters,nearestGapMinutes:nearestGap,densityScore,status:densityScore>=70?'dense':densityScore>=40?'active':'light',next:items.slice(0,8).map(x=>({event:x.event,date:x.date,importance:Number(x.importance||1),category:x.category}))};}).sort((a,b)=>b.densityScore-a.densityScore);
+  return {generatedAt:iso(),windowHours:72,currencies,totalUpcoming:upcoming.length,denseCurrencies:currencies.filter(x=>x.status==='dense').length};
 }
 
 function buildMarketAnalytics(market=[]){
@@ -332,14 +354,12 @@ function buildRegimes(features=[],economyAnalysis={}){
   const regimes=[];
   for(const [key,group] of Object.entries(familyGroups)){
     const [economy,family]=key.split(':');
-    const z=mean(group.map(x=>clamp(x.zScore,-3,3))),momentum=mean(group.map(x=>Math.sign(x.momentum)));
-    const score=clamp(35*z+15*momentum,-100,100);
-    const state=score>25?'expanding':score<-25?'contracting':'balanced';
-    const transitionProbability=clamp(sigmoid((Math.abs(score)-25)/18),.05,.95);
-    regimes.push({economy,family,score:Number(score.toFixed(1)),state,transitionProbability:Number(transitionProbability.toFixed(3)),sampleSize:group.length});
+    const z=mean(group.map(x=>clamp(x.zScore,-3,3))),momentum=mean(group.map(x=>Math.sign(x.momentum))),acceleration=mean(group.map(x=>Number(x.normalizedAcceleration||0))),reversalShare=group.length?group.filter(x=>x.slopeReversal).length/group.length:0;
+    const score=clamp(35*z+15*momentum,-100,100),state=score>25?'expanding':score<-25?'contracting':'balanced',boundaryDistance=Math.min(Math.abs(score-25),Math.abs(score+25),Math.abs(score)),boundaryRisk=Math.exp(-boundaryDistance/18),reversalRisk=clamp(reversalShare+.20*Math.min(1,Math.abs(acceleration)/2),0,1),transitionProbability=clamp(.10+.48*boundaryRisk+.42*reversalRisk,.05,.95),transitionDirection=acceleration>.25?'toward-stronger':acceleration<-.25?'toward-weaker':'unclear';
+    regimes.push({economy,family,score:Number(score.toFixed(1)),state,transitionProbability:Number(transitionProbability.toFixed(3)),transitionDirection,acceleration:Number(acceleration.toFixed(3)),reversalShare:Number(reversalShare.toFixed(3)),sampleSize:group.length});
   }
-  const existing=(economyAnalysis?.economies||[]).map(e=>({economy:e.id,family:'composite',score:Number(e.score??e.currencyScore??0),state:e.regime||'balanced',transitionProbability:Number((.5+Math.min(.45,Math.abs(Number(e.score??0))/200)).toFixed(3)),sampleSize:e.observationCount||0}));
-  return [...existing,...regimes].slice(0,120);
+  const existing=(economyAnalysis?.economies||[]).map(e=>{const score=Number(e.score??e.currencyScore??0),familyRows=regimes.filter(r=>r.economy===e.id),transitionProbability=familyRows.length?mean(familyRows.map(r=>r.transitionProbability)):.5;return {economy:e.id,family:'composite',score,state:e.regime||'balanced',transitionProbability:Number(transitionProbability.toFixed(3)),transitionDirection:familyRows.length?([...familyRows].sort((a,b)=>b.transitionProbability-a.transitionProbability)[0]?.transitionDirection||'unclear'):'unclear',sampleSize:e.observationCount||0};});
+  return [...existing,...regimes].sort((a,b)=>b.transitionProbability-a.transitionProbability).slice(0,120);
 }
 
 function buildProvenance({observations,events,market,news,features,forecasts,releaseAnalytics,risk,scenarios}){
@@ -348,7 +368,7 @@ function buildProvenance({observations,events,market,news,features,forecasts,rel
     macro:hash(observations),calendar:hash(events),market:hash(market),news:hash(news),features:hash(features),
     forecasts:hash(forecasts),releaseAnalytics:hash(releaseAnalytics),risk:hash(risk),scenarios:hash(scenarios),
   };
-  return {generatedAt,modelVersion:'institutional-research-1.0',retrievalTimestamp:generatedAt,hashes:records,reproducibilityHash:hash(records),transformations:['schema-validation','freshness-check','robust-outlier-screen','feature-engineering','walk-forward-model-calibration','adaptive-forecast-ensemble','model-disagreement-uncertainty','forecast-error-attribution','model-drift-detection','drift-adjusted-confidence','uncertainty-calibration','release-surprise-normalization','regime-classification','risk-haircut','scenario-shock']};
+  return {generatedAt,modelVersion:'institutional-research-1.0',retrievalTimestamp:generatedAt,hashes:records,reproducibilityHash:hash(records),transformations:['schema-validation','freshness-check','robust-outlier-screen','feature-engineering','walk-forward-model-calibration','adaptive-forecast-ensemble','model-disagreement-uncertainty','forecast-error-attribution','model-drift-detection','drift-adjusted-confidence','uncertainty-calibration','release-surprise-normalization','surprise-persistence','catalyst-sequencing','turning-point-detection','regime-transition-risk','regime-classification','risk-haircut','scenario-shock']};
 }
 
 function buildOperatingStandards(dataQuality){
@@ -420,9 +440,11 @@ export function buildInstitutionalResearch({observations=[],events=[],market=[],
   const dataQuality=buildDataQuality({observations,events,market,news});
   const sourceReliability=buildSourceReliability(observations);
   const features=buildFeatures(observations);
+  const turningPoints=buildTurningPoints(features);
   const forecasts=buildForecasts(observations);
   const modelHealth=buildModelHealth(forecasts);
   const releaseAnalytics=buildReleaseAnalytics(events);
+  const catalystSequence=buildCatalystSequence(events);
   const marketAnalytics=buildMarketAnalytics(market);
   const regimes=buildRegimes(features,economyAnalysis);
   const scenarios=buildScenarios(currencyStates,opportunities);
@@ -431,7 +453,7 @@ export function buildInstitutionalResearch({observations=[],events=[],market=[],
   const provenance=buildProvenance({observations,events,market,news,features,forecasts,releaseAnalytics,risk,scenarios});
   return {
     schemaVersion:1,generatedAt:iso(),
-    dataQuality,sourceReliability,modelHealth,features:features.slice(0,220),forecasts,releaseAnalytics,marketAnalytics,regimes,risk,scenarios,
+    dataQuality,sourceReliability,modelHealth,turningPoints,catalystSequence,features:features.slice(0,220),forecasts,releaseAnalytics,marketAnalytics,regimes,risk,scenarios,
     operatingStandards,provenance,
     capabilityCoverage:{domains:DOMAIN_COVERAGE.map(([id,name,status])=>({id,name,status})),active:DOMAIN_COVERAGE.filter(x=>x[2]==='active').length,foundation:DOMAIN_COVERAGE.filter(x=>x[2]==='foundation').length,historyBuilding:DOMAIN_COVERAGE.filter(x=>x[2]==='history-building').length,total:40},
     notes:{
