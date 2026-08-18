@@ -1,13 +1,8 @@
 {
-  "generatedAt": "2026-08-18T03:59:04.948Z",
+  "generatedAt": "2026-08-18T04:22:02.439Z",
   "missingContracts": [
-    "core:function crossAssetConfirmation",
-    "core:function evidenceCompletenessControls",
-    "core:function historicalAnalogueControls",
     "core:function structuralBreakControls",
-    "research:function buildStructuralBreaks",
-    "memory:featureVector",
-    "memory:analogueLibrary"
+    "research:function buildStructuralBreaks"
   ],
   "sourceContractsPassed": false,
   "collectorInstallExit": 0,
