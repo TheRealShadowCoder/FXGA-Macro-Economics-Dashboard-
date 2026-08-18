@@ -57,7 +57,7 @@ export function ExplainabilityLayer() {
   const [popover, setPopover] = useState<PopoverState>(null);
 
   useEffect(() => {
-    const onClick = (event: MouseEvent) => {
+    const onDoubleClick = (event: MouseEvent) => {
       if (event.button !== 0) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
       if (!target) return;
@@ -72,10 +72,10 @@ export function ExplainabilityLayer() {
       setPopover({ explanation: resolved.explanation, x, y, context: resolved.context.slice(0, 180) });
     };
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setPopover(null); };
-    document.addEventListener('click', onClick);
+    document.addEventListener('dblclick', onDoubleClick);
     document.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('click', onClick);
+      document.removeEventListener('dblclick', onDoubleClick);
       document.removeEventListener('keydown', onKey);
     };
   }, []);
@@ -92,7 +92,7 @@ export function ExplainabilityLayer() {
     };
   }, [popover]);
 
-  if (!popover) return <div className="fxga-explain-hint" aria-hidden="true">Left click information to explain it</div>;
+  if (!popover) return <div className="fxga-explain-hint" aria-hidden="true">Double-click information to explain it</div>;
   const item = popover.explanation;
 
   return <div className="fxga-explain-popover" style={style} role="dialog" aria-label={`Explanation: ${item.title}`}>
