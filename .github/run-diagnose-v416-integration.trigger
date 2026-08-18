@@ -1,2 +1,2 @@
-run=2026-08-18T16:43:00+02:00
-reason=Capture the exact status and failed step, if any, for the guarded v4.16 intelligence integration.
+run=2026-08-18T16:56:00+02:00
+reason=Capture the corrected v4.16 integration run after repairing the current pipeline anchor.
