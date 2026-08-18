@@ -1,0 +1,75 @@
+name: Integrate V4.18 Policy Horizon
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-integrate-v418-policy-horizon.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply v4.18 policy horizon integration
+        run: python3 scripts/apply_v418_policy_horizon.py
+      - name: Validate collector and dependency security
+        run: |
+          cd cloud-run-collector
+          npm ci --ignore-scripts
+          npm run check
+          npm audit --omit=dev --audit-level=moderate
+      - name: Verify policy horizon invariants
+        run: |
+          cd cloud-run-collector
+          node --input-type=module <<'NODE'
+          import { isPolicyDecisionEvent, mergePolicyCatalystEvents, policyCatalystSegments } from './src/policy-catalyst-horizon.js';
+          if(!isPolicyDecisionEvent({currency:'USD',event:'Federal Reserve Interest Rate Decision'}))throw new Error('Fed decision should be policy catalyst');
+          if(!isPolicyDecisionEvent({currency:'ZAR',event:'SARB Repo Rate Decision'}))throw new Error('SARB decision should be policy catalyst');
+          if(isPolicyDecisionEvent({currency:'USD',event:'FOMC Meeting Minutes'}))throw new Error('Minutes must not be frozen as a rate decision');
+          if(isPolicyDecisionEvent({currency:'CAD',event:'Interest Rate Decision'}))throw new Error('Out-of-scope currency entered five-economy policy horizon');
+          const start=new Date('2026-08-01T00:00:00Z'),end=new Date('2026-10-15T00:00:00Z'),segments=policyCatalystSegments(start,end,30);
+          if(segments.length!==3)throw new Error(`Expected 3 bounded segments, got ${segments.length}`);
+          if(segments.some(segment=>segment.to-segment.from>30*86400000+1))throw new Error('Policy horizon segment exceeded 30 days');
+          const normal={id:'normal',currency:'USD',date:'2026-09-01T18:00:00Z',event:'Federal Reserve Interest Rate Decision',providers:['fxstreet'],sourceCount:1};
+          const duplicate={id:'extended',currency:'USD',date:'2026-09-01T18:00:00Z',event:'Federal Reserve Interest Rate Decision',providers:['fxstreet'],sourceCount:1,policyCatalyst:true,policyCatalystHorizonOnly:true,policyProvenance:{source:'FXStreet public calendar feed'}};
+          const future={id:'future',currency:'EUR',date:'2026-09-10T12:15:00Z',event:'ECB Interest Rate Decision',providers:['fxstreet'],sourceCount:1,policyCatalyst:true,policyCatalystHorizonOnly:true};
+          const merged=mergePolicyCatalystEvents([normal],[duplicate,future]);
+          if(merged.length!==2)throw new Error(`Policy dedupe failed: ${merged.length}`);
+          const fed=merged.find(x=>x.currency==='USD'),ecb=merged.find(x=>x.currency==='EUR');
+          if(fed.policyCatalystHorizonOnly!==false)throw new Error('Normal-window event must remain task-eligible');
+          if(ecb.policyCatalystHorizonOnly!==true)throw new Error('Extended policy event must remain horizon-only');
+          console.log(JSON.stringify({segments:segments.length,merged:merged.map(x=>({currency:x.currency,horizonOnly:x.policyCatalystHorizonOnly??false}))},null,2));
+          NODE
+      - name: Verify bounded server integration
+        run: |
+          grep -q "policyCatalystDays: Math.min(Math.max(Number(process.env.POLICY_CATALYST_DAYS || 75), 31), 120)" cloud-run-collector/src/server-v2.js
+          grep -q "fetchPolicyCatalystHorizon(new Date(to.getTime()+1000),policyTo)" cloud-run-collector/src/server-v2.js
+          grep -q "scheduleReleaseTasks(events.filter((event)=>!event.policyCatalystHorizonOnly))" cloud-run-collector/src/server-v2.js
+          grep -q "policyCatalystCount:policyEvents.length" cloud-run-collector/src/server-v2.js
+          grep -q "POLICY_CATALYST_DAYS=75" .github/workflows/deploy-cloud-run-collector.yml
+          grep -q "policyProvenance" cloud-run-collector/src/policy-path-research.js
+          grep -q "extended policy horizon" src/components/PolicyEventResearchPanel.tsx
+      - name: Verify production frontend build
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          npm install --progress=false
+          npm run build
+      - name: Commit integrated v4.18 source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/policy-catalyst-horizon.js cloud-run-collector/src/server-v2.js cloud-run-collector/src/policy-path-research.js cloud-run-collector/package.json .github/workflows/deploy-cloud-run-collector.yml src/components/PolicyEventResearchPanel.tsx
+          if git diff --cached --quiet; then echo 'No integration changes to commit.'; exit 0; fi
+          git commit -m 'Integrate v4.18 policy catalyst horizon'
+          git pull --rebase origin main
+          git push origin HEAD:main
