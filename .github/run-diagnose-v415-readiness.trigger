@@ -1,2 +1,2 @@
-run=2026-08-18T15:21:00+02:00
-reason=Run the registered diagnostic for the latest v4.15 source-readiness workflow.
+run=2026-08-18T15:26:00+02:00
+reason=Inspect the corrected v4.15 readiness run after aligning root dependency installation with production.
