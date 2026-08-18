@@ -23,16 +23,16 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
       - id: auth
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
-
       - uses: google-github-actions/setup-gcloud@v2
-
       - id: service
         name: Resolve production Cloud Run service
         env:
@@ -45,7 +45,6 @@ jobs:
           test -n "$SERVICE_URL" || { echo '::error::Production Cloud Run service not found'; exit 1; }
           echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
-
       - id: invoke
         uses: google-github-actions/auth@v3
         with:
@@ -55,55 +54,17 @@ jobs:
           token_format: id_token
           id_token_audience: ${{ steps.service.outputs.url }}
           id_token_include_email: true
-
-      - name: Wait for private v4.14 intelligence contract
+      - name: Verify private and public v4.14 intelligence contracts
         env:
           TOKEN: ${{ steps.invoke.outputs.id_token }}
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs=require('fs');
-          const base=process.env.SERVICE_URL,token=process.env.TOKEN,sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          const requiredPairFields=['bayesian','refined','reactionFunctionGap','crossAsset','causalTransmission','counterfactual','temporalIntelligence','transitionRisk','structuralBreak','evidenceIndependence','evidenceCompleteness','scenarioRobustness','riskControls','modelHealth','historicalCalibration','horizonCalibration','decisionChange','historicalAnalogues','uncertainty','premortem','thesis','final'];
-          async function call(path,method='GET',body){const r=await fetch(base+path,{method,headers:{Authorization:`Bearer ${token}`,Accept:'application/json','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const text=await r.text();if(!r.ok)throw new Error(`${path} HTTP ${r.status}: ${text.slice(0,600)}`);return JSON.parse(text);}
-          function inspect(state,health){const intel=state?.intelligence?.payload,research=intel?.research,core=intel?.decisionGovernance,pairs=core?.pairDecisions||[];const missing=[];if(!intel)missing.push('intelligence');if(!research)missing.push('research');if(!core)missing.push('decisionGovernance');if(pairs.length<8)missing.push(`pair-count:${pairs.length}`);for(const pair of pairs){for(const field of requiredPairFields)if(pair?.[field]===undefined)missing.push(`${pair?.symbol||'pair'}:${field}`);}if(!core?.crossPairConsistency?.checks?.length)missing.push('crossPairConsistency');if(!core?.portfolioInteraction?.pairControls)missing.push('portfolioInteraction');if(!research?.structuralBreaks?.series)missing.push('structuralBreaks');if(!research?.turningPoints?.rows)missing.push('turningPoints');if(!research?.evidenceIndependence)missing.push('evidenceIndependence');if(!research?.catalystSequence?.currencies)missing.push('catalystSequence');if(!Array.isArray(research?.releaseAnalytics?.persistence))missing.push('surprisePersistence');const calibrated=(research?.forecasts||[]).filter(x=>x?.modelWeights&&Number(x?.validationPoints||0)>0),distributed=calibrated.filter(x=>x?.distribution&&Number(x.distribution.residualCount||0)>0);if(!calibrated.length)missing.push('calibratedForecasts');if(!distributed.length)missing.push('distributedForecasts');if(!intel?.decisionMemory?.decisionChanges)missing.push('decisionChanges');if(!intel?.decisionMemory?.analogueLibrary)missing.push('analogueLibrary');return {ok:missing.length===0,missing,intel,research,core,pairs,calibrated,distributed,health};}
-          let last=null;
-          for(let attempt=1;attempt<=36;attempt++){
-            try{
-              const health=await call('/health');if(!health?.ok)throw new Error('Cloud Run health is not ok');
-              await call('/market-sync','POST',{}).catch(()=>null);
-              await call('/refresh-intelligence','POST',{forceNews:false});
-              const state=await call('/state'),check=inspect(state,health);
-              console.log(`private attempt ${attempt}: reportedVersion=${health.version} pairs=${check.pairs.length} missing=${check.missing.length}`);
-              if(check.ok){const {research,core,pairs,calibrated,distributed,intel}=check;const report={verifiedAt:new Date().toISOString(),serviceUrl:base,reportedHealthVersion:String(health.version??'unknown'),contract:'v4.14-fields',pairs:pairs.length,evidenceQuality:core.evidenceQuality?.score??null,actionable:intel.sessionSignals?.decisionSummary?.actionableCount??null,wait:intel.sessionSignals?.decisionSummary?.waitCount??null,modelHealth:research.modelHealth?.status??null,modelHealthScore:research.modelHealth?.score??null,sourceReliability:research.sourceReliability?.length||0,calibratedForecasts:calibrated.length,distributedForecasts:distributed.length,structuralBreakSeries:research.structuralBreaks.series.length,breakSeries:research.structuralBreaks.breakSeries||0,turningFamilies:research.turningPoints.rows.length,evidenceIndependence:research.evidenceIndependence.independenceRatio,catalystCurrencies:research.catalystSequence.currencies.length,triangleChecks:core.crossPairConsistency.checks.length,triangleConflicts:core.crossPairConsistency.conflicts||0,portfolioVetoes:Number(core.portfolioInteraction.concentrationVetoes||0)+Number(core.portfolioInteraction.triangleVetoes||0),decisionMemorySamples:intel.decisionMemory.sampledDecisions||0,analogueSymbols:Object.keys(intel.decisionMemory.analogueLibrary||{}).length};fs.writeFileSync('/tmp/v414-direct.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));process.exit(0);}last=new Error(`Private contract missing: ${check.missing.slice(0,20).join(', ')}`);
-            }catch(error){last=error;console.log(`private attempt ${attempt} waiting: ${error.message}`);}await sleep(5000);
-          }
-          throw last||new Error('Private v4.14 contract did not become ready');
-          NODE
-
-      - name: Wait for public v4.14 research contract
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs=require('fs'),base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev',sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          const required=['reactionFunctionGap','crossAsset','evidenceCompleteness','horizonCalibration','decisionChange','historicalAnalogues','structuralBreak','causalTransmission','counterfactual','temporalIntelligence','transitionRisk','evidenceIndependence'];let last;
-          for(let attempt=1;attempt<=48;attempt++){
-            try{
-              const r=await fetch(base+'/api/research',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),text=await r.text();if(!r.ok)throw new Error(`/api/research HTTP ${r.status}: ${text.slice(0,500)}`);const research=JSON.parse(text),core=research?.decisionCore,pairs=core?.pairDecisions||[],missing=[];if(pairs.length<8)missing.push(`pair-count:${pairs.length}`);for(const pair of pairs)for(const field of required)if(pair?.[field]===undefined)missing.push(`${pair?.symbol||'pair'}:${field}`);if(!research?.structuralBreaks)missing.push('structuralBreaks');if(!research?.evidenceIndependence)missing.push('evidenceIndependence');if(!research?.turningPoints)missing.push('turningPoints');if(!research?.catalystSequence)missing.push('catalystSequence');if(!research?.decisionMemory?.decisionChanges)missing.push('decisionChanges');if(!research?.decisionMemory?.analogueLibrary)missing.push('analogueLibrary');if(!core?.crossPairConsistency)missing.push('crossPairConsistency');if(!core?.portfolioInteraction)missing.push('portfolioInteraction');console.log(`public attempt ${attempt}: pairs=${pairs.length} missing=${missing.length}`);if(!missing.length){const report=JSON.parse(fs.readFileSync('/tmp/v414-direct.json','utf8'));report.publicContract={passed:true,pairs:pairs.length,decisionMemorySamples:research.decisionMemory.sampledDecisions||0,analogueSymbols:Object.keys(research.decisionMemory.analogueLibrary||{}).length};fs.writeFileSync('/tmp/v414-direct.json',JSON.stringify(report,null,2));console.log('PUBLIC V4.14 VERIFIED',JSON.stringify(report.publicContract));process.exit(0);}last=new Error(`Public contract missing: ${missing.slice(0,20).join(', ')}`);
-            }catch(error){last=error;console.log(`public attempt ${attempt} waiting: ${error.message}`);}await sleep(5000);
-          }
-          throw last||new Error('Public v4.14 contract did not become ready');
-          NODE
-
+          PUBLIC_BASE: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
+        run: node scripts/verify_v414_live.mjs
       - name: Persist v4.14 live marker
         run: |
-          node <<'NODE'
-          const fs=require('fs'),x=JSON.parse(fs.readFileSync('/tmp/v414-direct.json','utf8'));
-          const lines=[`verified_at=${x.verifiedAt}`,`contract=v4.14-live`,`reported_health_version=${x.reportedHealthVersion}`,`contract_proof=${x.contract}`,`pairs=${x.pairs}`,`actionable=${x.actionable}`,`wait=${x.wait}`,`evidence_quality=${x.evidenceQuality}`,`model_health=${x.modelHealth}`,`model_health_score=${x.modelHealthScore}`,`source_reliability=${x.sourceReliability}`,`calibrated_forecasts=${x.calibratedForecasts}`,`distributed_forecasts=${x.distributedForecasts}`,`structural_break_series=${x.structuralBreakSeries}`,`break_series=${x.breakSeries}`,`turning_families=${x.turningFamilies}`,`evidence_independence=${x.evidenceIndependence}`,`catalyst_currencies=${x.catalystCurrencies}`,`triangle_checks=${x.triangleChecks}`,`triangle_conflicts=${x.triangleConflicts}`,`portfolio_vetoes=${x.portfolioVetoes}`,`decision_memory_samples=${x.publicContract?.decisionMemorySamples??x.decisionMemorySamples}`,`analogue_symbols=${x.publicContract?.analogueSymbols??x.analogueSymbols}`,`public_contract=passed`];fs.writeFileSync('.github/intelligence-v414-live.status',lines.join('\n')+'\n');
-          NODE
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add .github/intelligence-v414-live.status
+          if git diff --cached --quiet; then echo 'Live marker unchanged.'; exit 0; fi
           git commit -m 'Verify live v4.14 decision intelligence contract'
           git pull --rebase origin main
           git push origin HEAD:main
