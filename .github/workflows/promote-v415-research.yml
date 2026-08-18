@@ -1,0 +1,50 @@
+name: Promote V4.15 Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-promote-v415-research.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Require v4.15 source readiness
+        run: |
+          test -f .github/intelligence-v415-source-ready.status || { echo '::error::v4.15 source-readiness marker missing'; exit 1; }
+          grep -q '^contract=v4.15-research-source$' .github/intelligence-v415-source-ready.status
+          grep -q '^event_reaction_research=passed$' .github/intelligence-v415-source-ready.status
+          grep -q '^policy_path_research=passed$' .github/intelligence-v415-source-ready.status
+          grep -q '^dependency_audit=passed$' .github/intelligence-v415-source-ready.status
+          grep -q '^frontend_build=passed$' .github/intelligence-v415-source-ready.status
+      - name: Promote collector package version
+        run: |
+          cd cloud-run-collector
+          npm version 4.15.0 --no-git-tag-version --ignore-scripts
+          npm ci --ignore-scripts
+          npm run check
+          npm audit --audit-level=moderate
+      - name: Revalidate frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Commit v4.15 package metadata
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/package.json cloud-run-collector/package-lock.json
+          if git diff --cached --quiet; then echo 'Collector already at 4.15.0.'; exit 0; fi
+          git commit -m 'Promote event reaction and policy path research v4.15.0'
+          git pull --rebase origin main
+          git push origin HEAD:main
