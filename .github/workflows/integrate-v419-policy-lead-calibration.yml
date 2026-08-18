@@ -1,0 +1,82 @@
+name: Integrate V4.19 Policy Lead Calibration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-integrate-v419-policy-lead-calibration.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply v4.19 lead-time calibration
+        run: python3 scripts/apply_v419_policy_lead_calibration.py
+      - name: Validate collector and dependency security
+        run: |
+          cd cloud-run-collector
+          npm ci --ignore-scripts
+          npm run check
+          npm audit --omit=dev --audit-level=moderate
+      - name: Verify lead-bucket and paired calibration mathematics
+        run: |
+          cd cloud-run-collector
+          node --input-type=module <<'NODE'
+          import { policyCalibrationMath, POLICY_LEAD_BUCKETS } from './src/policy-calibration.js';
+          const {bucketForLeadHours,enrichLeadMetadata,summarizeRows,pairedLeadComparison,scoreForecast,outcomeForEvent}=policyCalibrationMath;
+          const cases=[[1000,'early-45d'],[336,'14d'],[200,'14d'],[168,'7d'],[72,'7d'],[24,'24h'],[12,'24h'],[6,'final'],[1,'final']];
+          for(const [hours,id] of cases)if(bucketForLeadHours(hours)?.id!==id)throw new Error(`Lead bucket ${hours}h => ${bucketForLeadHours(hours)?.id}, expected ${id}`);
+          if(bucketForLeadHours(1081)!==null)throw new Error('Lead >45d must not be frozen');
+          const release='2026-09-15T12:00:00Z',legacy=enrichLeadMetadata({eventId:'fed-1',currency:'USD',releaseAt:release,frozenAt:'2026-09-05T12:00:00Z',scored:false});
+          if(legacy.derivedLeadBucket!=='14d'||Math.abs(legacy.leadHours-240)>.01)throw new Error('Legacy lead inference failed');
+          const outcome=outcomeForEvent({actual:'4.50%',previous:'4.25%'}),early=scoreForecast({hike:.45,hold:.40,cut:.15},outcome),late=scoreForecast({hike:.78,hold:.17,cut:.05},outcome);
+          if(!(late.brier<early.brier&&late.logLoss<early.logLoss))throw new Error('Closer accurate forecast should improve proper scores');
+          const rows=[
+            {eventId:'a',currency:'USD',leadBucket:'early-45d',leadHours:900,scored:true,brier:.30,logLoss:.90,topCorrect:false},
+            {eventId:'a',currency:'USD',leadBucket:'14d',leadHours:300,scored:true,brier:.18,logLoss:.55,topCorrect:true},
+            {eventId:'b',currency:'EUR',leadBucket:'early-45d',leadHours:850,scored:true,brier:.28,logLoss:.82,topCorrect:false},
+            {eventId:'b',currency:'EUR',leadBucket:'14d',leadHours:290,scored:true,brier:.17,logLoss:.50,topCorrect:true},
+            {eventId:'c',currency:'GBP',leadBucket:'early-45d',leadHours:800,scored:true,brier:.26,logLoss:.78,topCorrect:true},
+            {eventId:'c',currency:'GBP',leadBucket:'14d',leadHours:280,scored:true,brier:.16,logLoss:.48,topCorrect:true},
+          ];
+          const comparison=pairedLeadComparison(rows,'early-45d','14d');
+          if(comparison.pairs!==3||comparison.status!=='improving'||!(comparison.averageBrierImprovement>0))throw new Error(`Paired improvement failed: ${JSON.stringify(comparison)}`);
+          const summary=summarizeRows(rows);
+          if(summary.uniqueDecisions!==3||summary.frozen!==6||summary.scored!==6)throw new Error(`Snapshot/decision accounting failed: ${JSON.stringify(summary)}`);
+          if(POLICY_LEAD_BUCKETS.length!==5)throw new Error('Expected five immutable lead windows');
+          console.log(JSON.stringify({cases,legacy:{bucket:legacy.derivedLeadBucket,leadHours:legacy.leadHours},comparison,summary},null,2));
+          NODE
+      - name: Verify immutable migration contract
+        run: |
+          grep -q "Missing earlier lead windows are never backfilled" cloud-run-collector/src/policy-calibration.js
+          grep -q 'existingKeys=new Set' cloud-run-collector/src/policy-calibration.js
+          grep -q 'snapshotHash' cloud-run-collector/src/policy-calibration.js
+          grep -q "eventId}|${leadBucket}" cloud-run-collector/src/policy-calibration.js || grep -q 'eventId}|${leadBucket}' cloud-run-collector/src/policy-calibration.js
+          grep -q 'byLeadBucket' cloud-run-collector/src/policy-calibration.js
+          grep -q 'pairedLeadComparison' cloud-run-collector/src/policy-calibration.js
+          grep -q 'Lead-Time Calibration Curve' src/components/PolicyCalibrationPanel.tsx
+          grep -q 'Unique decisions' src/components/PolicyCalibrationPanel.tsx
+      - name: Verify production frontend build
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          npm install --progress=false
+          npm run build
+      - name: Commit integrated v4.19 source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/policy-calibration.js src/components/PolicyCalibrationPanel.tsx src/components/PolicyCalibrationPanel.css
+          if git diff --cached --quiet; then echo 'No v4.19 source changes to commit.'; exit 0; fi
+          git commit -m 'Integrate v4.19 multi-lead policy calibration'
+          git pull --rebase origin main
+          git push origin HEAD:main
