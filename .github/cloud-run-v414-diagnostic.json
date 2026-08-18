@@ -1,50 +1,50 @@
 {
-  "generatedAt": "2026-08-18T12:31:04.506Z",
+  "generatedAt": "2026-08-18T14:34:48.112Z",
   "service": {
     "url": "https://fxga-macro-collector-kbjj66blka-uc.a.run.app",
-    "latestCreatedRevisionName": "fxga-macro-collector-00087-ddv",
-    "latestReadyRevisionName": "fxga-macro-collector-00087-ddv",
+    "latestCreatedRevisionName": "fxga-macro-collector-00091-mpp",
+    "latestReadyRevisionName": "fxga-macro-collector-00091-mpp",
     "traffic": [
       {
         "latestRevision": true,
         "percent": 100,
-        "revisionName": "fxga-macro-collector-00087-ddv"
+        "revisionName": "fxga-macro-collector-00091-mpp"
       }
     ]
   },
   "revision": {
-    "name": "fxga-macro-collector-00087-ddv",
-    "createdAt": "2026-08-18T12:27:38.515797Z",
-    "image": "us-central1-docker.pkg.dev/fxglobalavengerstradingacademy/fxga-containers/fxga-macro-collector@sha256:c5d94f90c02f1cda3dc1ce6ab12a50c54d266be81cde7cf2452fbc39bb1022d2",
+    "name": "fxga-macro-collector-00091-mpp",
+    "createdAt": "2026-08-18T14:34:14.151770Z",
+    "image": "us-central1-docker.pkg.dev/fxglobalavengerstradingacademy/fxga-containers/fxga-macro-collector@sha256:bb7e8bba41ab671998921e4e56582f1d89ef6d06fc7507444527607ebe2cc45a",
     "userImage": null,
     "conditions": [
       {
-        "lastTransitionTime": "2026-08-18T12:27:48.847652Z",
-        "message": "Deploying revision succeeded in 10.33s.",
+        "lastTransitionTime": "2026-08-18T14:34:22.107279Z",
+        "message": "Deploying revision succeeded in 7.95s.",
         "status": "True",
         "type": "Ready"
       },
       {
-        "lastTransitionTime": "2026-08-18T12:27:47.560782Z",
+        "lastTransitionTime": "2026-08-18T14:34:22.186199Z",
         "severity": "Info",
         "status": "True",
         "type": "Active"
       },
       {
-        "lastTransitionTime": "2026-08-18T12:27:45.124187Z",
-        "message": "Containers became healthy in 4.69s.",
+        "lastTransitionTime": "2026-08-18T14:34:22.042377Z",
+        "message": "Containers became healthy in 5.15s.",
         "status": "True",
         "type": "ContainerHealthy"
       },
       {
-        "lastTransitionTime": "2026-08-18T12:27:39.268446Z",
+        "lastTransitionTime": "2026-08-18T14:34:15.074244Z",
         "message": "Container image import completed.",
         "status": "True",
         "type": "ContainerReady"
       },
       {
-        "lastTransitionTime": "2026-08-18T12:27:40.738661Z",
-        "message": "Provisioning imported containers completed in 1.47s. Checking container health. This will wait for up to 4m for the configured startup probe, including an initial delay of 0s.",
+        "lastTransitionTime": "2026-08-18T14:34:16.522778Z",
+        "message": "Provisioning imported containers completed in 1.45s. Checking container health. This will wait for up to 4m for the configured startup probe, including an initial delay of 0s.",
         "status": "True",
         "type": "ResourcesAvailable"
       }
