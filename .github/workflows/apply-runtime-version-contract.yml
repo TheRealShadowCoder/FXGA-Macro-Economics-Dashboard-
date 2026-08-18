@@ -1,0 +1,62 @@
+name: Apply Runtime Version Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-runtime-version-contract.trigger'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Apply runtime version and verifier patch
+        run: python3 scripts/apply_runtime_version_contract.py
+
+      - name: Validate runtime health source
+        run: |
+          node --check cloud-run-collector/src/super-runtime.js
+          grep -q "const SERVICE_VERSION=" cloud-run-collector/src/super-runtime.js
+          grep -q "version:SERVICE_VERSION" cloud-run-collector/src/super-runtime.js
+          grep -q "run-verify-v414-live.trigger" .github/workflows/verify-intelligence-v414-live.yml
+          grep -q "major===4&&minor<14" .github/workflows/verify-intelligence-v414-live.yml
+
+      - name: Validate collector contract
+        working-directory: cloud-run-collector
+        run: |
+          npm install --ignore-scripts --no-fund
+          npm run check
+          npm audit --omit=dev --audit-level=moderate
+
+      - name: Commit runtime contract
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/super-runtime.js .github/workflows/verify-intelligence-v414-live.yml
+          if git diff --cached --quiet; then
+            echo 'Runtime version contract already applied.'
+          else
+            git commit -m 'Synchronize runtime health with v4.14 release'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Redeploy production collector explicitly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run deploy-cloud-run-collector.yml --ref main
+          echo 'Dispatched Google Cloud collector redeployment with synchronized runtime version.'
