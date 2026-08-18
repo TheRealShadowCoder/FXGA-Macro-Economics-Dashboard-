@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import './ResearchView.css';
 import { DecisionCorePanel, type DecisionCorePayload } from './DecisionCorePanel';
+import { AdaptiveResearchPanel } from './AdaptiveResearchPanel';
 
 type RiskCategory={id:string;score:number;severity:string;confidenceHaircut:number;warning:boolean;stressMultiplier:number};
 type Scenario={id:string;label:string;confidenceChange:number;currencies:Record<string,number>;pairs:Array<{symbol:string;score:number;direction:'BUY'|'SELL'|'WAIT'}>;assets:Record<string,number>};
-type Forecast={seriesId:string;title:string;economy:string;family:string;latest:number;forecast:number;delta:number;interval80:[number,number];interval95:[number,number];probabilities:{up:number;down:number};sampleSize:number};
+type Forecast={seriesId:string;title:string;economy:string;family:string;latest:number;forecast:number;delta:number;interval80:[number,number];interval95:[number,number];probabilities:{up:number;down:number};sampleSize:number;modelWeights?:Record<string,number>;walkForwardRmse?:Record<string,number|null>;validationPoints?:number;modelAgreement?:number;calibrationConfidence?:number;modelDispersion?:number;uncertainty?:number};
+type SourceReliability={source:string;series:number;score:number;status:string;numericCoverage:number;freshness:number;historyDepth:number;anomalyRate:number};
 type ReleaseProfile={currency:string;family:string;count:number;bullishRate:number;bearishRate:number;meanAbsSurprise:number;meanWeightedSurprise:number};
 type Regime={economy:string;family:string;score:number;state:string;transitionProbability:number;sampleSize:number};
 type ResearchPayload={
   generatedAt:string;
   dataQuality:{overall:number;severity:string;scores:Record<string,number>;diagnostics:Record<string,number>;outliers:Array<{id:string;robustZ:number;value:number}>};
+  sourceReliability?:SourceReliability[];
   forecasts:Forecast[];
   releaseAnalytics:{completed:number;profiles:ReleaseProfile[]};
   risk:{aggregate:number;severity:string;confidenceAfterRisk:number;nextHighImpact?:{event:string;currency:string;date:string;minutes:number}|null;categories:RiskCategory[]};
@@ -67,6 +70,7 @@ export function ResearchView(){
     </section>
 
     <DecisionCorePanel data={data.decisionCore}/>
+    <AdaptiveResearchPanel sources={data.sourceReliability} forecasts={data.forecasts}/>
 
     <section className="section-head"><div><span className="eyebrow">Risk Decomposition</span><h2>Independent risk controls</h2><p>Every risk family applies its own warning threshold and confidence haircut before a directional view is considered actionable.</p></div></section>
     <section className="risk-grid">{data.risk.categories.map(item=><article className="risk-card" key={item.id}><div><span>{title(item.id)}</span><strong className={riskClass(item.score)}>{item.score}</strong></div><div className="risk-meter"><i style={{width:`${Math.min(100,item.score)}%`}}></i></div><small>{title(item.severity)} · confidence haircut {item.confidenceHaircut} pts</small></article>)}</section>
@@ -84,7 +88,7 @@ export function ResearchView(){
     <section className="two-col research-columns">
       <article className="panel">
         <div className="panel-title"><div><span className="eyebrow">Econometric Ensemble</span><h2>Highest forecast movements</h2></div><span>{data.forecasts.length} models</span></div>
-        <div className="research-table">{forecasts.map(row=><div className="research-table-row" key={row.seriesId}><div><strong>{row.seriesId}</strong><small>{row.title} · {row.economy}</small></div><span>{row.latest.toLocaleString(undefined,{maximumFractionDigits:3})}</span><span className={row.delta>0?'positive':row.delta<0?'negative':'neutral'}>{row.delta>0?'+':''}{row.delta.toLocaleString(undefined,{maximumFractionDigits:3})}</span><span>P↑ {pct(row.probabilities.up)}</span></div>)}</div>
+        <div className="research-table">{forecasts.map(row=><div className="research-table-row" key={row.seriesId}><div><strong>{row.seriesId}</strong><small>{row.title} · {row.economy}{row.validationPoints?` · ${row.validationPoints} walk-forward tests`:''}</small></div><span>{row.latest.toLocaleString(undefined,{maximumFractionDigits:3})}</span><span className={row.delta>0?'positive':row.delta<0?'negative':'neutral'}>{row.delta>0?'+':''}{row.delta.toLocaleString(undefined,{maximumFractionDigits:3})}</span><span>P↑ {pct(row.probabilities.up)}{row.calibrationConfidence!==undefined?` · Cal ${pct(row.calibrationConfidence)}`:''}</span></div>)}</div>
       </article>
       <article className="panel">
         <div className="panel-title"><div><span className="eyebrow">Release Memory</span><h2>Historical surprise profiles</h2></div><span>{data.releaseAnalytics.completed} completed</span></div>
