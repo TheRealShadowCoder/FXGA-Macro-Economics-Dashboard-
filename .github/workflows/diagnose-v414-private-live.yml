@@ -1,0 +1,72 @@
+name: Diagnose V4.14 Private Live State
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-diagnose-v414-private-live.trigger'
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  SERVICE: fxga-macro-collector
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: service
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "$PROJECT_ID"
+          SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+      - id: invoke
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service.outputs.url }}
+          id_token_include_email: true
+      - name: Inspect current private state
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          set +e
+          HCODE=$(curl --max-time 60 -sS -o /tmp/health.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/health")
+          RCODE=$(curl --max-time 300 -sS -o /tmp/refresh.json -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"forceNews":false}' "$SERVICE_URL/refresh-intelligence")
+          SCODE=$(curl --max-time 120 -sS -o /tmp/state.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state")
+          echo "$HCODE" >/tmp/hcode; echo "$RCODE" >/tmp/rcode; echo "$SCODE" >/tmp/scode
+          node <<'NODE'
+          const fs=require('fs'),read=(p)=>{try{return JSON.parse(fs.readFileSync(p,'utf8'))}catch{return null}},health=read('/tmp/health.json'),refresh=read('/tmp/refresh.json'),state=read('/tmp/state.json'),intel=state?.intelligence?.payload,research=intel?.research,core=intel?.decisionGovernance,pairs=core?.pairDecisions||[];
+          const required=['reactionFunctionGap','crossAsset','evidenceCompleteness','horizonCalibration','decisionChange','historicalAnalogues','structuralBreak','causalTransmission','counterfactual','temporalIntelligence','transitionRisk','evidenceIndependence'],missing=[];for(const pair of pairs)for(const field of required)if(pair?.[field]===undefined)missing.push(`${pair?.symbol||'pair'}:${field}`);
+          const report={generatedAt:new Date().toISOString(),serviceUrl:process.env.SERVICE_URL,http:{health:Number(fs.readFileSync('/tmp/hcode','utf8')),refresh:Number(fs.readFileSync('/tmp/rcode','utf8')),state:Number(fs.readFileSync('/tmp/scode','utf8'))},health:{ok:health?.ok??null,version:health?.version??null,intelligenceUpdatedAt:health?.intelligenceUpdatedAt??null},refresh:{changed:refresh?.changed??null,observations:refresh?.observations??null,economies:refresh?.economies??null},pairCount:pairs.length,decisionCoreVersion:core?.version??null,missingPairFields:missing,researchKeys:research?Object.keys(research).sort():[],intelligenceKeys:intel?Object.keys(intel).sort():[],hasStructuralBreaks:Boolean(research?.structuralBreaks),hasEvidenceIndependence:Boolean(research?.evidenceIndependence),hasTurningPoints:Boolean(research?.turningPoints),hasCatalystSequence:Boolean(research?.catalystSequence),hasDecisionChanges:Boolean(intel?.decisionMemory?.decisionChanges),hasAnalogueLibrary:Boolean(intel?.decisionMemory?.analogueLibrary),hasCrossPairConsistency:Boolean(core?.crossPairConsistency),hasPortfolioInteraction:Boolean(core?.portfolioInteraction),privateContractReady:Boolean(pairs.length>=8&&!missing.length&&research?.structuralBreaks&&research?.evidenceIndependence&&research?.turningPoints&&research?.catalystSequence&&intel?.decisionMemory?.decisionChanges&&intel?.decisionMemory?.analogueLibrary&&core?.crossPairConsistency&&core?.portfolioInteraction)};
+          fs.writeFileSync('.github/v414-private-live-diagnostic.json',JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
+          NODE
+      - name: Persist private diagnostic
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/v414-private-live-diagnostic.json
+          git commit -m 'Record private v4.14 live state diagnostic'
+          git pull --rebase origin main
+          git push origin HEAD:main
