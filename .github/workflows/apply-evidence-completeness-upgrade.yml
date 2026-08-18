@@ -1,0 +1,59 @@
+name: Apply Evidence Completeness Governance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-evidence-completeness-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply evidence completeness patch
+        run: python3 scripts/apply_evidence_completeness_upgrade.py
+      - name: Validate completeness governance
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
+          const history=Array.from({length:18},(_,i)=>({date:new Date(Date.now()-(18-i)*86400000).toISOString(),value:100+i*.25}));
+          const observations=[{seriesId:'COMP',title:'Completeness test',value:104,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',economy:'EUROPE',categories:['growth'],history}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:38,confidence:75,conviction:65,risk:'normal',components:{structuralDivergence:42,policyDivergence:32,releaseDivergence:18,narrativeDivergence:9},probabilities:{buy:.61,sell:.17,wait:.22}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const dims=(g,i,l,p,f)=>[{id:'growth',score:g},{id:'inflation',score:i},{id:'labour',score:l},{id:'policy',score:p},{id:'financial',score:f}];
+          const economies=[{id:'EUROPE',currency:'EUR',dimensions:dims(24,20,18,15,10)},{id:'USA',currency:'USD',dimensions:dims(5,8,6,10,4)}];
+          const research={dataQuality:{overall:92},risk:{aggregate:10},modelHealth:{score:90,status:'healthy',calibratedForecasts:10},evidenceIndependence:{independenceRatio:.9,economies:[]},turningPoints:{economies:[]},catalystSequence:{currencies:[]},scenarios:[{label:'Base',pairs:[{symbol:'EURUSD',direction:'BUY',score:30}]}]};
+          const core=buildDecisionIntelligenceCore({economies,decision:primary,observations,events:[],news:[],marketData:[],research,decisionMemory:null});
+          const pair=core.pairDecisions[0],c=pair?.evidenceCompleteness;
+          if(!c)throw new Error('Evidence completeness control missing');
+          if(!Array.isArray(c.checks)||c.checks.length<8)throw new Error('Completeness checklist incomplete');
+          if(!Number.isFinite(c.score)||c.score<0||c.score>100)throw new Error('Completeness score invalid');
+          const governed=governDecisionMatrix(primary,core);
+          if(!governed.rankedOpportunities[0]?.decisionCore?.evidenceCompleteness)throw new Error('Completeness audit lost in governed matrix');
+          console.log(JSON.stringify(c,null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit evidence completeness governance
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add evidence completeness decision governance'
+          git pull --rebase origin main
+          git push origin HEAD:main
