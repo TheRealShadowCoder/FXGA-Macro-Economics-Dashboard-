@@ -1,0 +1,88 @@
+name: Apply V4.14 Intelligence Source Integration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-v414-source-integration.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Apply missing intelligence layers idempotently
+        run: |
+          set -euo pipefail
+          CORE='cloud-run-collector/src/decision-intelligence-core.js'
+          RESEARCH='cloud-run-collector/src/institutional-research.js'
+          MEMORY='cloud-run-collector/src/decision-memory.js'
+
+          if ! grep -q 'function reactionFunctionGapForPair' "$CORE"; then
+            python3 scripts/apply_reaction_function_gap_upgrade_v2.py
+          fi
+          if ! grep -q 'function crossAssetConfirmation' "$CORE"; then
+            python3 scripts/apply_cross_asset_confirmation_upgrade.py
+          fi
+          if ! grep -q 'function evidenceCompletenessControls' "$CORE"; then
+            python3 scripts/apply_evidence_completeness_upgrade.py
+          fi
+          if ! grep -q 'function historicalAnalogueControls' "$CORE"; then
+            python3 scripts/apply_historical_analogue_upgrade.py
+          fi
+          if ! grep -q 'function buildStructuralBreaks' "$RESEARCH" || ! grep -q 'function structuralBreakControls' "$CORE"; then
+            python3 scripts/apply_structural_break_upgrade.py
+          fi
+
+          for symbol in \
+            'function reactionFunctionGapForPair' \
+            'function crossAssetConfirmation' \
+            'function evidenceCompletenessControls' \
+            'function historicalAnalogueControls' \
+            'function horizonCalibrationControls' \
+            'function decisionChangeControls' \
+            'function structuralBreakControls' \
+            'function evidenceIndependenceControls' \
+            'function transitionRiskControls' \
+            'function triangleConsistency' \
+            'function portfolioInteraction'; do
+            grep -q "$symbol" "$CORE" || { echo "::error::Missing $symbol"; exit 1; }
+          done
+          grep -q 'function buildStructuralBreaks' "$RESEARCH"
+          grep -q 'featureVector' "$MEMORY"
+          grep -q 'analogueLibrary' "$MEMORY"
+          grep -q 'decisionChanges' "$MEMORY"
+
+      - name: Validate collector syntax
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+
+      - name: Validate production frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Commit integrated intelligence source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/decision-memory.js cloud-run-collector/src/institutional-research.js
+          if git diff --cached --quiet; then
+            echo 'V4.14 source layers already integrated.'
+            exit 0
+          fi
+          git commit -m 'Integrate complete v4.14 intelligence source stack'
+          git pull --rebase origin main
+          git push origin HEAD:main
