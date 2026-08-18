@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import './ResearchView.css';
 import { DecisionCorePanel, type DecisionCorePayload } from './DecisionCorePanel';
 import { AdaptiveResearchPanel } from './AdaptiveResearchPanel';
+import { DecisionMemoryPanel } from './DecisionMemoryPanel';
 
 type RiskCategory={id:string;score:number;severity:string;confidenceHaircut:number;warning:boolean;stressMultiplier:number};
 type Scenario={id:string;label:string;confidenceChange:number;currencies:Record<string,number>;pairs:Array<{symbol:string;score:number;direction:'BUY'|'SELL'|'WAIT'}>;assets:Record<string,number>};
 type Forecast={seriesId:string;title:string;economy:string;family:string;latest:number;forecast:number;delta:number;interval80:[number,number];interval95:[number,number];probabilities:{up:number;down:number};sampleSize:number;modelWeights?:Record<string,number>;walkForwardRmse?:Record<string,number|null>;validationPoints?:number;modelAgreement?:number;calibrationConfidence?:number;modelDispersion?:number;uncertainty?:number};
 type SourceReliability={source:string;series:number;score:number;status:string;numericCoverage:number;freshness:number;historyDepth:number;anomalyRate:number};
+type DecisionMemorySummary={generatedAt:string;sampledDecisions:number;directionalRecorded:number;waitRecorded:number;pending:number;noVerifiedBaseline:number;horizons:Record<string,{count:number;correct:number;wrong:number;flat:number;hitRate:number|null;nonLossRate:number|null;averageSignedBps:number|null;brier:number|null}>;bySymbol:Record<string,{horizons:Record<string,{count:number;correct:number;wrong:number;flat:number;hitRate:number|null;nonLossRate:number|null;averageSignedBps:number|null;brier:number|null}>}>;byConfidence:Record<string,{horizons:Record<string,{count:number;correct:number;wrong:number;flat:number;hitRate:number|null;nonLossRate:number|null;averageSignedBps:number|null;brier:number|null}>}>;methodology:string};
 type ReleaseProfile={currency:string;family:string;count:number;bullishRate:number;bearishRate:number;meanAbsSurprise:number;meanWeightedSurprise:number};
 type Regime={economy:string;family:string;score:number;state:string;transitionProbability:number;sampleSize:number};
 type ResearchPayload={
@@ -20,6 +22,7 @@ type ResearchPayload={
   regimes:Regime[];
   operatingStandards:{slos:Array<{id:string;target:number;window:string;errorBudget:number}>;storageTiers:Record<string,{retention:string;purpose:string}>;validationState:string};
   decisionCore?:DecisionCorePayload;
+  decisionMemory?:DecisionMemorySummary|null;
   notes?:Record<string,string>;
 };
 
@@ -70,6 +73,7 @@ export function ResearchView(){
     </section>
 
     <DecisionCorePanel data={data.decisionCore}/>
+    <DecisionMemoryPanel data={data.decisionMemory}/>
     <AdaptiveResearchPanel sources={data.sourceReliability} forecasts={data.forecasts}/>
 
     <section className="section-head"><div><span className="eyebrow">Risk Decomposition</span><h2>Independent risk controls</h2><p>Every risk family applies its own warning threshold and confidence haircut before a directional view is considered actionable.</p></div></section>
