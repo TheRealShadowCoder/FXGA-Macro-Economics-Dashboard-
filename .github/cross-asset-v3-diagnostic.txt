@@ -1,0 +1,7 @@
+generated_at=2026-08-18T04:07:55Z
+patch_exit=0
+syntax_exit=0
+contract_exit=0
+--- patch output ---
+Robust cross-asset confirmation v3 applied.
+--- syntax output ---
