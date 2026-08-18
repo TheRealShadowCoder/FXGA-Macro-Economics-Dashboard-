@@ -1,8 +1,1030 @@
 {
-  "generatedAt": "2026-08-18T04:48:22.559Z",
-  "httpStatus": 500,
-  "ok": false,
-  "error": "3 INVALID_ARGUMENT: Document 'projects/fxglobalavengerstradingacademy/databases/(default)/documents/fxga_collector_state/intelligence' cannot be written because its size (5,878,825 bytes) exceeds the maximum allowed size of 1,048,576 bytes.",
-  "response": null,
+  "generatedAt": "2026-08-18T12:38:22.820Z",
+  "httpStatus": 200,
+  "ok": true,
+  "error": null,
+  "response": {
+    "changed": true,
+    "webhook": {
+      "sent": false,
+      "error": "HTTP 401: {\"error\":\"Invalid collector payload size\"}"
+    },
+    "registry": {
+      "totalMethods": 9705,
+      "totalFamilies": 150,
+      "eligibleMethods": 9705,
+      "ineligibleMethods": 0,
+      "familyCounts": {
+        "A01": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A02": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A03": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A04": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A05": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A06": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A07": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A08": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A09": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A10": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A11": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A12": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A13": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A14": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A15": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A16": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A17": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A18": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A19": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "A20": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B01": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B02": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B03": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B04": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B05": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B06": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B07": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B08": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B09": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B10": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B11": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B12": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B13": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B14": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B15": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B16": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B17": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B18": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B19": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "B20": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "C01": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C02": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C03": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C04": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C05": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C06": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C07": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C08": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C09": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C10": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C11": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C12": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C13": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C14": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C15": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C16": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C17": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C18": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C19": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C20": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C21": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C22": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C23": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C24": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C25": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C26": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C27": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C28": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C29": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C30": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C31": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C32": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C33": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C34": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C35": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C36": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C37": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C38": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C39": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "C40": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "R01": {
+          "total": 300,
+          "eligible": 300,
+          "availability": 1
+        },
+        "R02": {
+          "total": 250,
+          "eligible": 250,
+          "availability": 1
+        },
+        "R03": {
+          "total": 200,
+          "eligible": 200,
+          "availability": 1
+        },
+        "R04": {
+          "total": 250,
+          "eligible": 250,
+          "availability": 1
+        },
+        "R05": {
+          "total": 200,
+          "eligible": 200,
+          "availability": 1
+        },
+        "R06": {
+          "total": 200,
+          "eligible": 200,
+          "availability": 1
+        },
+        "R07": {
+          "total": 200,
+          "eligible": 200,
+          "availability": 1
+        },
+        "R08": {
+          "total": 150,
+          "eligible": 150,
+          "availability": 1
+        },
+        "R09": {
+          "total": 150,
+          "eligible": 150,
+          "availability": 1
+        },
+        "R10": {
+          "total": 100,
+          "eligible": 100,
+          "availability": 1
+        },
+        "S01": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S02": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S03": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S04": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S05": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S06": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S07": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S08": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S09": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S10": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S11": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S12": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S13": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S14": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S15": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S16": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S17": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S18": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S19": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S20": {
+          "total": 50,
+          "eligible": 50,
+          "availability": 1
+        },
+        "S21": {
+          "total": 32,
+          "eligible": 32,
+          "availability": 1
+        },
+        "S22": {
+          "total": 27,
+          "eligible": 27,
+          "availability": 1
+        },
+        "S23": {
+          "total": 29,
+          "eligible": 29,
+          "availability": 1
+        },
+        "S24": {
+          "total": 37,
+          "eligible": 37,
+          "availability": 1
+        },
+        "S25": {
+          "total": 39,
+          "eligible": 39,
+          "availability": 1
+        },
+        "S26": {
+          "total": 23,
+          "eligible": 23,
+          "availability": 1
+        },
+        "S27": {
+          "total": 19,
+          "eligible": 19,
+          "availability": 1
+        },
+        "S28": {
+          "total": 24,
+          "eligible": 24,
+          "availability": 1
+        },
+        "S29": {
+          "total": 13,
+          "eligible": 13,
+          "availability": 1
+        },
+        "S30": {
+          "total": 49,
+          "eligible": 49,
+          "availability": 1
+        },
+        "S31": {
+          "total": 23,
+          "eligible": 23,
+          "availability": 1
+        },
+        "S32": {
+          "total": 20,
+          "eligible": 20,
+          "availability": 1
+        },
+        "S33": {
+          "total": 32,
+          "eligible": 32,
+          "availability": 1
+        },
+        "S34": {
+          "total": 33,
+          "eligible": 33,
+          "availability": 1
+        },
+        "S35": {
+          "total": 17,
+          "eligible": 17,
+          "availability": 1
+        },
+        "S36": {
+          "total": 24,
+          "eligible": 24,
+          "availability": 1
+        },
+        "S37": {
+          "total": 20,
+          "eligible": 20,
+          "availability": 1
+        },
+        "S38": {
+          "total": 14,
+          "eligible": 14,
+          "availability": 1
+        },
+        "S39": {
+          "total": 16,
+          "eligible": 16,
+          "availability": 1
+        },
+        "S40": {
+          "total": 19,
+          "eligible": 19,
+          "availability": 1
+        },
+        "S41": {
+          "total": 62,
+          "eligible": 62,
+          "availability": 1
+        },
+        "S42": {
+          "total": 16,
+          "eligible": 16,
+          "availability": 1
+        },
+        "S43": {
+          "total": 16,
+          "eligible": 16,
+          "availability": 1
+        },
+        "S44": {
+          "total": 5,
+          "eligible": 5,
+          "availability": 1
+        },
+        "S45": {
+          "total": 6,
+          "eligible": 6,
+          "availability": 1
+        },
+        "S46": {
+          "total": 4,
+          "eligible": 4,
+          "availability": 1
+        },
+        "S47": {
+          "total": 5,
+          "eligible": 5,
+          "availability": 1
+        },
+        "S48": {
+          "total": 8,
+          "eligible": 8,
+          "availability": 1
+        },
+        "S49": {
+          "total": 4,
+          "eligible": 4,
+          "availability": 1
+        },
+        "S50": {
+          "total": 4,
+          "eligible": 4,
+          "availability": 1
+        },
+        "S51": {
+          "total": 4,
+          "eligible": 4,
+          "availability": 1
+        },
+        "S52": {
+          "total": 6,
+          "eligible": 6,
+          "availability": 1
+        },
+        "S53": {
+          "total": 5,
+          "eligible": 5,
+          "availability": 1
+        },
+        "S54": {
+          "total": 4,
+          "eligible": 4,
+          "availability": 1
+        },
+        "S55": {
+          "total": 10,
+          "eligible": 10,
+          "availability": 1
+        },
+        "S56": {
+          "total": 4,
+          "eligible": 4,
+          "availability": 1
+        },
+        "S57": {
+          "total": 5,
+          "eligible": 5,
+          "availability": 1
+        },
+        "S58": {
+          "total": 8,
+          "eligible": 8,
+          "availability": 1
+        },
+        "S59": {
+          "total": 13,
+          "eligible": 13,
+          "availability": 1
+        },
+        "S60": {
+          "total": 6,
+          "eligible": 6,
+          "availability": 1
+        }
+      },
+      "provenance": {
+        "sourceNative": 7705,
+        "reconstructedDiagnostics": 2000
+      }
+    },
+    "coverage": {
+      "registeredMethods": 9705,
+      "registeredFamilies": 150,
+      "eligibleMethods": 9705,
+      "activeFamilies": 132,
+      "macroObservations": 180,
+      "calendarEvents": 242,
+      "newsItems": 36,
+      "unavailablePriceMicrostructureFamilies": false
+    },
+    "audit": {
+      "frozenThisRun": 0,
+      "scoredThisRun": 0,
+      "decisionMemory": {
+        "evaluatedHorizons": 0,
+        "completed": 0,
+        "expired": 0,
+        "recorded": 0,
+        "skipped": 8,
+        "total": 8
+      }
+    },
+    "operationalHealth": {
+      "generatedAt": "2026-08-18T12:38:14.674Z",
+      "status": "healthy",
+      "criticalIssues": [],
+      "calendarEvents": 242,
+      "macroObservations": 180,
+      "fredRequested": 58,
+      "fredLiveFetched": null,
+      "fredFailures": 30,
+      "staleMacroRetained": 0,
+      "macroQuality": {
+        "requested": 58,
+        "liveFetched": 0,
+        "retainedLastKnownGood": 0,
+        "usableObservations": 180,
+        "unresolved": 0,
+        "liveCoveragePercent": null,
+        "effectiveCoveragePercent": null,
+        "status": "unknown"
+      },
+      "failureDiagnostics": {
+        "total": 30,
+        "retryable": 30,
+        "nonRetryable": 0,
+        "unresolved": 0,
+        "byType": {
+          "timeout": 30
+        },
+        "byEconomy": {
+          "UNKNOWN": 30
+        },
+        "byCategory": {
+          "other": 30
+        },
+        "liveRatio": 0,
+        "effectiveRatio": 3.103448275862069,
+        "requested": 58,
+        "liveFetched": 0,
+        "staleRetained": 0,
+        "observations": 180
+      },
+      "officialNewsItems": 36,
+      "staleNewsRetained": 36,
+      "economyCounts": {
+        "USA": 111,
+        "EUROPE": 14,
+        "UK": 22,
+        "SOUTH_AFRICA": 19,
+        "JAPAN": 14
+      },
+      "sourceChecks": [
+        {
+          "id": "fxstreet",
+          "layer": "calendar",
+          "ok": true,
+          "details": {
+            "ok": true,
+            "events": 242
+          }
+        },
+        {
+          "id": "myfxbook",
+          "layer": "calendar",
+          "ok": true,
+          "details": {
+            "ok": true,
+            "events": 221,
+            "mode": "html"
+          }
+        },
+        {
+          "id": "cnbc",
+          "layer": "calendar",
+          "ok": true,
+          "details": {
+            "ok": true,
+            "items": 24
+          }
+        },
+        {
+          "id": "fed-press",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "United States",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "fed-speeches",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "United States",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "ecb-press",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "Euro Area",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "ecb-statistics",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "Euro Area",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "boe-speeches",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "United Kingdom",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "boe-news",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "United Kingdom",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "boe-statistics",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "United Kingdom",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "sarb-publications",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "South Africa",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "boj-news",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "Japan",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "boj-statistics",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "Japan",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "bls-latest",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "United States",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "statssa-releases",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "South Africa",
+            "error": "This operation was aborted"
+          }
+        },
+        {
+          "id": "japan-stat-whatsnew",
+          "layer": "official-news",
+          "ok": false,
+          "details": {
+            "ok": false,
+            "items": 0,
+            "region": "Japan",
+            "error": "This operation was aborted"
+          }
+        }
+      ],
+      "agesMinutes": {
+        "calendar": 5,
+        "macro": 36,
+        "news": 7,
+        "intelligence": 0
+      }
+    },
+    "economies": 5,
+    "observations": 180
+  },
   "raw": null
 }
