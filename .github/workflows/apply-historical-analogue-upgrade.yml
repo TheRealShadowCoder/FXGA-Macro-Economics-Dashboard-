@@ -1,0 +1,61 @@
+name: Apply Historical Analogue Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-historical-analogue-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply historical analogue patch
+        run: python3 scripts/apply_historical_analogue_upgrade.py
+      - name: Validate analogue reasoning
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore } from './src/decision-intelligence-core.js';
+          const now=new Date(),history=Array.from({length:20},(_,i)=>({date:new Date(now.getTime()-(20-i)*86400000).toISOString(),value:100+i*.2}));
+          const observations=[{seriesId:'ANA',title:'Analogue test',value:104,lastUpdated:now.toISOString(),frequency:'Monthly',source:'Primary',economy:'EUROPE',categories:['growth'],history}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:40,confidence:78,conviction:70,risk:'normal',components:{structuralDivergence:44,policyDivergence:34,releaseDivergence:20,narrativeDivergence:10},probabilities:{buy:.63,sell:.16,wait:.21}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const baseVector={refinedScore:38,directionalProbability:.63,evidenceQuality:90,uncertainty:28,scenarioRobustness:75,contradictions:0,reactionGap:8,releaseDifferential:15,revisionDifferential:5,communicationGap:10,transitionRisk:25,independenceRatio:.9,modelHealth:88,counterfactualShift:40,causalNet:18};
+          const analogue=(i,outcome,bps)=>({decisionAt:new Date(now.getTime()-(i+1)*86400000).toISOString(),direction:'BUY',confidence:75,featureVector:{...baseVector,refinedScore:38+i*.3,uncertainty:28+i},outcomes:{h4:{outcome,signedBps:bps,brier:outcome==='correct'?.15:.45}}});
+          const decisionMemory={analogueLibrary:{EURUSD:[analogue(0,'correct',12),analogue(1,'correct',9),analogue(2,'correct',7),analogue(3,'correct',10),analogue(4,'correct',5),analogue(5,'wrong',-4)]},horizons:{},bySymbol:{},byConfidence:{},decisionChanges:{}};
+          const dims=(g,i,l,p,f)=>[{id:'growth',score:g},{id:'inflation',score:i},{id:'labour',score:l},{id:'policy',score:p},{id:'financial',score:f}];
+          const economies=[{id:'EUROPE',currency:'EUR',centralBank:'ECB',dimensions:dims(25,20,22,18,15)},{id:'USA',currency:'USD',centralBank:'Fed',dimensions:dims(5,10,8,12,5)}];
+          const research={dataQuality:{overall:92},risk:{aggregate:10},modelHealth:{score:88,status:'healthy',calibratedForecasts:10},evidenceIndependence:{independenceRatio:.9,economies:[]},turningPoints:{economies:[]},catalystSequence:{currencies:[]},scenarios:[{label:'Base',pairs:[{symbol:'EURUSD',direction:'BUY',score:30}]}]};
+          const core=buildDecisionIntelligenceCore({economies,decision:primary,observations,events:[],news:[],marketData:[],research,decisionMemory,now});
+          const a=core.pairDecisions[0]?.historicalAnalogues;
+          if(!a)throw new Error('Historical analogue control missing');
+          if(a.samples<4)throw new Error(`Too few matched analogues: ${a.samples}`);
+          if(a.averageSimilarity<=0)throw new Error('Analogue similarity invalid');
+          if(!Array.isArray(a.analogues)||!a.analogues.length)throw new Error('Analogue audit list missing');
+          console.log(JSON.stringify(a,null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit historical analogue intelligence
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-memory.js cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add historical analogue decision intelligence'
+          git pull --rebase origin main
+          git push origin HEAD:main
