@@ -1,0 +1,112 @@
+name: Verify Live Decision Intelligence V4.14
+
+on:
+  workflow_run:
+    workflows: ['Deploy FXGA Google Cloud Collector']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  SERVICE: fxga-macro-collector
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+
+jobs:
+  verify:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: service
+        name: Resolve private production data service
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          test -n "$PROJECT_ID" || { echo '::error::GCP_PROJECT_ID is missing'; exit 1; }
+          gcloud config set project "$PROJECT_ID"
+          SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          test -n "$SERVICE_URL" || { echo '::error::Production data service missing'; exit 1; }
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+      - id: invoke
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service.outputs.url }}
+          id_token_include_email: true
+      - name: Refresh and verify private intelligence state
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          post(){ local name="$1" path="$2" body="${3:-{}}"; local code; code=$(curl --max-time 300 -sS -o "/tmp/$name.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$body" "$SERVICE_URL$path"); echo "$name HTTP $code"; test "$code" -ge 200 -a "$code" -lt 300 || { cat "/tmp/$name.json" | head -c 1800; exit 1; }; }
+          get(){ local name="$1" path="$2"; local code; code=$(curl --max-time 120 -sS -o "/tmp/$name.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$SERVICE_URL$path"); echo "$name HTTP $code"; test "$code" -ge 200 -a "$code" -lt 300 || { cat "/tmp/$name.json" | head -c 1800; exit 1; }; }
+          get health /health
+          node <<'NODE'
+          const h=require('/tmp/health.json');
+          if(!h.ok)throw new Error('Production data service is unhealthy');
+          if(Number(h.version||0)<4.14)throw new Error(`Expected service >=4.14, got ${h.version}`);
+          NODE
+          post market /market-sync '{}'
+          post intelligence /refresh-intelligence '{"forceNews":false}'
+          get state /state
+          node <<'NODE'
+          const fs=require('fs'),state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8')),intel=state?.intelligence?.payload,research=intel?.research,core=intel?.decisionGovernance,pairs=core?.pairDecisions||[];
+          if(!intel||!research||!core)throw new Error('Current intelligence state is incomplete');
+          if(pairs.length<8)throw new Error(`Expected 8 governed pairs, got ${pairs.length}`);
+          const required=['bayesian','refined','reactionFunctionGap','crossAsset','causalTransmission','counterfactual','temporalIntelligence','transitionRisk','structuralBreak','evidenceIndependence','evidenceCompleteness','scenarioRobustness','riskControls','modelHealth','historicalCalibration','horizonCalibration','decisionChange','historicalAnalogues','uncertainty','premortem','thesis','final'];
+          for(const pair of pairs)for(const field of required)if(pair?.[field]===undefined)throw new Error(`${pair?.symbol||'pair'} missing ${field}`);
+          if(!core.crossPairConsistency?.checks?.length)throw new Error('Cross-pair consistency missing');
+          if(!core.portfolioInteraction?.pairControls)throw new Error('Portfolio interaction missing');
+          if(!research.structuralBreaks?.series)throw new Error('Structural-break research missing');
+          if(!research.turningPoints?.rows)throw new Error('Turning-point research missing');
+          if(!research.evidenceIndependence)throw new Error('Evidence-independence research missing');
+          if(!research.catalystSequence?.currencies)throw new Error('Catalyst sequencing missing');
+          if(!Array.isArray(research.releaseAnalytics?.persistence))throw new Error('Surprise persistence missing');
+          const calibrated=(research.forecasts||[]).filter(x=>x.modelWeights&&Number(x.validationPoints||0)>0),distributed=calibrated.filter(x=>x.distribution&&Number(x.distribution.residualCount||0)>0);
+          if(!calibrated.length)throw new Error('Walk-forward calibrated forecasts missing');
+          if(!distributed.length)throw new Error('Distributional forecasts missing');
+          if(!intel.decisionMemory||!intel.decisionMemory.decisionChanges||!intel.decisionMemory.analogueLibrary)throw new Error('Decision change / analogue memory missing');
+          const report={verifiedAt:new Date().toISOString(),serviceVersion:require('/tmp/health.json').version,pairs:pairs.length,actionable:intel.sessionSignals?.decisionSummary?.actionableCount??null,wait:intel.sessionSignals?.decisionSummary?.waitCount??null,evidenceQuality:core.evidenceQuality?.score??null,modelHealth:research.modelHealth?.status??null,modelHealthScore:research.modelHealth?.score??null,sourceReliability:research.sourceReliability?.length||0,calibratedForecasts:calibrated.length,distributedForecasts:distributed.length,structuralBreakSeries:research.structuralBreaks.series.length,breakSeries:research.structuralBreaks.breakSeries||0,turningFamilies:research.turningPoints.rows.length,evidenceIndependence:research.evidenceIndependence.independenceRatio,catalystCurrencies:research.catalystSequence.currencies.length,triangleChecks:core.crossPairConsistency.checks.length,triangleConflicts:core.crossPairConsistency.conflicts||0,portfolioVetoes:Number(core.portfolioInteraction.concentrationVetoes||0)+Number(core.portfolioInteraction.triangleVetoes||0),decisionMemorySamples:intel.decisionMemory.sampledDecisions||0,analogueSymbols:Object.keys(intel.decisionMemory.analogueLibrary||{}).length};
+          fs.writeFileSync('/tmp/v414-live.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
+          NODE
+      - name: Verify public research contract
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev',sleep=ms=>new Promise(r=>setTimeout(r,ms));let last;
+          for(let attempt=0;attempt<50;attempt++){
+            try{
+              const r=await fetch(base+'/api/research',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),text=await r.text();if(!r.ok)throw new Error(`/api/research ${r.status}: ${text.slice(0,500)}`);const research=JSON.parse(text),core=research?.decisionCore,pairs=core?.pairDecisions||[];
+              const ok=pairs.length>=8&&pairs.every(p=>p.reactionFunctionGap&&p.crossAsset&&p.evidenceCompleteness&&p.horizonCalibration&&p.decisionChange&&p.historicalAnalogues&&p.structuralBreak&&p.causalTransmission&&p.counterfactual&&p.temporalIntelligence&&p.transitionRisk&&p.evidenceIndependence);
+              if(ok&&research.structuralBreaks&&research.evidenceIndependence&&research.turningPoints&&research.catalystSequence&&research.decisionMemory&&core.crossPairConsistency&&core.portfolioInteraction){const report=JSON.parse(fs.readFileSync('/tmp/v414-live.json','utf8'));report.publicContract={passed:true,pairs:pairs.length,decisionMemorySamples:research.decisionMemory.sampledDecisions||0,analogueSymbols:Object.keys(research.decisionMemory.analogueLibrary||{}).length};fs.writeFileSync('/tmp/v414-live.json',JSON.stringify(report,null,2));console.log('PUBLIC V4.14 INTELLIGENCE VERIFIED',JSON.stringify(report.publicContract));process.exit(0);}last=new Error('Waiting for current v4.14 public research state');
+            }catch(error){last=error;}await sleep(4000);
+          }
+          throw last||new Error('Public v4.14 intelligence contract did not become ready');
+          NODE
+      - name: Persist live verification marker
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),x=JSON.parse(fs.readFileSync('/tmp/v414-live.json','utf8'));
+          const lines=[`verified_at=${x.verifiedAt}`,`contract=v4.14-live`,`service_version=${x.serviceVersion}`,`pairs=${x.pairs}`,`actionable=${x.actionable}`,`wait=${x.wait}`,`evidence_quality=${x.evidenceQuality}`,`model_health=${x.modelHealth}`,`model_health_score=${x.modelHealthScore}`,`source_reliability=${x.sourceReliability}`,`calibrated_forecasts=${x.calibratedForecasts}`,`distributed_forecasts=${x.distributedForecasts}`,`structural_break_series=${x.structuralBreakSeries}`,`break_series=${x.breakSeries}`,`turning_families=${x.turningFamilies}`,`evidence_independence=${x.evidenceIndependence}`,`catalyst_currencies=${x.catalystCurrencies}`,`triangle_checks=${x.triangleChecks}`,`triangle_conflicts=${x.triangleConflicts}`,`portfolio_vetoes=${x.portfolioVetoes}`,`decision_memory_samples=${x.publicContract?.decisionMemorySamples??x.decisionMemorySamples}`,`analogue_symbols=${x.publicContract?.analogueSymbols??x.analogueSymbols}`,`public_contract=passed`];
+          fs.writeFileSync('.github/intelligence-v414-live.status',lines.join('\n')+'\n');
+          NODE
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/intelligence-v414-live.status
+          git commit -m 'Verify live v4.14 decision intelligence contract'
+          git pull --rebase origin main
+          git push origin HEAD:main
