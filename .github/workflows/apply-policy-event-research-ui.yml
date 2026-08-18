@@ -1,0 +1,37 @@
+name: Apply Policy Event Research UI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-policy-event-research-ui.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Integrate research UI
+        run: python3 scripts/apply_policy_event_research_ui.py
+      - name: Validate production frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Commit research UI integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/components/ResearchView.tsx
+          if git diff --cached --quiet; then echo 'UI already integrated.'; exit 0; fi
+          git commit -m 'Integrate release reaction and policy path research UI'
+          git pull --rebase origin main
+          git push origin HEAD:main
