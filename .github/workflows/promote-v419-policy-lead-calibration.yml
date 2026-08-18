@@ -1,0 +1,53 @@
+name: Promote V4.19 Policy Lead Calibration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-promote-v419-policy-lead-calibration.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Require integrated v4.19 source
+        run: |
+          set -euo pipefail
+          grep -q "POLICY_LEAD_BUCKETS" cloud-run-collector/src/policy-calibration.js
+          grep -q "Missing earlier lead windows are never backfilled" cloud-run-collector/src/policy-calibration.js
+          grep -q "byLeadBucket" cloud-run-collector/src/policy-calibration.js
+          grep -q "pairedLeadComparison" cloud-run-collector/src/policy-calibration.js
+          grep -q "snapshotHash" cloud-run-collector/src/policy-calibration.js
+          grep -q "Lead-Time Calibration Curve" src/components/PolicyCalibrationPanel.tsx
+          grep -q "Unique decisions" src/components/PolicyCalibrationPanel.tsx
+      - name: Promote collector and validate security
+        run: |
+          cd cloud-run-collector
+          npm version 4.19.0 --no-git-tag-version --ignore-scripts
+          npm ci --ignore-scripts
+          npm run check
+          npm audit --omit=dev --audit-level=moderate
+      - name: Revalidate frontend
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          npm install --progress=false
+          npm run build
+      - name: Commit v4.19 package metadata
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/package.json cloud-run-collector/package-lock.json
+          if git diff --cached --quiet; then echo 'Collector already at 4.19.0.'; exit 0; fi
+          git commit -m 'Promote FXGA policy lead calibration v4.19.0'
+          git pull --rebase origin main
+          git push origin HEAD:main
