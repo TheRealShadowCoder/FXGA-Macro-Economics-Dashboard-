@@ -1,0 +1,9 @@
+verified_at=2026-08-18T13:15:22Z
+contract=v4.15-research-source
+event_reaction_research=passed
+policy_path_research=passed
+event_study_refresh_plumbing=passed
+policy_event_ui=passed
+collector_check=passed
+dependency_audit=passed
+frontend_build=passed
