@@ -185,7 +185,7 @@ export default function App() {
       .then((payload) => { if (!cancelled) setAnalysis(payload); })
       .catch((err) => { if (!cancelled) setAnalysisError(err instanceof Error ? err.message : 'Unable to calculate macro analysis'); })
       .finally(() => { if (!cancelled) setAnalysisLoading(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; setAnalysisLoading(false); };
   }, [view, analysis]);
 
   useEffect(() => {
@@ -196,7 +196,7 @@ export default function App() {
       .then((payload) => { if (!cancelled) setSignals(payload); })
       .catch((err) => { if (!cancelled) setSignalsError(err instanceof Error ? err.message : 'Unable to calculate session signals'); })
       .finally(() => { if (!cancelled) setSignalsLoading(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; setSignalsLoading(false); };
   }, [view, signals]);
 
   useEffect(() => {
@@ -207,7 +207,7 @@ export default function App() {
       .then((payload) => { if (!cancelled) setCatalog(payload); })
       .catch((err) => { if (!cancelled) setCatalogError(err instanceof Error ? err.message : 'Unable to load FRED catalog'); })
       .finally(() => { if (!cancelled) setCatalogLoading(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; setCatalogLoading(false); };
   }, [view, catalog]);
 
   useEffect(() => {
@@ -218,7 +218,7 @@ export default function App() {
       .then((series) => { if (!cancelled) setUniverseSeries(series); })
       .catch((err) => { if (!cancelled) setUniverseError(err instanceof Error ? err.message : 'Unable to load macro category'); })
       .finally(() => { if (!cancelled) setUniverseLoading(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; setUniverseLoading(false); };
   }, [view, catalog, universeCategory]);
 
   useEffect(() => {
@@ -229,7 +229,7 @@ export default function App() {
       .then((payload) => { if (!cancelled) setAcquisitionCatalog(payload); })
       .catch((err) => { if (!cancelled) setAcquisitionError(err instanceof Error ? err.message : 'Unable to load acquisition engine'); })
       .finally(() => { if (!cancelled) setAcquisitionLoading(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; setAcquisitionLoading(false); };
   }, [view, acquisitionCatalog]);
 
   const filteredNews = useMemo(() => {
@@ -276,10 +276,10 @@ export default function App() {
   const nextEvents = (data?.calendar ?? []).filter((event) => Date.parse(event.date) >= Date.now()).sort((a, b) => Date.parse(a.date) - Date.parse(b.date)).slice(0, 6);
 
   const refreshCurrent = () => {
-    if (view === 'analysis') setAnalysis(null);
-    else if (view === 'signals') setSignals(null);
-    else if (view === 'acquisition') setAcquisitionCatalog(null);
-    else if (view === 'universe') { setCatalog(null); setUniverseSeries([]); }
+    if (view === 'analysis') { setAnalysisLoading(false); setAnalysis(null); }
+    else if (view === 'signals') { setSignalsLoading(false); setSignals(null); }
+    else if (view === 'acquisition') { setAcquisitionLoading(false); setAcquisitionCatalog(null); }
+    else if (view === 'universe') { setCatalogLoading(false); setUniverseLoading(false); setCatalog(null); setUniverseSeries([]); }
     else void load();
   };
 
