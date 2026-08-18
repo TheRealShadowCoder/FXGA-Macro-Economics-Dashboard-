@@ -5,6 +5,10 @@ on:
     workflows: ['Apply Structural Break Source Minimal']
     types: [completed]
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-finalize-v414.trigger'
 
 permissions:
   contents: write
@@ -12,7 +16,7 @@ permissions:
 
 jobs:
   finalize:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
