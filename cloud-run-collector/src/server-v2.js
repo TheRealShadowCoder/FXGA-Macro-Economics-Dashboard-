@@ -8,7 +8,8 @@ import { FRED_BASE_IDS, FAST_FRED_IDS, discoverGlobalFredUniverse, summarizeUniv
 import { collectCnbcMarket } from './cnbc-market.js';
 import { TECHNICAL_ASSET_IDS, buildTechnicalSnapshot, updateTechnicalBars } from './technical-engine.js';
 import { EVENT_STUDY_HORIZONS, buildEventStudyMeasurement, summarizeEventStudies, supportedEventStudyCurrency } from './event-study.js';
-import { isPolicyDecisionEvent, mergePolicyCatalystEvents, policyCatalystSegments } from './policy-catalyst-horizon.js';
+import { isPolicyDecisionEvent, mergePolicyCatalystEvents, policyCatalystSegments, policyDecisionKey } from './policy-catalyst-horizon.js';
+import { collectOfficialPolicySchedule } from './official-policy-schedule.js';
 
 const app = express();
 app.use(express.json({ limit: '3mb' }));
@@ -147,7 +148,8 @@ function enrichCalendarEvent(event) {
   const bias = classifyCurrencyBias(event);
   const actual = economicNumber(event.actual), forecast = economicNumber(event.forecast);
   const outcome = actual === undefined ? 'pending' : forecast === undefined ? 'no-consensus' : actual > forecast ? 'beat' : actual < forecast ? 'miss' : 'in-line';
-  return { ...event, ...bias, outcome, betterThanExpected:bias.currencyBias === 'bullish', worseThanExpected:bias.currencyBias === 'bearish' };
+  const decisionKey=isPolicyDecisionEvent(event)?event.policyDecisionKey||policyDecisionKey(event):event.policyDecisionKey;
+  return { ...event, ...bias, outcome, betterThanExpected:bias.currencyBias === 'bullish', worseThanExpected:bias.currencyBias === 'bearish', ...(decisionKey?{policyDecisionKey:decisionKey,policyDecisionDate:event.policyDecisionDate||decisionKey.split(':')[1]}:{}) };
 }
 async function persistCalendarHistory(events) {
   const now = Date.now(), cutoff = now - CALENDAR_HISTORY_DAYS * 86_400_000;
@@ -458,17 +460,21 @@ async function syncCnbcMarket() {
 }
 async function bootstrapCalendar() {
   const now=new Date(); const from=new Date(now.getTime()-CALENDAR_HISTORY_DAYS*86_400_000); const to=new Date(now.getTime()+cfg.calendarDays*86_400_000); const policyTo=new Date(now.getTime()+cfg.policyCatalystDays*86_400_000);
-  const [fxstreetResult,myfxbook,cnbc,policyHorizonResult]=await Promise.allSettled([fetchFxstreet(from,to),scrapeMyfxbook(),scrapeCnbc(),fetchPolicyCatalystHorizon(new Date(to.getTime()+1000),policyTo)]);
+  const [fxstreetResult,myfxbook,cnbc,policyHorizonResult,officialPolicyResult]=await Promise.allSettled([fetchFxstreet(from,to),scrapeMyfxbook(),scrapeCnbc(),fetchPolicyCatalystHorizon(new Date(to.getTime()+1000),policyTo),collectOfficialPolicySchedule({from:now,to:policyTo})]);
   const fxstreet=fxstreetResult.status==='fulfilled'?fxstreetResult.value:[];
   const myfx=myfxbook.status==='fulfilled'?myfxbook.value:{events:[],ok:false,error:String(myfxbook.reason)};
   const cnbcResult=cnbc.status==='fulfilled'?cnbc.value:{items:[],ok:false,error:String(cnbc.reason)};
   const policyHorizon=policyHorizonResult.status==='fulfilled'?policyHorizonResult.value:{events:[],health:{ok:false,source:'FXStreet public calendar feed',segments:0,failedSegments:1,events:0,error:String(policyHorizonResult.reason?.message||policyHorizonResult.reason).slice(0,220)}};
+  const officialPolicy=officialPolicyResult.status==='fulfilled'?officialPolicyResult.value:{events:[],health:{ok:false,architecture:'official-five-bank-policy-schedule-ensemble',requestedSources:5,okSources:0,liveSources:0,fallbackSources:0,failedSources:5,events:0,error:String(officialPolicyResult.reason?.message||officialPolicyResult.reason).slice(0,220)}};
   const normalEvents=mergeEvents(fxstreet,myfx.events||[]).map(enrichCalendarEvent).filter((event)=>Date.parse(event.date)>=from.getTime()&&Date.parse(event.date)<=to.getTime());
-  const policyEvents=(policyHorizon.events||[]).map(enrichCalendarEvent).filter((event)=>Date.parse(event.date)>to.getTime()&&Date.parse(event.date)<=policyTo.getTime());
+  const fxPolicyEvents=(policyHorizon.events||[]).map(enrichCalendarEvent).filter((event)=>Date.parse(event.date)>to.getTime()&&Date.parse(event.date)<=policyTo.getTime());
+  const officialPolicyEvents=(officialPolicy.events||[]).map(enrichCalendarEvent).filter((event)=>Date.parse(event.date)>now.getTime()&&Date.parse(event.date)<=policyTo.getTime());
+  const policyEvents=mergePolicyCatalystEvents(fxPolicyEvents,officialPolicyEvents);
   const events=mergePolicyCatalystEvents(normalEvents,policyEvents);
+  const extendedPolicyEvents=events.filter((event)=>event.policyCatalystHorizonOnly===true);
   if (!events.length) throw new Error('Calendar bootstrap produced no events');
-  const sourceHealth={fxstreet:{ok:fxstreet.length>0,events:fxstreet.length},myfxbook:{ok:Boolean(myfx.ok),events:(myfx.events||[]).length,mode:myfx.mode,error:myfx.error},cnbc:{ok:Boolean(cnbcResult.ok),items:(cnbcResult.items||[]).length,error:cnbcResult.error},policyCatalysts:policyHorizon.health};
-  const snapshot={generatedAt:new Date().toISOString(),days:cfg.calendarDays,historyDays:CALENDAR_HISTORY_DAYS,windowStart:from.toISOString(),windowEnd:to.toISOString(),policyCatalystDays:cfg.policyCatalystDays,policyWindowEnd:policyTo.toISOString(),policyCatalystCount:policyEvents.length,targetEconomies:TARGET_ECONOMIES,events,sourceHealth,cnbcContext:cnbcResult.items||[]};
+  const sourceHealth={fxstreet:{ok:fxstreet.length>0,events:fxstreet.length},myfxbook:{ok:Boolean(myfx.ok),events:(myfx.events||[]).length,mode:myfx.mode,error:myfx.error},cnbc:{ok:Boolean(cnbcResult.ok),items:(cnbcResult.items||[]).length,error:cnbcResult.error},policyCatalysts:{ok:Boolean(policyHorizon.health?.ok||officialPolicy.health?.ok),source:'FXStreet plus official central-bank schedule ensemble',events:extendedPolicyEvents.length,fxstreet:policyHorizon.health,official:officialPolicy.health}};
+  const snapshot={generatedAt:new Date().toISOString(),days:cfg.calendarDays,historyDays:CALENDAR_HISTORY_DAYS,windowStart:from.toISOString(),windowEnd:to.toISOString(),policyCatalystDays:cfg.policyCatalystDays,policyWindowEnd:policyTo.toISOString(),policyCatalystCount:extendedPolicyEvents.length,officialPolicyScheduleCount:officialPolicyEvents.length,targetEconomies:TARGET_ECONOMIES,events,sourceHealth,cnbcContext:cnbcResult.items||[]};
   const history=await persistCalendarHistory(events);
   const saved=await putIfChanged('calendar',snapshot); const scheduled=await scheduleReleaseTasks(events.filter((event)=>!event.policyCatalystHorizonOnly)); const marketPulse=await scheduleMarketPulseTasks();
   if (saved.changed) await signedWebhook('calendar-snapshot',snapshot);
