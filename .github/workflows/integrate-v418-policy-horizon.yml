@@ -68,7 +68,8 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add cloud-run-collector/src/policy-catalyst-horizon.js cloud-run-collector/src/server-v2.js cloud-run-collector/src/policy-path-research.js cloud-run-collector/package.json .github/workflows/deploy-cloud-run-collector.yml src/components/PolicyEventResearchPanel.tsx
+          git checkout -- .github/workflows/deploy-cloud-run-collector.yml
+          git add cloud-run-collector/src/policy-catalyst-horizon.js cloud-run-collector/src/server-v2.js cloud-run-collector/src/policy-path-research.js cloud-run-collector/package.json src/components/PolicyEventResearchPanel.tsx
           if git diff --cached --quiet; then echo 'No integration changes to commit.'; exit 0; fi
           git commit -m 'Integrate v4.18 policy catalyst horizon'
           git pull --rebase origin main
