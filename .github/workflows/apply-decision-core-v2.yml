@@ -1,0 +1,55 @@
+name: Apply Decision Governance V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-decision-core-v2.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply scenario and uncertainty governance
+        run: python3 scripts/apply_decision_core_v2.py
+      - name: Validate collector and governance behavior
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
+          const now=new Date(),observations=[{seriesId:'TEST',title:'Growth Test',value:101,date:now.toISOString(),lastUpdated:now.toISOString(),frequency:'Monthly',source:'Primary',history:Array.from({length:12},(_,i)=>({date:new Date(now.getTime()-(12-i)*86400000).toISOString(),value:90+i}))}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:41,confidence:74,conviction:66,risk:'normal',components:{structuralDivergence:44,policyDivergence:36,releaseDivergence:18,narrativeDivergence:8},probabilities:{buy:.61,sell:.18,wait:.21}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const research={dataQuality:{overall:91},risk:{aggregate:22,severity:'normal'},scenarios:[{id:'base',label:'Base',pairs:[{symbol:'EURUSD',score:35,direction:'BUY'}]},{id:'stress',label:'Stress',pairs:[{symbol:'EURUSD',score:8,direction:'WAIT'}]}]};
+          const core=buildDecisionIntelligenceCore({decision:primary,observations,events:[],news:[],marketData:[],research,now});
+          const pair=core.pairDecisions[0];
+          if(!pair?.scenarioRobustness||!pair?.uncertainty||!Array.isArray(pair?.premortem))throw new Error('V2 governance outputs missing');
+          if(!Number.isFinite(pair.uncertainty.total))throw new Error('Uncertainty decomposition invalid');
+          const governed=governDecisionMatrix(primary,core);
+          if(!governed.governance?.audit)throw new Error('Governed matrix audit missing');
+          console.log(JSON.stringify({scenario:pair.scenarioRobustness,uncertainty:pair.uncertainty,final:pair.final,premortem:pair.premortem},null,2));
+          NODE
+      - name: Validate frontend still builds
+        run: |
+          npm install
+          npm run build
+      - name: Commit governance v2
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/super-economist.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add scenario robustness and uncertainty governance'
+          git pull --rebase origin main
+          git push origin HEAD:main
