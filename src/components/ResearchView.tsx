@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import './ResearchView.css';
+import { DecisionCorePanel, type DecisionCorePayload } from './DecisionCorePanel';
 
 type RiskCategory={id:string;score:number;severity:string;confidenceHaircut:number;warning:boolean;stressMultiplier:number};
 type Scenario={id:string;label:string;confidenceChange:number;currencies:Record<string,number>;pairs:Array<{symbol:string;score:number;direction:'BUY'|'SELL'|'WAIT'}>;assets:Record<string,number>};
@@ -15,6 +16,7 @@ type ResearchPayload={
   scenarios:Scenario[];
   regimes:Regime[];
   operatingStandards:{slos:Array<{id:string;target:number;window:string;errorBudget:number}>;storageTiers:Record<string,{retention:string;purpose:string}>;validationState:string};
+  decisionCore?:DecisionCorePayload;
   notes?:Record<string,string>;
 };
 
@@ -63,6 +65,8 @@ export function ResearchView(){
         <div className="research-confidence"><span>Confidence after risk controls</span><b>{data.risk.confidenceAfterRisk}%</b></div>
       </article>
     </section>
+
+    <DecisionCorePanel data={data.decisionCore}/>
 
     <section className="section-head"><div><span className="eyebrow">Risk Decomposition</span><h2>Independent risk controls</h2><p>Every risk family applies its own warning threshold and confidence haircut before a directional view is considered actionable.</p></div></section>
     <section className="risk-grid">{data.risk.categories.map(item=><article className="risk-card" key={item.id}><div><span>{title(item.id)}</span><strong className={riskClass(item.score)}>{item.score}</strong></div><div className="risk-meter"><i style={{width:`${Math.min(100,item.score)}%`}}></i></div><small>{title(item.severity)} · confidence haircut {item.confidenceHaircut} pts</small></article>)}</section>
