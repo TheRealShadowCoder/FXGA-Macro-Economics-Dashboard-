@@ -40,6 +40,29 @@ function probabilityForDirection(pair,direction){
   return direction==='BUY'?clamp(Number(p.buy||0)):direction==='SELL'?clamp(Number(p.sell||0)):clamp(Number(p.wait||0));
 }
 function confidenceBucket(value){const c=Number(value||0);return c>=80?'80-100':c>=65?'65-79':c>=50?'50-64':'0-49';}
+function pairFeatureVector(pair){
+  const posterior=pair?.bayesian?.posterior||{};
+  return {
+    refinedScore:Number(pair?.refined?.score||0),
+    directionalProbability:Math.max(Number(posterior.buy||0),Number(posterior.sell||0)),
+    evidenceQuality:Number(pair?.quality?.score||0),
+    uncertainty:Number(pair?.uncertainty?.score||0),
+    scenarioRobustness:Number(pair?.scenarioRobustness?.score||0),
+    contradictions:Number(pair?.contradictions?.count||0),
+    reactionGap:Number(pair?.reactionFunctionGap?.differential||0),
+    crossAssetScore:Number(pair?.crossAsset?.score||0),
+    evidenceCompleteness:Number(pair?.evidenceCompleteness?.score||0),
+    releaseDifferential:Number(pair?.temporalIntelligence?.releaseDifferential||0),
+    revisionDifferential:Number(pair?.temporalIntelligence?.revisionDifferential||0),
+    communicationGap:Number(pair?.temporalIntelligence?.communicationGap||0),
+    transitionRisk:Number(pair?.transitionRisk?.maxRisk||0),
+    structuralBreakRisk:Number(pair?.structuralBreak?.risk||0),
+    independenceRatio:Number(pair?.evidenceIndependence?.independenceRatio??1),
+    modelHealth:Number(pair?.modelHealth?.score||0),
+    counterfactualShift:Number(pair?.counterfactual?.minimumAdverseShift||100),
+    causalNet:Number(pair?.causalTransmission?.netTransmission||0)
+  };
+}
 
 export async function recordDecisionMemory(engine,marketData=[]){
   const pairs=engine?.decisionGovernance?.pairDecisions||[],decisionAt=engine?.generatedAt||new Date().toISOString(),bucketMs=Math.floor(Date.parse(decisionAt)/900000)*900000,bucket=new Date(bucketMs).toISOString();
@@ -48,7 +71,7 @@ export async function recordDecisionMemory(engine,marketData=[]){
     const symbol=normalize(pair.symbol),direction=String(pair?.final?.direction||'WAIT').toUpperCase(),baseline=derivedPrice(symbol,marketData),id=hash(`${bucket}|${symbol}`).slice(0,40),ref=memory.doc(id),existing=await ref.get();
     if(existing.exists){skipped++;continue;}
     const directional=direction==='BUY'||direction==='SELL',canEvaluate=directional&&baseline&&Number.isFinite(baseline.price)&&!baseline.stale;
-    const document={id,symbol,decisionAt,bucket,direction,primaryDirection:String(pair.originalDirection||'WAIT'),primaryScore:Number(pair.originalScore||0),refinedScore:Number(pair?.refined?.score||0),confidence:Number(pair?.final?.confidence||0),directionProbability:probabilityForDirection(pair,direction),posterior:pair?.bayesian?.posterior||null,evidenceQuality:Number(pair?.quality?.score||0),uncertainty:Number(pair?.uncertainty?.score||0),scenarioRobustness:Number(pair?.scenarioRobustness?.score||0),contradictions:Number(pair?.contradictions?.count||0),governanceReasons:pair?.final?.reason||[],thesis:pair?.thesis?.statement||null,baseline:baseline?{price:baseline.price,derived:baseline.derived,stale:baseline.stale,sources:baseline.sources}:null,outcomes:{},complete:!canEvaluate,evaluationStatus:canEvaluate?'pending':directional?'no-verified-baseline':'wait-decision',recordedAt:new Date().toISOString()};
+    const document={id,symbol,decisionAt,bucket,direction,primaryDirection:String(pair.originalDirection||'WAIT'),primaryScore:Number(pair.originalScore||0),refinedScore:Number(pair?.refined?.score||0),confidence:Number(pair?.final?.confidence||0),directionProbability:probabilityForDirection(pair,direction),posterior:pair?.bayesian?.posterior||null,evidenceQuality:Number(pair?.quality?.score||0),uncertainty:Number(pair?.uncertainty?.score||0),scenarioRobustness:Number(pair?.scenarioRobustness?.score||0),contradictions:Number(pair?.contradictions?.count||0),featureVector:pairFeatureVector(pair),governanceReasons:pair?.final?.reason||[],thesis:pair?.thesis?.statement||null,baseline:baseline?{price:baseline.price,derived:baseline.derived,stale:baseline.stale,sources:baseline.sources}:null,outcomes:{},complete:!canEvaluate,evaluationStatus:canEvaluate?'pending':directional?'no-verified-baseline':'wait-decision',recordedAt:new Date().toISOString()};
     await ref.set(document,{merge:false});recorded++;
   }
   return {recorded,skipped,total:pairs.length};
@@ -76,7 +99,8 @@ async function summarizeDecisionMemory(){
   const latestBySymbol={};for(const document of documents){const symbol=String(document.symbol||'').toUpperCase();if(!symbol)continue;const row=latestBySymbol[symbol]??{latest:null,previous:null};if(!row.latest)row.latest=document;else if(!row.previous)row.previous=document;latestBySymbol[symbol]=row;}
   const compactDecision=document=>document?{id:document.id,symbol:document.symbol,decisionAt:document.decisionAt,direction:document.direction,primaryDirection:document.primaryDirection,refinedScore:Number(document.refinedScore||0),confidence:Number(document.confidence||0),directionProbability:Number(document.directionProbability||0),uncertainty:Number(document.uncertainty||0),scenarioRobustness:Number(document.scenarioRobustness||0),contradictions:Number(document.contradictions||0),evaluationStatus:document.evaluationStatus}:null;
   const decisionChanges=Object.fromEntries(Object.entries(latestBySymbol).map(([symbol,row])=>[symbol,{latest:compactDecision(row.latest),previous:compactDecision(row.previous)}]));
-  const summary={generatedAt:new Date().toISOString(),sampledDecisions:documents.length,directionalRecorded,waitRecorded,pending,noVerifiedBaseline:noBaseline,horizons:Object.fromEntries(Object.entries(byHorizon).map(([k,v])=>[k,finalize(v)])),bySymbol:Object.fromEntries(Object.entries(symbolAcc).map(([symbol,map])=>[symbol,{horizons:Object.fromEntries(Object.entries(map).map(([k,v])=>[k,finalize(v)]))}])),byConfidence:Object.fromEntries(Object.entries(bucketAcc).map(([bucket,map])=>[bucket,{horizons:Object.fromEntries(Object.entries(map).map(([k,v])=>[k,finalize(v)]))}])),decisionChanges,methodology:'Governed decisions are frozen with verified or derived baseline prices, then evaluated only against persisted market snapshots near fixed horizons. Flat moves receive a neutral 0.5 calibration target. Missing snapshots remain missing. The two latest frozen decisions per symbol are retained for change detection and flip-risk governance.'};
+  const analogueLibrary={};for(const document of documents){const symbol=String(document.symbol||'').toUpperCase();if(!symbol||document.direction==='WAIT'||!document.featureVector)continue;const outcomes=document.outcomes||{},usable=['h1','h4','h24'].some(h=>outcomes[h]);if(!usable)continue;const arr=analogueLibrary[symbol]??[];if(arr.length>=16)continue;arr.push({decisionAt:document.decisionAt,direction:document.direction,confidence:Number(document.confidence||0),featureVector:document.featureVector,outcomes:Object.fromEntries(['m15','h1','h4','h24'].filter(h=>outcomes[h]).map(h=>[h,{outcome:outcomes[h].outcome,signedBps:Number(outcomes[h].signedBps||0),brier:Number(outcomes[h].brier||0)}]))});analogueLibrary[symbol]=arr;}
+  const summary={generatedAt:new Date().toISOString(),sampledDecisions:documents.length,directionalRecorded,waitRecorded,pending,noVerifiedBaseline:noBaseline,horizons:Object.fromEntries(Object.entries(byHorizon).map(([k,v])=>[k,finalize(v)])),bySymbol:Object.fromEntries(Object.entries(symbolAcc).map(([symbol,map])=>[symbol,{horizons:Object.fromEntries(Object.entries(map).map(([k,v])=>[k,finalize(v)]))}])),byConfidence:Object.fromEntries(Object.entries(bucketAcc).map(([bucket,map])=>[bucket,{horizons:Object.fromEntries(Object.entries(map).map(([k,v])=>[k,finalize(v)]))}])),decisionChanges,analogueLibrary,methodology:'Governed decisions are frozen with verified or derived baseline prices, then evaluated only against persisted market snapshots near fixed horizons. Flat moves receive a neutral 0.5 calibration target. Missing snapshots remain missing. Recent completed states retain compact feature vectors for no-lookahead historical analogue reasoning.'};
   await state.doc('decision-memory-summary').set({hash:hash(JSON.stringify(summary)),updatedAt:summary.generatedAt,payload:summary},{merge:false});return summary;
 }
 export async function evaluateDecisionMemory({limit=80}={}){
