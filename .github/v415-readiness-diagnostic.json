@@ -1,0 +1,27 @@
+{
+  "generatedAt": "2026-08-18T13:12:15Z",
+  "run": {
+    "id": 32140760494,
+    "status": "completed",
+    "conclusion": "failure",
+    "html_url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32140760494",
+    "head_sha": "dfa22fd7f6bbc76e65c0abb51542a630c7afc146",
+    "run_number": 2
+  },
+  "jobs": [
+    {
+      "id": 95722585737,
+      "name": "verify",
+      "status": "completed",
+      "conclusion": "failure",
+      "failedSteps": [
+        {
+          "name": "Verify production frontend build",
+          "number": 7,
+          "status": "completed",
+          "conclusion": "failure"
+        }
+      ]
+    }
+  ]
+}
