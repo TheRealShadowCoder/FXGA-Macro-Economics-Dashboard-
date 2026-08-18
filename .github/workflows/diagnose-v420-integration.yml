@@ -1,0 +1,38 @@
+name: Diagnose V4.20 Integration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-diagnose-v420-integration.trigger'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Capture integration state
+        run: |
+          set -euo pipefail
+          RUNS=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/integrate-v420-official-policy-ensemble.yml/runs?per_page=5")
+          RUN_ID=$(printf '%s' "$RUNS" | jq -r '.workflow_runs[0].id // empty')
+          if [ -n "$RUN_ID" ]; then JOBS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100"); else JOBS='{"jobs":[]}'; fi
+          jq -n --arg generatedAt "$(date -u +%FT%TZ)" --argjson runs "$RUNS" --argjson jobs "$JOBS" '{generatedAt:$generatedAt,runs:($runs.workflow_runs|map({id,status,conclusion,created_at,updated_at,head_sha,html_url})|.[0:5]),jobs:($jobs.jobs|map({id,name,status,conclusion,started_at,completed_at,html_url,steps:(.steps|map({number,name,status,conclusion,started_at,completed_at}))}))}' > .github/v420-integration-diagnostic.json
+      - name: Persist diagnostic
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/v420-integration-diagnostic.json
+          git commit -m 'Record v4.20 integration diagnostic' || exit 0
+          git pull --rebase origin main
+          git push origin HEAD:main
