@@ -1,0 +1,132 @@
+{
+  "generatedAt": "2026-08-18T15:05:21.965854+00:00",
+  "runs": [
+    {
+      "conclusion": "",
+      "createdAt": "2026-08-18T15:03:57Z",
+      "databaseId": 32152185304,
+      "headSha": "4bc0e7577b6f8de98b9a173c9bb7da73abded577",
+      "status": "in_progress",
+      "updatedAt": "2026-08-18T15:04:01Z",
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32152185304",
+      "workflowName": "Verify V4.16 Intelligence Live"
+    }
+  ],
+  "latestJobs": [
+    {
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "databaseId": 95760523035,
+      "name": "verify",
+      "startedAt": "2026-08-18T15:04:00Z",
+      "status": "in_progress",
+      "steps": [
+        {
+          "completedAt": "2026-08-18T15:04:04Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-08-18T15:04:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:04:07Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v6",
+          "number": 2,
+          "startedAt": "2026-08-18T15:04:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:04:10Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v6",
+          "number": 3,
+          "startedAt": "2026-08-18T15:04:07Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:04:10Z",
+          "conclusion": "success",
+          "name": "Run google-github-actions/auth@v3",
+          "number": 4,
+          "startedAt": "2026-08-18T15:04:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:04:28Z",
+          "conclusion": "success",
+          "name": "Run google-github-actions/setup-gcloud@v2",
+          "number": 5,
+          "startedAt": "2026-08-18T15:04:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:04:30Z",
+          "conclusion": "success",
+          "name": "Run set -euo pipefail",
+          "number": 6,
+          "startedAt": "2026-08-18T15:04:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:04:31Z",
+          "conclusion": "success",
+          "name": "Run google-github-actions/auth@v3",
+          "number": 7,
+          "startedAt": "2026-08-18T15:04:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "name": "Verify private and public v4.16 intelligence",
+          "number": 8,
+          "startedAt": "2026-08-18T15:04:31Z",
+          "status": "in_progress"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "name": "Persist v4.16 live marker",
+          "number": 9,
+          "startedAt": "0001-01-01T00:00:00Z",
+          "status": "pending"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "name": "Post Run google-github-actions/auth@v3",
+          "number": 15,
+          "startedAt": "0001-01-01T00:00:00Z",
+          "status": "pending"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "name": "Post Run google-github-actions/auth@v3",
+          "number": 16,
+          "startedAt": "0001-01-01T00:00:00Z",
+          "status": "pending"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "name": "Post Run actions/setup-node@v6",
+          "number": 17,
+          "startedAt": "0001-01-01T00:00:00Z",
+          "status": "pending"
+        },
+        {
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "name": "Post Run actions/checkout@v6",
+          "number": 18,
+          "startedAt": "0001-01-01T00:00:00Z",
+          "status": "pending"
+        }
+      ],
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32152185304/job/95760523035"
+    }
+  ]
+}
