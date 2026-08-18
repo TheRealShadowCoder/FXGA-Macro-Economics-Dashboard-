@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-18T04:38:27.617Z",
+  "generatedAt": "2026-08-18T12:36:03.530Z",
   "httpStatus": 200,
   "parseError": null,
   "pairCount": 0,
@@ -19,9 +19,12 @@
   "keys": [
     "capabilityCoverage",
     "dataQuality",
+    "decisionCore",
+    "decisionMemory",
     "features",
     "forecasts",
     "generatedAt",
+    "intelligenceGeneratedAt",
     "marketAnalytics",
     "notes",
     "operatingStandards",
