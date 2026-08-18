@@ -1,0 +1,98 @@
+name: Apply Large Intelligence Storage Minimal
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-large-intelligence-storage-minimal.trigger'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply and diagnose v4.14.1 storage patch
+        run: |
+          set +e
+          mkdir -p /tmp/storage .github
+          python3 scripts/apply_large_intelligence_storage.py > /tmp/storage/patch1.log 2>&1
+          P1=$?
+          if [ "$P1" = 0 ]; then python3 scripts/apply_large_intelligence_cache_and_version.py > /tmp/storage/patch2.log 2>&1; P2=$?; else echo 'Skipped because patch1 failed' >/tmp/storage/patch2.log; P2=99; fi
+          node --check cloud-run-collector/src/super-runtime.js > /tmp/storage/runtime-check.log 2>&1; RUNTIME_RC=$?
+          node --check cloud-run-collector/src/super-economist.js > /tmp/storage/economist-check.log 2>&1; ECON_RC=$?
+          CONTRACT_RC=0
+          for pattern in "fxga_collector_state_chunks" "Chunk manifest for" "FIRESTORE_CHUNK_RAW_BYTES" "version:SERVICE_VERSION"; do grep -q "$pattern" cloud-run-collector/src/super-runtime.js || CONTRACT_RC=1; done
+          for pattern in "private async writeIntelligence" "private intelligenceCache:any=null" "this.readIntelligence()"; do grep -q "$pattern" worker/index-v3.ts || CONTRACT_RC=1; done
+          grep -q "const research=researchBase" cloud-run-collector/src/super-economist.js || CONTRACT_RC=1
+          node -e "const p=require('./cloud-run-collector/package.json');process.exit(p.version==='4.14.1'?0:1)" || CONTRACT_RC=1
+          node -e "const p=require('./cloud-run-collector/package-lock.json');process.exit(p.version==='4.14.1'&&p.packages?.['']?.version==='4.14.1'?0:1)" || CONTRACT_RC=1
+          BUILD_RC=99
+          if [ "$P1" = 0 ] && [ "$P2" = 0 ] && [ "$RUNTIME_RC" = 0 ] && [ "$ECON_RC" = 0 ] && [ "$CONTRACT_RC" = 0 ]; then
+            npm install > /tmp/storage/npm-install.log 2>&1
+            INSTALL_RC=$?
+            if [ "$INSTALL_RC" = 0 ]; then npm run build > /tmp/storage/build.log 2>&1; BUILD_RC=$?; else echo 'npm install failed' >/tmp/storage/build.log; BUILD_RC=98; fi
+          else
+            echo 'Build skipped because patch/syntax/contracts failed' >/tmp/storage/npm-install.log
+            echo 'Build skipped because patch/syntax/contracts failed' >/tmp/storage/build.log
+          fi
+          {
+            echo "generated_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "patch_storage_exit=$P1"
+            echo "patch_cache_version_exit=$P2"
+            echo "runtime_syntax_exit=$RUNTIME_RC"
+            echo "economist_syntax_exit=$ECON_RC"
+            echo "contract_exit=$CONTRACT_RC"
+            echo "production_build_exit=$BUILD_RC"
+            echo '--- storage patch ---'; cat /tmp/storage/patch1.log
+            echo '--- cache/version patch ---'; cat /tmp/storage/patch2.log
+            echo '--- runtime syntax ---'; cat /tmp/storage/runtime-check.log
+            echo '--- economist syntax ---'; cat /tmp/storage/economist-check.log
+            echo '--- build tail ---'; tail -n 80 /tmp/storage/build.log
+          } > .github/intelligence-storage-v4141-diagnostic.txt
+          echo "$P1" >/tmp/storage/p1; echo "$P2" >/tmp/storage/p2; echo "$RUNTIME_RC" >/tmp/storage/runtime; echo "$ECON_RC" >/tmp/storage/econ; echo "$CONTRACT_RC" >/tmp/storage/contract; echo "$BUILD_RC" >/tmp/storage/buildrc
+      - name: Persist validated source or exact diagnostic
+        run: |
+          P1=$(cat /tmp/storage/p1); P2=$(cat /tmp/storage/p2); RUNTIME_RC=$(cat /tmp/storage/runtime); ECON_RC=$(cat /tmp/storage/econ); CONTRACT_RC=$(cat /tmp/storage/contract); BUILD_RC=$(cat /tmp/storage/buildrc)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/intelligence-storage-v4141-diagnostic.txt
+          if [ "$P1" = 0 ] && [ "$P2" = 0 ] && [ "$RUNTIME_RC" = 0 ] && [ "$ECON_RC" = 0 ] && [ "$CONTRACT_RC" = 0 ] && [ "$BUILD_RC" = 0 ]; then
+            cat > .github/intelligence-storage-v4141.status <<EOF
+          verified_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          contract=v4.14.1-storage
+          collector_version=4.14.1
+          firestore_chunking=passed
+          cloudflare_intelligence_chunking=passed
+          cloudflare_hot_cache=passed
+          duplicate_research_objects_removed=passed
+          runtime_version_sync=passed
+          production_build=passed
+          EOF
+            git add cloud-run-collector/src/super-runtime.js cloud-run-collector/src/super-economist.js cloud-run-collector/package.json cloud-run-collector/package-lock.json worker/index-v3.ts .github/intelligence-storage-v4141.status
+            MSG='Scale v4.14 intelligence persistence beyond single-document limits'
+          else
+            MSG='Record v4.14.1 storage integration diagnostic'
+          fi
+          git commit -m "$MSG"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - name: Dispatch production only when validated
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if grep -q '^contract=v4.14.1-storage$' .github/intelligence-storage-v4141.status 2>/dev/null; then
+            gh workflow run deploy-cloud-run-collector.yml --ref main
+            gh workflow run deploy.yml --ref main
+          fi
