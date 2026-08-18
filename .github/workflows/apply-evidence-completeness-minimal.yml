@@ -21,7 +21,7 @@ jobs:
         run: |
           set +e
           mkdir -p /tmp/completeness .github
-          python3 scripts/apply_evidence_completeness_upgrade.py > /tmp/completeness/patch.log 2>&1
+          python3 scripts/apply_evidence_completeness_v2.py > /tmp/completeness/patch.log 2>&1
           PATCH_RC=$?
           node --check cloud-run-collector/src/decision-intelligence-core.js > /tmp/completeness/check.log 2>&1
           CHECK_RC=$?
@@ -38,7 +38,7 @@ jobs:
             cat /tmp/completeness/patch.log
             echo '--- syntax output ---'
             cat /tmp/completeness/check.log
-          } > .github/evidence-completeness-diagnostic.txt
+          } > .github/evidence-completeness-v2-diagnostic.txt
           echo "$PATCH_RC" > /tmp/completeness/patch.rc
           echo "$CHECK_RC" > /tmp/completeness/check.rc
           echo "$CONTRACT_RC" > /tmp/completeness/contract.rc
@@ -49,12 +49,12 @@ jobs:
           CONTRACT_RC=$(cat /tmp/completeness/contract.rc)
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/evidence-completeness-diagnostic.txt
+          git add .github/evidence-completeness-v2-diagnostic.txt
           if [ "$PATCH_RC" = 0 ] && [ "$CHECK_RC" = 0 ] && [ "$CONTRACT_RC" = 0 ]; then
             git add cloud-run-collector/src/decision-intelligence-core.js
             MSG='Integrate evidence completeness governance source'
           else
-            MSG='Record evidence completeness integration diagnostic'
+            MSG='Record evidence completeness v2 integration diagnostic'
           fi
           git commit -m "$MSG"
           git pull --rebase origin main
