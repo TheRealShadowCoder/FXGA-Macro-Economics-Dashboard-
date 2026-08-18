@@ -151,7 +151,8 @@ jobs:
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - name: Deploy private Cloud Run service
+      - id: service
+        name: Deploy private Cloud Run service
         run: |
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
@@ -170,6 +171,7 @@ jobs:
           SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           gcloud run services update "$SERVICE" --region "$GCP_REGION" --update-env-vars "CLOUD_RUN_SERVICE_URL=$SERVICE_URL"
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
 
       - name: Configure Cloud Run invocation IAM
         run: |
@@ -182,7 +184,7 @@ jobs:
           workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
           service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
           token_format: id_token
-          id_token_audience: ${{ env.SERVICE_URL }}
+          id_token_audience: ${{ steps.service.outputs.url }}
           id_token_include_email: true
 
       - name: Verify mounted provider credentials in running revision
