@@ -1,0 +1,178 @@
+name: Apply Intelligence V4.14 Consolidation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-intelligence-v414-consolidation.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Apply any missing v4.14 reasoning layers
+        run: |
+          set -euo pipefail
+          CORE='cloud-run-collector/src/decision-intelligence-core.js'
+          MEMORY='cloud-run-collector/src/decision-memory.js'
+
+          if ! grep -q 'function reactionFunctionGapForPair' "$CORE"; then
+            echo 'Applying reaction-function repricing layer'
+            python3 scripts/apply_reaction_function_gap_upgrade_v2.py
+          else
+            echo 'Reaction-function repricing already present'
+          fi
+
+          if ! grep -q 'function crossAssetConfirmation' "$CORE"; then
+            echo 'Applying independent cross-asset confirmation layer'
+            python3 scripts/apply_cross_asset_confirmation_upgrade.py
+          else
+            echo 'Cross-asset confirmation already present'
+          fi
+
+          if ! grep -q 'function evidenceCompletenessControls' "$CORE"; then
+            echo 'Applying evidence completeness layer'
+            python3 scripts/apply_evidence_completeness_upgrade.py
+          else
+            echo 'Evidence completeness already present'
+          fi
+
+          if ! grep -q 'function historicalAnalogueControls' "$CORE"; then
+            echo 'Applying historical analogue layer'
+            python3 scripts/apply_historical_analogue_upgrade.py
+          else
+            echo 'Historical analogue reasoning already present'
+          fi
+
+          grep -q 'function reactionFunctionGapForPair' "$CORE"
+          grep -q 'function crossAssetConfirmation' "$CORE"
+          grep -q 'function evidenceCompletenessControls' "$CORE"
+          grep -q 'function historicalAnalogueControls' "$CORE"
+          grep -q 'featureVector' "$MEMORY"
+          grep -q 'analogueLibrary' "$MEMORY"
+
+      - name: Validate collector syntax and dependency security
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          npm audit --audit-level=moderate
+
+      - name: Validate combined decision intelligence behavior
+        run: |
+          cd cloud-run-collector
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
+
+          const now=new Date();
+          const dims=(growth,inflation,labour,policy,financial)=>[
+            {id:'growth',score:growth},{id:'inflation',score:inflation},{id:'labour',score:labour},{id:'policy',score:policy},{id:'financial',score:financial}
+          ];
+          const economies=[
+            {id:'EUROPE',currency:'EUR',centralBank:'ECB',policyStance:'hawkish',dimensions:dims(35,48,30,14,20)},
+            {id:'USA',currency:'USD',centralBank:'Federal Reserve',policyStance:'balanced',dimensions:dims(8,12,6,26,8)},
+            {id:'UK',currency:'GBP',centralBank:'Bank of England',policyStance:'balanced',dimensions:dims(12,18,10,20,8)},
+            {id:'SOUTH_AFRICA',currency:'ZAR',centralBank:'SARB',policyStance:'hawkish',dimensions:dims(8,30,5,34,4)},
+            {id:'JAPAN',currency:'JPY',centralBank:'BoJ',policyStance:'balanced',dimensions:dims(10,15,8,10,5)},
+          ];
+
+          const history=Array.from({length:24},(_,i)=>({date:new Date(now.getTime()-(24-i)*86400000).toISOString(),value:100+i*.24+Math.sin(i/4)}));
+          const observations=[
+            {seriesId:'EU_G1',title:'Euro growth one',value:106,lastUpdated:now.toISOString(),frequency:'Monthly',source:'Primary A',economy:'EUROPE',categories:['growth'],history},
+            {seriesId:'EU_G2',title:'Euro growth two',value:105,lastUpdated:now.toISOString(),frequency:'Monthly',source:'Primary B',economy:'EUROPE',categories:['growth'],history:history.map((x,i)=>({...x,value:x.value*1.01+i*.001}))},
+            {seriesId:'US_G',title:'US growth',value:102,lastUpdated:now.toISOString(),frequency:'Monthly',source:'Primary C',economy:'USA',categories:['growth'],history:history.map((x,i)=>({...x,value:96+i*.12+Math.cos(i/3)}))},
+          ];
+
+          const events=[];
+          for(let i=0;i<5;i++) events.push({id:`eu-${i}`,currency:'EUR',event:'Growth Release',category:'growth',date:new Date(now.getTime()-(i+1)*10*3600000).toISOString(),importance:3,actual:'1.3',forecast:'1.0',previous:'0.9',revised:i%2?'0.95':'0.9',currencyBias:'bullish',currencyBiasScore:1});
+          for(let i=0;i<4;i++) events.push({id:`us-${i}`,currency:'USD',event:'Employment Release',category:'employment',date:new Date(now.getTime()-(i+1)*11*3600000).toISOString(),importance:3,actual:'90',forecast:'100',previous:'110',revised:i%2?'105':'110',currencyBias:'bearish',currencyBiasScore:-1});
+
+          const news=[
+            {region:'Euro Area',title:'Policy remains restrictive',publishedAt:new Date(now.getTime()-3*3600000).toISOString(),policyTone:{score:55,stance:'hawkish',confidence:82}},
+            {region:'United States',title:'Inflation progress continues',publishedAt:new Date(now.getTime()-4*3600000).toISOString(),policyTone:{score:-32,stance:'dovish',confidence:76}},
+          ];
+
+          const marketData=[
+            {id:'DXY',price:98,changePercent:-.55},
+            {id:'US2Y',price:3.1,changePercent:-.42},
+            {id:'US10Y',price:3.8,changePercent:-.25},
+            {id:'SPX',price:6000,changePercent:.62},
+            {id:'NASDAQ',price:20000,changePercent:.74},
+            {id:'VIX',price:15,changePercent:-3.0},
+            {id:'GOLD',price:2600,changePercent:.45},
+            {id:'EURUSD',price:1.12,changePercent:.32},
+          ];
+
+          const primary={
+            rankedOpportunities:[
+              {symbol:'EURUSD',direction:'BUY',score:46,confidence:82,conviction:74,risk:'normal',components:{structuralDivergence:48,policyDivergence:42,releaseDivergence:30,narrativeDivergence:18},probabilities:{buy:.67,sell:.12,wait:.21}},
+              {symbol:'GBPUSD',direction:'BUY',score:30,confidence:72,conviction:64,risk:'normal',components:{structuralDivergence:32,policyDivergence:28,releaseDivergence:15,narrativeDivergence:8},probabilities:{buy:.59,sell:.18,wait:.23}},
+              {symbol:'EURGBP',direction:'BUY',score:22,confidence:68,conviction:58,risk:'normal',components:{structuralDivergence:24,policyDivergence:20,releaseDivergence:12,narrativeDivergence:6},probabilities:{buy:.55,sell:.20,wait:.25}},
+              {symbol:'USDJPY',direction:'SELL',score:-25,confidence:66,conviction:56,risk:'normal',components:{structuralDivergence:-28,policyDivergence:-22,releaseDivergence:-12,narrativeDivergence:-5},probabilities:{buy:.20,sell:.55,wait:.25}},
+              {symbol:'USDZAR',direction:'SELL',score:-24,confidence:65,conviction:55,risk:'normal',components:{structuralDivergence:-25,policyDivergence:-22,releaseDivergence:-10,narrativeDivergence:-6},probabilities:{buy:.21,sell:.54,wait:.25}},
+              {symbol:'EURZAR',direction:'BUY',score:32,confidence:70,conviction:62,risk:'normal',components:{structuralDivergence:34,policyDivergence:28,releaseDivergence:16,narrativeDivergence:7},probabilities:{buy:.58,sell:.18,wait:.24}},
+              {symbol:'GBPZAR',direction:'BUY',score:22,confidence:64,conviction:54,risk:'normal',components:{structuralDivergence:24,policyDivergence:20,releaseDivergence:11,narrativeDivergence:5},probabilities:{buy:.54,sell:.21,wait:.25}},
+              {symbol:'XAUUSD',direction:'BUY',score:28,confidence:67,conviction:57,risk:'normal',components:{structuralDivergence:30,policyDivergence:24,releaseDivergence:12,narrativeDivergence:8},probabilities:{buy:.56,sell:.19,wait:.25}},
+            ],sessions:[],decisionSummary:{actionableCount:8}
+          };
+
+          const stats=(count,hitRate,brier,bps)=>({count,correct:Math.round(count*hitRate/100),wrong:count-Math.round(count*hitRate/100),flat:0,hitRate,nonLossRate:hitRate,averageSignedBps:bps,brier});
+          const analogueVector={refinedScore:42,directionalProbability:.66,evidenceQuality:90,uncertainty:28,scenarioRobustness:75,contradictions:0,reactionGap:20,releaseDifferential:35,revisionDifferential:8,communicationGap:15,transitionRisk:20,independenceRatio:.82,modelHealth:88,counterfactualShift:40,causalNet:20};
+          const decisionMemory={
+            horizons:{m15:stats(30,54,.24,1),h1:stats(30,56,.22,2),h4:stats(30,58,.21,3),h24:stats(24,55,.23,2)},
+            bySymbol:{EURUSD:{horizons:{h1:stats(10,60,.19,3),h4:stats(10,62,.18,4)}}},byConfidence:{'80-100':{horizons:{h1:stats(15,59,.20,2.5),h4:stats(15,61,.19,3)}}},decisionChanges:{},
+            analogueLibrary:{EURUSD:Array.from({length:6},(_,i)=>({decisionAt:new Date(now.getTime()-(i+1)*86400000).toISOString(),direction:'BUY',confidence:78,featureVector:{...analogueVector,refinedScore:42+i*.3},outcomes:{h4:{outcome:i===5?'wrong':'correct',signedBps:i===5?-3:7+i,brier:i===5?.42:.18}}}))}
+          };
+
+          const research={
+            dataQuality:{overall:93},risk:{aggregate:12,severity:'low'},modelHealth:{score:89,status:'healthy',calibratedForecasts:15,drifting:1,watch:1},
+            evidenceIndependence:{independenceRatio:.82,economies:[{economy:'EUROPE',independenceRatio:.80},{economy:'USA',independenceRatio:.84}]},
+            turningPoints:{economies:[]},catalystSequence:{currencies:[]},
+            scenarios:[{id:'base',label:'Base',pairs:primary.rankedOpportunities.map(p=>({symbol:p.symbol,direction:p.direction,score:p.score}))}]
+          };
+
+          const core=buildDecisionIntelligenceCore({economies,decision:primary,observations,events,news,marketData,research,decisionMemory,now});
+          if(core.pairDecisions.length!==8) throw new Error(`Expected 8 governed pairs, got ${core.pairDecisions.length}`);
+          const eur=core.pairDecisions.find(x=>x.symbol==='EURUSD');
+          const required=['reactionFunctionGap','crossAsset','evidenceCompleteness','historicalAnalogues','horizonCalibration','decisionChange','causalTransmission','counterfactual','temporalIntelligence','transitionRisk','evidenceIndependence','scenarioRobustness','uncertainty','premortem'];
+          for(const field of required) if(eur?.[field]===undefined) throw new Error(`EURUSD missing ${field}`);
+          if(!eur.crossAsset.available) throw new Error('Cross-asset confirmation failed to use verified factors');
+          if(!eur.evidenceCompleteness.checks?.length) throw new Error('Completeness checklist missing');
+          if(!eur.reactionFunctionGap.base?.available||!eur.reactionFunctionGap.quote?.available) throw new Error('Reaction-function comparison unavailable');
+          if(eur.historicalAnalogues.samples<1) throw new Error('Historical analogue library not consumed');
+          if(!core.crossPairConsistency?.checks?.length) throw new Error('Triangle consistency missing');
+          if(!core.portfolioInteraction?.pairControls) throw new Error('Portfolio interaction missing');
+          const governed=governDecisionMatrix(primary,core);
+          const audited=governed.rankedOpportunities.find(x=>x.symbol==='EURUSD')?.decisionCore;
+          for(const field of ['reactionFunctionGap','crossAsset','evidenceCompleteness','historicalAnalogues','horizonCalibration','decisionChange']) if(audited?.[field]===undefined) throw new Error(`Governed audit missing ${field}`);
+          console.log(JSON.stringify({eurusd:{final:eur.final,reaction:eur.reactionFunctionGap,crossAsset:eur.crossAsset,completeness:eur.evidenceCompleteness,analogues:eur.historicalAnalogues,horizon:eur.horizonCalibration},portfolio:core.portfolioInteraction,crossPair:core.crossPairConsistency},null,2));
+          NODE
+
+      - name: Validate frontend production build
+        run: |
+          npm install
+          npm run build
+
+      - name: Commit consolidated v4.14 intelligence layers
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/decision-memory.js
+          if git diff --cached --quiet; then
+            echo 'All v4.14 layers were already present; no source changes required.'
+            exit 0
+          fi
+          git commit -m 'Consolidate v4.14 decision intelligence layers'
+          git pull --rebase origin main
+          git push origin HEAD:main
