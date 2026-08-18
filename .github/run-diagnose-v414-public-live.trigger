@@ -1,2 +1,2 @@
-run=2026-08-18T07:53:00+02:00
-reason=Run the registered public Research API diagnostic and persist the current v4.14 contract state.
+run=2026-08-18T14:35:30+02:00
+reason=Inspect the public Research API after the chunk-enabled collector and application revisions deployed.
