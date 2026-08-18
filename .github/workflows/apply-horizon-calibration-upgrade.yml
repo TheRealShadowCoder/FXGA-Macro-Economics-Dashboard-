@@ -1,0 +1,66 @@
+name: Apply Horizon Calibration Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-horizon-calibration-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply horizon calibration patch
+        run: python3 scripts/apply_horizon_calibration_upgrade.py
+      - name: Validate horizon calibration and flip controls
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
+          const now=new Date(),history=Array.from({length:18},(_,i)=>({date:new Date(now.getTime()-(18-i)*86400000).toISOString(),value:100+i*.25}));
+          const observations=[{seriesId:'CAL',title:'Calibration test',value:104,lastUpdated:now.toISOString(),frequency:'Monthly',source:'Primary',economy:'EUROPE',categories:['growth'],history}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:40,confidence:72,conviction:65,risk:'normal',components:{structuralDivergence:44,policyDivergence:34,releaseDivergence:20,narrativeDivergence:10},probabilities:{buy:.61,sell:.17,wait:.22}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const stats=(count,hitRate,brier,bps)=>({count,correct:Math.round(count*hitRate/100),wrong:count-Math.round(count*hitRate/100),flat:0,hitRate,nonLossRate:hitRate,averageSignedBps:bps,brier});
+          const decisionMemory={
+            horizons:{m15:stats(40,52,.24,1),h1:stats(40,54,.23,1.5),h4:stats(40,56,.22,2),h24:stats(35,55,.23,1.7)},
+            bySymbol:{EURUSD:{horizons:{m15:stats(10,60,.19,2),h1:stats(12,62,.18,3),h4:stats(12,64,.17,4),h24:stats(9,60,.20,3)}}},
+            byConfidence:{'65-79':{horizons:{m15:stats(20,58,.21,2),h1:stats(20,60,.20,2.5),h4:stats(18,61,.19,3),h24:stats(15,57,.22,2)}}},
+            decisionChanges:{EURUSD:{latest:{decisionAt:new Date(now.getTime()-10*60000).toISOString(),direction:'SELL',refinedScore:-28,confidence:68},previous:null}}
+          };
+          const research={dataQuality:{overall:92},risk:{aggregate:12},modelHealth:{score:90,status:'healthy',calibratedForecasts:12},evidenceIndependence:{independenceRatio:1,economies:[]},turningPoints:{economies:[]},catalystSequence:{currencies:[]},scenarios:[{label:'Base',pairs:[{symbol:'EURUSD',direction:'BUY',score:35}]}]};
+          const core=buildDecisionIntelligenceCore({decision:primary,observations,events:[],news:[],marketData:[],research,decisionMemory,now});
+          const pair=core.pairDecisions[0];
+          if(!pair?.horizonCalibration||!pair?.decisionChange)throw new Error('Horizon calibration/change controls missing');
+          if(pair.horizonCalibration.rows.h1.source!=='pair')throw new Error('Pair-specific calibration did not take priority');
+          if(pair.horizonCalibration.rows.h1.samples!==12)throw new Error('Pair calibration sample count wrong');
+          if(pair.decisionChange.status!=='fresh-flip')throw new Error(`Expected fresh flip, got ${pair.decisionChange.status}`);
+          if(pair.final.direction!=='WAIT')throw new Error('Fresh low-strength flip must be held at WAIT');
+          const governed=governDecisionMatrix(primary,core);
+          if(!governed.rankedOpportunities[0]?.decisionCore?.horizonCalibration)throw new Error('Horizon calibration lost in governed matrix');
+          console.log(JSON.stringify({horizon:pair.horizonCalibration,change:pair.decisionChange,final:pair.final},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit horizon calibration intelligence
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-memory.js cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add horizon-specific decision calibration intelligence'
+          git pull --rebase origin main
+          git push origin HEAD:main
