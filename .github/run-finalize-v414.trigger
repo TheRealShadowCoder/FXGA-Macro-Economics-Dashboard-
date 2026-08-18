@@ -1,2 +1,2 @@
-run=2026-08-18T07:18:00+02:00
-reason=Finalize the complete v4.14 source stack now that structural-break research and pair governance are physically in main; validate, promote and dispatch both production deployments.
+run=2026-08-18T07:23:00+02:00
+reason=Run the final v4.14 promotion with synchronized package and lockfile versions, complete source validation, clean dependency audit, frontend build, and explicit production deployment dispatch.
