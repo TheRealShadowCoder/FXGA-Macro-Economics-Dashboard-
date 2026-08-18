@@ -1,0 +1,60 @@
+name: Apply Evidence Independence Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-evidence-independence-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply evidence independence patch
+        run: python3 scripts/apply_evidence_independence_upgrade.py
+      - name: Validate correlated-evidence clustering
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildInstitutionalResearch } from './src/institutional-research.js';
+          import { buildDecisionIntelligenceCore } from './src/decision-intelligence-core.js';
+          const now=Date.now(),base=Array.from({length:18},(_,i)=>100+i*.6+Math.sin(i/4));
+          const history=values=>values.map((value,i)=>({date:new Date(now-(18-i)*86400000).toISOString(),value}));
+          const obs=(id,values)=>({seriesId:id,title:`Growth ${id}`,value:values.at(-1),lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',economy:'USA',categories:['growth'],history:history(values)});
+          const observations=[obs('A',base),obs('B',base.map((v,i)=>v*1.01+i*.001)),obs('C',base.map((v,i)=>v*.99-Math.sin(i/4)*.02)),obs('D',base.map((v,i)=>100+Math.cos(i)*4+i*.1))];
+          const research=buildInstitutionalResearch({observations,events:[],market:[],news:[],currencyStates:[],opportunities:[]});
+          const group=research.evidenceIndependence?.rows?.find(x=>x.economy==='USA'&&x.family==='growth');
+          if(!group)throw new Error('Evidence independence group missing');
+          if(group.effectiveSignals>=group.rawSignals)throw new Error('Correlated synthetic series were not collapsed');
+          if(group.independenceRatio>=.9)throw new Error('Independence ratio did not reflect redundancy');
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'SELL',score:-32,confidence:70,conviction:60,risk:'normal',components:{structuralDivergence:-35,policyDivergence:-28,releaseDivergence:-14,narrativeDivergence:-8},probabilities:{buy:.2,sell:.58,wait:.22}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const fullResearch={...research,dataQuality:{...research.dataQuality,overall:90},risk:{aggregate:15},modelHealth:{score:85,status:'healthy',calibratedForecasts:10},scenarios:[{label:'Base',pairs:[{symbol:'EURUSD',direction:'SELL',score:-25}]}]};
+          const core=buildDecisionIntelligenceCore({decision:primary,observations,events:[],news:[],marketData:[],research:fullResearch});
+          const control=core.pairDecisions[0]?.evidenceIndependence;if(!control)throw new Error('Decision evidence-independence control missing');
+          console.log(JSON.stringify({group,control},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit evidence independence upgrade
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/institutional-research.js cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add effective independent evidence governance'
+          git pull --rebase origin main
+          git push origin HEAD:main
