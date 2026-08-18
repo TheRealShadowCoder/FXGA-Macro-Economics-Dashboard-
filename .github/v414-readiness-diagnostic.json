@@ -1,0 +1,27 @@
+{
+  "generatedAt": "2026-08-18T03:59:04.948Z",
+  "missingContracts": [
+    "core:function crossAssetConfirmation",
+    "core:function evidenceCompletenessControls",
+    "core:function historicalAnalogueControls",
+    "core:function structuralBreakControls",
+    "research:function buildStructuralBreaks",
+    "memory:featureVector",
+    "memory:analogueLibrary"
+  ],
+  "sourceContractsPassed": false,
+  "collectorInstallExit": 0,
+  "collectorCheckExit": 0,
+  "auditExit": 0,
+  "vulnerabilities": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "rootInstallExit": 0,
+  "frontendBuildExit": 0,
+  "ready": false
+}
