@@ -168,13 +168,17 @@ function walkForwardCalibration(values,maxPoints=12){
     for(const name of names){const prediction=predictions[name];if(Number.isFinite(prediction))errors[name].push(prediction-actual);}
   }
   const rmse=Object.fromEntries(names.map(name=>{const xs=errors[name];return [name,xs.length?Math.sqrt(mean(xs.map(e=>e*e))):null];}));
+  const bias=Object.fromEntries(names.map(name=>{const xs=errors[name];return [name,xs.length?mean(xs):null];}));
+  const recentRmse=Object.fromEntries(names.map(name=>{const xs=errors[name],recent=xs.slice(-Math.max(2,Math.ceil(xs.length/2)));return [name,recent.length?Math.sqrt(mean(recent.map(e=>e*e))):null];}));
+  const earlierRmse=Object.fromEntries(names.map(name=>{const xs=errors[name],earlier=xs.slice(0,Math.max(0,xs.length-Math.max(2,Math.ceil(xs.length/2))));return [name,earlier.length?Math.sqrt(mean(earlier.map(e=>e*e))):null];}));
+  const driftRatio=Object.fromEntries(names.map(name=>{const r=recentRmse[name],e=earlierRmse[name];return [name,Number.isFinite(r)&&Number.isFinite(e)&&e>1e-12?r/e:null];}));
   const finite=names.filter(name=>Number.isFinite(rmse[name]));
   const scale=Math.max(1e-9,stdev(values.slice(-12))||Math.abs(mean(values.slice(-6))) *.01||1);
   const rawWeights=Object.fromEntries(names.map(name=>[name,finite.includes(name)?1/(scale*scale+rmse[name]*rmse[name]):0]));
   const total=Object.values(rawWeights).reduce((s,x)=>s+x,0)||1;
   const weights=Object.fromEntries(names.map(name=>[name,rawWeights[name]/total]));
   const validationPoints=Math.max(...names.map(name=>errors[name].length),0);
-  return {validationPoints,rmse,weights};
+  return {validationPoints,rmse,bias,recentRmse,earlierRmse,driftRatio,weights};
 }
 function buildForecasts(observations=[]){
   const forecasts=[];
@@ -189,14 +193,18 @@ function buildForecasts(observations=[]){
     const residualScale=Math.max(1e-9,stdev(values.slice(-12)));
     const predictionValues=models.map(([,v])=>v),modelDispersion=stdev(predictionValues),agreement=clamp(1-modelDispersion/Math.max(residualScale,1e-9),0,1);
     const validationSufficiency=clamp(calibration.validationPoints/10,0,1),calibrationConfidence=agreement*(.4+.6*validationSufficiency);
-    const uncertainty=Math.sqrt(residualScale*residualScale+modelDispersion*modelDispersion);
+    const weightedDrift=Object.entries(calibration.weights).reduce((s,[name,w])=>s+Number(w||0)*Math.max(0,Number(calibration.driftRatio[name]??1)-1),0);
+    const driftScore=Math.round(100*clamp(weightedDrift/1.25,0,1)),driftStatus=driftScore>=65?'drifting':driftScore>=35?'watch':'stable';
+    const weightedBias=Object.entries(calibration.weights).reduce((s,[name,w])=>s+Number(w||0)*Number(calibration.bias[name]||0),0);
+    const driftPenalty=clamp(1-driftScore/180,.55,1),effectiveCalibrationConfidence=calibrationConfidence*driftPenalty;
+    const uncertainty=Math.sqrt(residualScale*residualScale+modelDispersion*modelDispersion+(weightedBias*weightedBias));
     const last=values.at(-1),delta=ensemble-last;
-    const probabilityUp=sigmoid(delta/Math.max(uncertainty,1e-9)*(1+.75*calibrationConfidence));
+    const probabilityUp=sigmoid(delta/Math.max(uncertainty,1e-9)*(1+.75*effectiveCalibrationConfidence));
     forecasts.push({
       seriesId:item.seriesId,title:item.title,economy:item.economy||item.economies?.[0]||'GLOBAL',family:macroFamily(item),
       latest:last,forecast:ensemble,delta,models:Object.fromEntries(models),
-      modelWeights:calibration.weights,walkForwardRmse:calibration.rmse,validationPoints:calibration.validationPoints,
-      modelAgreement:Number(agreement.toFixed(4)),calibrationConfidence:Number(calibrationConfidence.toFixed(4)),
+      modelWeights:calibration.weights,walkForwardRmse:calibration.rmse,walkForwardBias:calibration.bias,recentRmse:calibration.recentRmse,earlierRmse:calibration.earlierRmse,driftRatio:calibration.driftRatio,validationPoints:calibration.validationPoints,
+      modelAgreement:Number(agreement.toFixed(4)),calibrationConfidence:Number(effectiveCalibrationConfidence.toFixed(4)),rawCalibrationConfidence:Number(calibrationConfidence.toFixed(4)),driftScore,driftStatus,forecastBias:weightedBias,
       interval80:[ensemble-1.2816*uncertainty,ensemble+1.2816*uncertainty],
       interval95:[ensemble-1.96*uncertainty,ensemble+1.96*uncertainty],
       probabilities:{up:probabilityUp,down:1-probabilityUp},
@@ -205,6 +213,13 @@ function buildForecasts(observations=[]){
     });
   }
   return forecasts.slice(0,180);
+}
+
+function buildModelHealth(forecasts=[]){
+  const calibrated=forecasts.filter(f=>Number(f?.validationPoints||0)>0);
+  if(!calibrated.length)return {score:0,status:'insufficient',calibratedForecasts:0,totalForecasts:forecasts.length,averageCalibrationConfidence:0,averageDriftScore:0,drifting:0,watch:0,stable:0};
+  const avgCalibration=mean(calibrated.map(f=>Number(f.calibrationConfidence||0))),avgDrift=mean(calibrated.map(f=>Number(f.driftScore||0))),validationCoverage=calibrated.length/Math.max(1,forecasts.length),score=Math.round(100*clamp(.50*avgCalibration+.30*(1-avgDrift/100)+.20*validationCoverage,0,1));
+  return {score,status:score>=78?'healthy':score>=58?'watch':'degraded',calibratedForecasts:calibrated.length,totalForecasts:forecasts.length,validationCoverage:Number(validationCoverage.toFixed(4)),averageCalibrationConfidence:Number(avgCalibration.toFixed(4)),averageDriftScore:Math.round(avgDrift),drifting:calibrated.filter(f=>f.driftStatus==='drifting').length,watch:calibrated.filter(f=>f.driftStatus==='watch').length,stable:calibrated.filter(f=>f.driftStatus==='stable').length,highestDrift:[...calibrated].sort((a,b)=>Number(b.driftScore||0)-Number(a.driftScore||0)).slice(0,12).map(f=>({seriesId:f.seriesId,title:f.title,driftScore:f.driftScore,driftStatus:f.driftStatus,calibrationConfidence:f.calibrationConfidence,forecastBias:f.forecastBias}))};
 }
 
 function buildReleaseAnalytics(events=[]){
@@ -333,7 +348,7 @@ function buildProvenance({observations,events,market,news,features,forecasts,rel
     macro:hash(observations),calendar:hash(events),market:hash(market),news:hash(news),features:hash(features),
     forecasts:hash(forecasts),releaseAnalytics:hash(releaseAnalytics),risk:hash(risk),scenarios:hash(scenarios),
   };
-  return {generatedAt,modelVersion:'institutional-research-1.0',retrievalTimestamp:generatedAt,hashes:records,reproducibilityHash:hash(records),transformations:['schema-validation','freshness-check','robust-outlier-screen','feature-engineering','walk-forward-model-calibration','adaptive-forecast-ensemble','model-disagreement-uncertainty','uncertainty-calibration','release-surprise-normalization','regime-classification','risk-haircut','scenario-shock']};
+  return {generatedAt,modelVersion:'institutional-research-1.0',retrievalTimestamp:generatedAt,hashes:records,reproducibilityHash:hash(records),transformations:['schema-validation','freshness-check','robust-outlier-screen','feature-engineering','walk-forward-model-calibration','adaptive-forecast-ensemble','model-disagreement-uncertainty','forecast-error-attribution','model-drift-detection','drift-adjusted-confidence','uncertainty-calibration','release-surprise-normalization','regime-classification','risk-haircut','scenario-shock']};
 }
 
 function buildOperatingStandards(dataQuality){
@@ -406,6 +421,7 @@ export function buildInstitutionalResearch({observations=[],events=[],market=[],
   const sourceReliability=buildSourceReliability(observations);
   const features=buildFeatures(observations);
   const forecasts=buildForecasts(observations);
+  const modelHealth=buildModelHealth(forecasts);
   const releaseAnalytics=buildReleaseAnalytics(events);
   const marketAnalytics=buildMarketAnalytics(market);
   const regimes=buildRegimes(features,economyAnalysis);
@@ -415,7 +431,7 @@ export function buildInstitutionalResearch({observations=[],events=[],market=[],
   const provenance=buildProvenance({observations,events,market,news,features,forecasts,releaseAnalytics,risk,scenarios});
   return {
     schemaVersion:1,generatedAt:iso(),
-    dataQuality,sourceReliability,features:features.slice(0,220),forecasts,releaseAnalytics,marketAnalytics,regimes,risk,scenarios,
+    dataQuality,sourceReliability,modelHealth,features:features.slice(0,220),forecasts,releaseAnalytics,marketAnalytics,regimes,risk,scenarios,
     operatingStandards,provenance,
     capabilityCoverage:{domains:DOMAIN_COVERAGE.map(([id,name,status])=>({id,name,status})),active:DOMAIN_COVERAGE.filter(x=>x[2]==='active').length,foundation:DOMAIN_COVERAGE.filter(x=>x[2]==='foundation').length,historyBuilding:DOMAIN_COVERAGE.filter(x=>x[2]==='history-building').length,total:40},
     notes:{
