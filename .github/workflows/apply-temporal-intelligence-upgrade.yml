@@ -1,0 +1,61 @@
+name: Apply Temporal Decision Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-temporal-intelligence-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply temporal intelligence patch
+        run: python3 scripts/apply_temporal_intelligence_upgrade.py
+      - name: Validate temporal governance
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore } from './src/decision-intelligence-core.js';
+          const now=new Date(),events=[];
+          for(let i=0;i<5;i++)events.push({id:`e${i}`,currency:'EUR',event:'GDP Growth',date:new Date(now.getTime()-(i+1)*8*3600000).toISOString(),importance:i<3?3:2,actual:'1.2',forecast:'1.0',previous:'0.9',revised:i%2?'0.95':'0.9',currencyBias:'bullish',currencyBiasScore:1});
+          for(let i=0;i<4;i++)events.push({id:`u${i}`,currency:'USD',event:'Employment Change',date:new Date(now.getTime()-(i+1)*9*3600000).toISOString(),importance:3,actual:'90',forecast:'100',previous:'110',revised:i%2?'105':'110',currencyBias:'bearish',currencyBiasScore:-1});
+          const news=[{region:'Euro Area',category:'Central Bank',title:'Policy remains restrictive',publishedAt:new Date(now.getTime()-4*3600000).toISOString(),policyTone:{score:55,stance:'hawkish',confidence:80}},{region:'United States',category:'Central Bank',title:'Inflation has eased',publishedAt:new Date(now.getTime()-5*3600000).toISOString(),policyTone:{score:-45,stance:'dovish',confidence:75}}];
+          const dims=(g,i,l,p,f)=>[{id:'growth',score:g},{id:'inflation',score:i},{id:'labour',score:l},{id:'policy',score:p},{id:'financial',score:f}];
+          const economies=[{currency:'EUR',policyStance:'hawkish',dimensions:dims(35,20,25,30,15)},{currency:'USD',policyStance:'dovish',dimensions:dims(-10,5,-20,-25,-5)}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:44,confidence:76,conviction:70,risk:'normal',components:{structuralDivergence:46,policyDivergence:40,releaseDivergence:30,narrativeDivergence:20},probabilities:{buy:.64,sell:.15,wait:.21}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const history=Array.from({length:16},(_,i)=>({date:new Date(now.getTime()-(16-i)*86400000).toISOString(),value:100+i*.2}));
+          const observations=[{seriesId:'T',title:'Growth',value:103,lastUpdated:now.toISOString(),frequency:'Monthly',source:'Primary',history}];
+          const research={dataQuality:{overall:90},risk:{aggregate:20},modelHealth:{score:85,status:'healthy',calibratedForecasts:12},scenarios:[{label:'Base',pairs:[{symbol:'EURUSD',direction:'BUY',score:30}]}]};
+          const core=buildDecisionIntelligenceCore({economies,decision:primary,observations,events,news,marketData:[],research,now});
+          const t=core.pairDecisions[0]?.temporalIntelligence;
+          if(!t)throw new Error('Temporal intelligence missing');
+          if(t.base.release.count<3||t.quote.release.count<3)throw new Error('Release sequence did not consume recent evidence');
+          if(!Number.isFinite(t.releaseDifferential)||!Number.isFinite(t.communicationGap))throw new Error('Temporal differentials invalid');
+          console.log(JSON.stringify(t,null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit temporal intelligence upgrade
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/super-economist.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add temporal release and policy governance'
+          git pull --rebase origin main
+          git push origin HEAD:main
