@@ -116,6 +116,19 @@ function buildSourceReliability(observations=[]){
   }).sort((a,b)=>b.score-a.score);
 }
 
+function correlation(a,b){
+  const n=Math.min(a.length,b.length);if(n<6)return null;const x=a.slice(-n),y=b.slice(-n),mx=mean(x),my=mean(y),sx=Math.sqrt(x.reduce((s,v)=>s+(v-mx)**2,0)),sy=Math.sqrt(y.reduce((s,v)=>s+(v-my)**2,0));if(sx<1e-12||sy<1e-12)return null;return x.reduce((s,v,i)=>s+(v-mx)*(y[i]-my),0)/(sx*sy);
+}
+function seriesChanges(item){const values=(item?.history||[]).map(x=>num(x?.value)).filter(Number.isFinite),diffs=[];for(let i=1;i<values.length;i++)diffs.push(values[i]-values[i-1]);return diffs.slice(-16);}
+function buildEvidenceIndependence(observations=[],sourceReliability=[]){
+  const reliability=new Map((sourceReliability||[]).map(x=>[String(x.source||''),Number(x.score||0)])),groups=new Map();
+  for(const item of observations){const economy=item?.economy||item?.economies?.[0]||'GLOBAL',family=macroFamily(item),changes=seriesChanges(item);if(changes.length<6)continue;const key=`${economy}:${family}`,arr=groups.get(key)||[];arr.push({seriesId:item.seriesId,title:item.title,source:String(item.source||'Unknown'),changes,historyDepth:Array.isArray(item.history)?item.history.length:0});groups.set(key,arr);}
+  const rows=[];
+  for(const [key,items] of groups){const [economy,family]=key.split(':'),parent=items.map((_,i)=>i),find=i=>{while(parent[i]!==i){parent[i]=parent[parent[i]];i=parent[i];}return i;},union=(a,b)=>{a=find(a);b=find(b);if(a!==b)parent[b]=a;},links=[];for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++){const r=correlation(items[i].changes,items[j].changes);if(Number.isFinite(r)&&Math.abs(r)>=.92){union(i,j);links.push({a:items[i].seriesId,b:items[j].seriesId,correlation:Number(r.toFixed(3))});}}const clustersMap=new Map();items.forEach((item,i)=>{const root=find(i),arr=clustersMap.get(root)||[];arr.push(item);clustersMap.set(root,arr);});const clusters=[...clustersMap.values()].map(cluster=>{const ranked=[...cluster].sort((a,b)=>(reliability.get(b.source)||0)-(reliability.get(a.source)||0)||b.historyDepth-a.historyDepth),representative=ranked[0];return {representative:representative.seriesId,representativeSource:representative.source,series:cluster.map(x=>x.seriesId),size:cluster.length};}).sort((a,b)=>b.size-a.size),rawSignals=items.length,effectiveSignals=clusters.length,independenceRatio=rawSignals?effectiveSignals/rawSignals:1,redundancyRatio=1-independenceRatio;rows.push({economy,family,rawSignals,effectiveSignals,independenceRatio:Number(independenceRatio.toFixed(3)),redundancyRatio:Number(redundancyRatio.toFixed(3)),status:independenceRatio<.5?'high-redundancy':independenceRatio<.72?'overlapping':'independent',clusters:clusters.slice(0,12),highCorrelationLinks:links.slice(0,30)});}
+  const economyMap=new Map();for(const row of rows){const arr=economyMap.get(row.economy)||[];arr.push(row);economyMap.set(row.economy,arr);}const economies=[...economyMap.entries()].map(([economy,items])=>{const raw=items.reduce((s,x)=>s+x.rawSignals,0),effective=items.reduce((s,x)=>s+x.effectiveSignals,0),ratio=raw?effective/raw:1;return {economy,rawSignals:raw,effectiveSignals:effective,independenceRatio:Number(ratio.toFixed(3)),redundancyRatio:Number((1-ratio).toFixed(3)),status:ratio<.5?'high-redundancy':ratio<.72?'overlapping':'independent',families:items.sort((a,b)=>a.independenceRatio-b.independenceRatio)};}).sort((a,b)=>a.independenceRatio-b.independenceRatio);
+  const rawTotal=rows.reduce((s,x)=>s+x.rawSignals,0),effectiveTotal=rows.reduce((s,x)=>s+x.effectiveSignals,0),ratio=rawTotal?effectiveTotal/rawTotal:1;return {generatedAt:iso(),rawSignals:rawTotal,effectiveSignals:effectiveTotal,independenceRatio:Number(ratio.toFixed(3)),redundancyRatio:Number((1-ratio).toFixed(3)),economies,rows:rows.sort((a,b)=>a.independenceRatio-b.independenceRatio),correlationThreshold:.92};
+}
+
 function buildFeatures(observations=[]){
   const features=[];
   for(const item of observations){
@@ -371,7 +384,7 @@ function buildProvenance({observations,events,market,news,features,forecasts,rel
     macro:hash(observations),calendar:hash(events),market:hash(market),news:hash(news),features:hash(features),
     forecasts:hash(forecasts),releaseAnalytics:hash(releaseAnalytics),risk:hash(risk),scenarios:hash(scenarios),
   };
-  return {generatedAt,modelVersion:'institutional-research-1.0',retrievalTimestamp:generatedAt,hashes:records,reproducibilityHash:hash(records),transformations:['schema-validation','freshness-check','robust-outlier-screen','feature-engineering','walk-forward-model-calibration','adaptive-forecast-ensemble','model-disagreement-uncertainty','empirical-residual-distribution','quantile-forecast-bands','tail-asymmetry','forecast-error-attribution','model-drift-detection','drift-adjusted-confidence','uncertainty-calibration','release-surprise-normalization','surprise-persistence','catalyst-sequencing','turning-point-detection','regime-transition-risk','regime-classification','risk-haircut','scenario-shock']};
+  return {generatedAt,modelVersion:'institutional-research-1.0',retrievalTimestamp:generatedAt,hashes:records,reproducibilityHash:hash(records),transformations:['schema-validation','freshness-check','robust-outlier-screen','feature-engineering','correlated-evidence-clustering','effective-independent-coverage','walk-forward-model-calibration','adaptive-forecast-ensemble','model-disagreement-uncertainty','empirical-residual-distribution','quantile-forecast-bands','tail-asymmetry','forecast-error-attribution','model-drift-detection','drift-adjusted-confidence','uncertainty-calibration','release-surprise-normalization','surprise-persistence','catalyst-sequencing','turning-point-detection','regime-transition-risk','regime-classification','risk-haircut','scenario-shock']};
 }
 
 function buildOperatingStandards(dataQuality){
@@ -442,6 +455,7 @@ const DOMAIN_COVERAGE=[
 export function buildInstitutionalResearch({observations=[],events=[],market=[],news=[],economyAnalysis={},currencyStates=[],opportunities=[]}={}){
   const dataQuality=buildDataQuality({observations,events,market,news});
   const sourceReliability=buildSourceReliability(observations);
+  const evidenceIndependence=buildEvidenceIndependence(observations,sourceReliability);
   const features=buildFeatures(observations);
   const turningPoints=buildTurningPoints(features);
   const forecasts=buildForecasts(observations);
@@ -456,7 +470,7 @@ export function buildInstitutionalResearch({observations=[],events=[],market=[],
   const provenance=buildProvenance({observations,events,market,news,features,forecasts,releaseAnalytics,risk,scenarios});
   return {
     schemaVersion:1,generatedAt:iso(),
-    dataQuality,sourceReliability,modelHealth,turningPoints,catalystSequence,features:features.slice(0,220),forecasts,releaseAnalytics,marketAnalytics,regimes,risk,scenarios,
+    dataQuality,sourceReliability,evidenceIndependence,modelHealth,turningPoints,catalystSequence,features:features.slice(0,220),forecasts,releaseAnalytics,marketAnalytics,regimes,risk,scenarios,
     operatingStandards,provenance,
     capabilityCoverage:{domains:DOMAIN_COVERAGE.map(([id,name,status])=>({id,name,status})),active:DOMAIN_COVERAGE.filter(x=>x[2]==='active').length,foundation:DOMAIN_COVERAGE.filter(x=>x[2]==='foundation').length,historyBuilding:DOMAIN_COVERAGE.filter(x=>x[2]==='history-building').length,total:40},
     notes:{
