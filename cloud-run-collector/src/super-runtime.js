@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { Firestore } from '@google-cloud/firestore';
 import { buildSuperEconomist, registrySummary, searchRegistry } from './super-economist.js';
 import { TARGET_ECONOMIES } from './super-economist-core.js';
@@ -8,11 +9,15 @@ import { evaluateDecisionMemory, readDecisionMemorySummary, recordDecisionMemory
 
 const db=new Firestore({ignoreUndefinedProperties:true});
 const state=db.collection('fxga_collector_state');
+const stateChunks=db.collection('fxga_collector_state_chunks');
 const audit=db.collection('fxga_super_economist_audit');
+const FIRESTORE_INLINE_MAX_BYTES=700_000;
+const FIRESTORE_CHUNK_RAW_BYTES=540*1024;
 const NEWS_TTL_MS=15*60_000;
 const webhookUrl=process.env.CLOUDFLARE_WEBHOOK_URL||'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook';
 const webhookSecret=process.env.COLLECTOR_WEBHOOK_SECRET||'';
 const fredApiKey=process.env.FRED_API_KEY||'';
+const SERVICE_VERSION=(()=>{try{const pkg=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));return String(pkg?.version||'0.0.0');}catch{return '0.0.0';}})();
 
 function hash(value){return crypto.createHash('sha256').update(typeof value==='string'?value:JSON.stringify(value)).digest('hex');}
 function numeric(value){if(typeof value==='number'&&Number.isFinite(value))return value;if(value==null)return null;const n=Number(String(value).replace(/,/g,'').replace(/%/g,'').trim());return Number.isFinite(n)?n:null;}
@@ -41,8 +46,26 @@ function macroFailureDiagnostics(failures=[],requested=0,liveFetched=0,staleReta
   const liveRatio=requested?liveFetched/requested:0,effectiveRatio=requested?observations/requested:0;
   return {total:failures.length,retryable,nonRetryable,unresolved,byType,byEconomy,byCategory,liveRatio,effectiveRatio,requested,liveFetched,staleRetained,observations};
 }
-async function get(name){const x=await state.doc(name).get();return x.exists?x.data():null;}
-async function putChanged(name,payload){const ref=state.doc(name),old=await ref.get(),h=hash(payload);if(old.exists&&old.data()?.hash===h)return false;await ref.set({hash:h,updatedAt:new Date().toISOString(),payload},{merge:false});return true;}
+function chunkDocId(name,generation,index){return `${name}__${generation}__${String(index).padStart(4,'0')}`;}
+async function removeChunkGeneration(name,generation,count){
+  if(!generation||!Number.isFinite(Number(count))||Number(count)<=0)return;
+  const jobs=[];for(let i=0;i<Number(count);i++)jobs.push(stateChunks.doc(chunkDocId(name,generation,i)).delete().catch(()=>null));await Promise.all(jobs);
+}
+async function get(name){
+  const x=await state.doc(name).get();if(!x.exists)return null;const data=x.data();if(!data?.chunked)return data;
+  const generation=String(data.generation||''),count=Number(data.chunkCount||0);if(!generation||!Number.isInteger(count)||count<1)throw new Error(`Chunk manifest for ${name} is invalid`);
+  const chunks=[];for(let i=0;i<count;i+=8){const indexes=Array.from({length:Math.min(8,count-i)},(_,offset)=>i+offset),snaps=await Promise.all(indexes.map(index=>stateChunks.doc(chunkDocId(name,generation,index)).get()));for(let j=0;j<snaps.length;j++){const snap=snaps[j],index=indexes[j];if(!snap.exists)throw new Error(`Chunk ${index+1}/${count} missing for ${name}`);const encoded=snap.data()?.data;if(typeof encoded!=='string')throw new Error(`Chunk ${index+1}/${count} is invalid for ${name}`);chunks[index]=Buffer.from(encoded,'base64');}}
+  const json=Buffer.concat(chunks).toString('utf8');if(Number(data.byteLength||0)&&Buffer.byteLength(json,'utf8')!==Number(data.byteLength))throw new Error(`Chunk byte length mismatch for ${name}`);if(data.hash&&hash(json)!==data.hash)throw new Error(`Chunk hash mismatch for ${name}`);return {...data,payload:JSON.parse(json)};
+}
+async function putChanged(name,payload){
+  const ref=state.doc(name),old=await ref.get(),oldData=old.exists?old.data():null,serialized=JSON.stringify(payload),h=hash(serialized);if(oldData?.hash===h)return false;const updatedAt=new Date().toISOString(),bytes=Buffer.from(serialized,'utf8');
+  if(bytes.length<=FIRESTORE_INLINE_MAX_BYTES){await ref.set({hash:h,updatedAt,payload},{merge:false});if(oldData?.chunked)removeChunkGeneration(name,oldData.generation,oldData.chunkCount).catch(()=>{});return true;}
+  const generation=h.slice(0,24),chunks=[];for(let offset=0;offset<bytes.length;offset+=FIRESTORE_CHUNK_RAW_BYTES)chunks.push(bytes.subarray(offset,Math.min(bytes.length,offset+FIRESTORE_CHUNK_RAW_BYTES)));
+  for(let i=0;i<chunks.length;i+=6){const indexes=Array.from({length:Math.min(6,chunks.length-i)},(_,offset)=>i+offset);await Promise.all(indexes.map(index=>stateChunks.doc(chunkDocId(name,generation,index)).set({name,generation,index,count:chunks.length,encoding:'base64',data:chunks[index].toString('base64')},{merge:false})));}
+  await ref.set({hash:h,updatedAt,chunked:true,encoding:'base64-json',generation,chunkCount:chunks.length,byteLength:bytes.length},{merge:false});
+  if(oldData?.chunked&&oldData.generation!==generation)removeChunkGeneration(name,oldData.generation,oldData.chunkCount).catch(()=>{});
+  console.log('Chunked collector state',JSON.stringify({name,byteLength:bytes.length,chunkCount:chunks.length,generation}));return true;
+}
 async function safeWebhook(type,payload){if(!webhookSecret||!webhookUrl)return {sent:false,reason:'not-configured'};const body=JSON.stringify({version:1,type,generatedAt:new Date().toISOString(),payload}),timestamp=String(Date.now()),requestId=crypto.randomUUID(),signature=crypto.createHmac('sha256',webhookSecret).update(`${timestamp}.${requestId}.${body}`).digest('hex');let last=null;for(let attempt=0;attempt<3;attempt++){try{const r=await fetch(webhookUrl,{method:'POST',headers:{'Content-Type':'application/json','X-FXGA-Timestamp':timestamp,'X-FXGA-Request-Id':requestId,'X-FXGA-Signature':`sha256=${signature}`},body});if(r.ok)return {sent:true,status:r.status};last=new Error(`HTTP ${r.status}: ${(await r.text()).slice(0,180)}`);}catch(e){last=e;}await new Promise(r=>setTimeout(r,300*(2**attempt)));}console.warn(`${type} webhook deferred:`,String(last?.message||last).slice(0,220));return {sent:false,error:String(last?.message||last).slice(0,220)};}
 
 async function fetchFredDescriptor(descriptor){
@@ -93,7 +116,7 @@ export async function refreshSuperEconomist({forceNews=false}={}){
   let payload={...engine,news:news.items||[],newsSourceHealth:news.sourceHealth||{},fredCatalog:buildFredCatalog(universe?.payload),globalMacro:group(observations,macro?.payload?.generatedAt),audit:{frozenThisRun:frozen,scoredThisRun:scored,decisionMemory:{...memoryEvaluation,...memoryRecord}}};payload={...payload,operationalHealth:operationalHealth({calendar,macro,news,intelligence:payload})};
   const changed=await putChanged('intelligence',payload),webhook=changed?await safeWebhook('intelligence-snapshot',payload):{sent:false,reason:'unchanged'};return {changed,webhook,registry:payload.registry,coverage:payload.coverage,audit:payload.audit,operationalHealth:payload.operationalHealth,economies:payload.economyAnalysis.economies.length,observations:observations.length};
 }
-export async function superHealth(){const [calendar,macro,intelligence,universe,news]=await Promise.all([get('calendar'),get('macro'),get('intelligence'),get('fred-universe'),get('news')]),context={hasMacro:Boolean(macro?.payload?.observations?.length),hasCalendar:Boolean(calendar?.payload?.events?.length),hasNews:Boolean(intelligence?.payload?.news?.length),hasMarketData:false,hasAltData:false};return {ok:true,service:'fxga-cloud-run-collector',version:4,architecture:'google-cloud-only-acquisition-and-intelligence',methodRegistry:registrySummary(context),calendarUpdatedAt:calendar?.updatedAt??null,macroUpdatedAt:macro?.updatedAt??null,intelligenceUpdatedAt:intelligence?.updatedAt??null,fredUniverse:universe?.payload?.summary??{curatedBase:FRED_BASE_IDS.length},targetEconomies:TARGET_ECONOMIES,operationalHealth:intelligence?.payload?.operationalHealth??operationalHealth({calendar,macro,news:news?.payload||{},intelligence:intelligence?.payload||{}}),cloudflareRole:'signed-webhook-receiver-and-serving-only'};}
+export async function superHealth(){const [calendar,macro,intelligence,universe,news]=await Promise.all([get('calendar'),get('macro'),get('intelligence'),get('fred-universe'),get('news')]),context={hasMacro:Boolean(macro?.payload?.observations?.length),hasCalendar:Boolean(calendar?.payload?.events?.length),hasNews:Boolean(intelligence?.payload?.news?.length),hasMarketData:false,hasAltData:false};return {ok:true,service:'fxga-cloud-run-collector',version:SERVICE_VERSION,architecture:'google-cloud-only-acquisition-and-intelligence',methodRegistry:registrySummary(context),calendarUpdatedAt:calendar?.updatedAt??null,macroUpdatedAt:macro?.updatedAt??null,intelligenceUpdatedAt:intelligence?.updatedAt??null,fredUniverse:universe?.payload?.summary??{curatedBase:FRED_BASE_IDS.length},targetEconomies:TARGET_ECONOMIES,operationalHealth:intelligence?.payload?.operationalHealth??operationalHealth({calendar,macro,news:news?.payload||{},intelligence:intelligence?.payload||{}}),cloudflareRole:'signed-webhook-receiver-and-serving-only'};}
 export async function fullState(){const [calendar,macro,sourceHealth,fredUniverse,news,intelligence,familySkill]=await Promise.all([get('calendar'),get('macro'),get('source-health'),get('fred-universe'),get('news'),get('intelligence'),get('family-skill')]);return {calendar,macro,sourceHealth,fredUniverse,news,intelligence,familySkill};}
 export async function intelligenceState(){return (await get('intelligence'))?.payload||null;}
 export function registrySearch(args){return searchRegistry(args);}
