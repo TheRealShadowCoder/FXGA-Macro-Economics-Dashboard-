@@ -1,0 +1,45 @@
+name: Apply Public Research API Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-public-research-contract.trigger'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Compose complete public research payload
+        run: |
+          python3 scripts/apply_public_research_contract.py
+          grep -q "decisionCore:intel.decisionGovernance" worker/index-v3.ts
+          grep -q "decisionMemory:intel.decisionMemory" worker/index-v3.ts
+      - name: Validate application build
+        run: |
+          npm install
+          npm run build
+      - name: Commit public research contract
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add worker/index-v3.ts
+          git commit -m 'Expose complete decision research API contract'
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - name: Deploy application edge explicitly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy.yml --ref main
