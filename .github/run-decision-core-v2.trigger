@@ -1,2 +1,2 @@
-run=2026-08-18T04:34:00+02:00
-reason=Add scenario robustness, institutional risk haircuts, uncertainty decomposition and pre-mortem failure mapping to the decision governance layer.
+run=2026-08-18T04:36:00+02:00
+reason=Run registered guarded v2 integration for scenario robustness, institutional risk haircuts, uncertainty decomposition and pre-mortem failure mapping.
