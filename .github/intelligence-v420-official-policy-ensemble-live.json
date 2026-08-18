@@ -1,0 +1,329 @@
+{
+  "verifiedAt": "2026-08-18T18:54:00.591Z",
+  "reportedHealthVersion": "4.20.0",
+  "bootstrap": {
+    "events": 264,
+    "changed": true,
+    "scheduled": {
+      "clusters": 82,
+      "tasksCreated": 0,
+      "samplingPolicy": {
+        "highImpactSeconds": [
+          -300,
+          0,
+          60,
+          300,
+          900,
+          3600,
+          14400
+        ],
+        "mediumImpactSeconds": [
+          -300,
+          0,
+          300,
+          900,
+          3600,
+          14400
+        ],
+        "lowImpactSeconds": [
+          -900,
+          0,
+          900,
+          3600
+        ],
+        "preReleaseBaselineAwaited": true,
+        "eventStudyHorizonsSeconds": [
+          300,
+          900,
+          3600,
+          14400
+        ]
+      }
+    },
+    "marketPulse": {
+      "intervalMinutes": 15,
+      "hours": 26,
+      "created": 2,
+      "existing": 102,
+      "skippedClosed": 0
+    },
+    "history": {
+      "persisted": 76,
+      "historyDays": 7
+    },
+    "sourceHealth": {
+      "fxstreet": {
+        "ok": true,
+        "events": 256
+      },
+      "myfxbook": {
+        "ok": true,
+        "events": 221,
+        "mode": "html"
+      },
+      "cnbc": {
+        "ok": true,
+        "items": 26
+      },
+      "policyCatalysts": {
+        "ok": true,
+        "source": "FXStreet plus official central-bank schedule ensemble",
+        "events": 8,
+        "fxstreet": {
+          "ok": true,
+          "source": "FXStreet public calendar feed",
+          "segments": 3,
+          "failedSegments": 0,
+          "events": 0,
+          "windowStart": "2026-09-01T18:53:12.035Z",
+          "windowEnd": "2026-11-01T18:53:11.035Z",
+          "failures": []
+        },
+        "official": {
+          "ok": true,
+          "architecture": "official-five-bank-policy-schedule-ensemble",
+          "requestedSources": 5,
+          "okSources": 5,
+          "liveSources": 4,
+          "fallbackSources": 1,
+          "failedSources": 0,
+          "events": 8,
+          "windowStart": "2026-08-18T18:53:11.035Z",
+          "windowEnd": "2026-11-01T18:53:11.035Z",
+          "sources": {
+            "federal-reserve": {
+              "ok": true,
+              "currency": "USD",
+              "bank": "Federal Reserve",
+              "sourceUrl": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+              "httpStatus": 200,
+              "parsedTotal": 8,
+              "events": 2,
+              "liveFetch": true,
+              "fallbackUsed": false,
+              "error": null
+            },
+            "ecb": {
+              "ok": true,
+              "currency": "EUR",
+              "bank": "European Central Bank",
+              "sourceUrl": "https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html",
+              "httpStatus": 200,
+              "parsedTotal": 3,
+              "events": 2,
+              "liveFetch": true,
+              "fallbackUsed": false,
+              "error": null
+            },
+            "bank-of-england": {
+              "ok": true,
+              "currency": "GBP",
+              "bank": "Bank of England",
+              "sourceUrl": "https://www.bankofengland.co.uk/news/2025/september/monetary-policy-committee-dates-for-2026",
+              "httpStatus": 200,
+              "parsedTotal": 8,
+              "events": 1,
+              "liveFetch": true,
+              "fallbackUsed": false,
+              "error": null
+            },
+            "sarb": {
+              "ok": true,
+              "currency": "ZAR",
+              "bank": "South African Reserve Bank",
+              "sourceUrl": "https://www.resbank.co.za/en/home/what-we-do/monetary-policy/MPC-announcement-webcasts",
+              "httpStatus": 200,
+              "parsedTotal": 6,
+              "events": 1,
+              "liveFetch": true,
+              "fallbackUsed": false,
+              "error": null
+            },
+            "bank-of-japan": {
+              "ok": true,
+              "currency": "JPY",
+              "bank": "Bank of Japan",
+              "sourceUrl": "https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm",
+              "httpStatus": 200,
+              "parsedTotal": 8,
+              "events": 2,
+              "liveFetch": false,
+              "fallbackUsed": true,
+              "error": "Official page parsed zero scheduled decisions"
+            }
+          }
+        }
+      }
+    },
+    "market": {
+      "changed": true,
+      "requested": 16,
+      "live": 16,
+      "staleRetained": 0,
+      "failed": 0,
+      "durationMs": 12902,
+      "technical": {
+        "changed": true,
+        "counts": {
+          "assets": 9,
+          "confirmed": 0,
+          "contextAligned": 0,
+          "conflict": 0,
+          "warming": 9
+        },
+        "generatedAt": "2026-08-18T18:53:46.235Z"
+      }
+    }
+  },
+  "officialHealth": {
+    "ok": true,
+    "architecture": "official-five-bank-policy-schedule-ensemble",
+    "requestedSources": 5,
+    "okSources": 5,
+    "liveSources": 4,
+    "fallbackSources": 1,
+    "failedSources": 0,
+    "events": 8,
+    "windowStart": "2026-08-18T18:53:11.035Z",
+    "windowEnd": "2026-11-01T18:53:11.035Z",
+    "sources": {
+      "federal-reserve": {
+        "ok": true,
+        "currency": "USD",
+        "bank": "Federal Reserve",
+        "sourceUrl": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+        "httpStatus": 200,
+        "parsedTotal": 8,
+        "events": 2,
+        "liveFetch": true,
+        "fallbackUsed": false,
+        "error": null
+      },
+      "ecb": {
+        "ok": true,
+        "currency": "EUR",
+        "bank": "European Central Bank",
+        "sourceUrl": "https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html",
+        "httpStatus": 200,
+        "parsedTotal": 3,
+        "events": 2,
+        "liveFetch": true,
+        "fallbackUsed": false,
+        "error": null
+      },
+      "bank-of-england": {
+        "ok": true,
+        "currency": "GBP",
+        "bank": "Bank of England",
+        "sourceUrl": "https://www.bankofengland.co.uk/news/2025/september/monetary-policy-committee-dates-for-2026",
+        "httpStatus": 200,
+        "parsedTotal": 8,
+        "events": 1,
+        "liveFetch": true,
+        "fallbackUsed": false,
+        "error": null
+      },
+      "sarb": {
+        "ok": true,
+        "currency": "ZAR",
+        "bank": "South African Reserve Bank",
+        "sourceUrl": "https://www.resbank.co.za/en/home/what-we-do/monetary-policy/MPC-announcement-webcasts",
+        "httpStatus": 200,
+        "parsedTotal": 6,
+        "events": 1,
+        "liveFetch": true,
+        "fallbackUsed": false,
+        "error": null
+      },
+      "bank-of-japan": {
+        "ok": true,
+        "currency": "JPY",
+        "bank": "Bank of Japan",
+        "sourceUrl": "https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm",
+        "httpStatus": 200,
+        "parsedTotal": 8,
+        "events": 2,
+        "liveFetch": false,
+        "fallbackUsed": true,
+        "error": "Official page parsed zero scheduled decisions"
+      }
+    }
+  },
+  "calendar": {
+    "totalEvents": 264,
+    "officialEvents": 8,
+    "officialKeys": [
+      "EUR:2026-09-10",
+      "USD:2026-09-16",
+      "GBP:2026-09-17",
+      "JPY:2026-09-18",
+      "ZAR:2026-09-23",
+      "USD:2026-10-28",
+      "EUR:2026-10-29",
+      "JPY:2026-10-30"
+    ],
+    "exactPrecision": 3,
+    "dateOnlyPrecision": 5,
+    "policyCatalystCount": 8,
+    "officialPolicyScheduleCount": 8
+  },
+  "research": {
+    "banks": 5,
+    "scheduledMeetings": 10,
+    "meetingKeys": [
+      "USD:2026-08-19",
+      "USD:2026-09-16",
+      "USD:2026-10-28",
+      "EUR:2026-08-19",
+      "EUR:2026-08-20",
+      "GBP:2026-09-17",
+      "ZAR:2026-09-23",
+      "JPY:2026-09-18",
+      "JPY:2026-10-30"
+    ],
+    "scheduleOnlyMeetings": 6
+  },
+  "calibrationBefore": {
+    "frozen": 2,
+    "uniqueDecisions": 2,
+    "scored": 0,
+    "pending": 2,
+    "topActionAccuracy": null,
+    "averageBrier": null,
+    "averageLogLoss": null,
+    "brierSkillVsUniform": null,
+    "sampleConfidence": 0,
+    "averageLeadHours": 18.51,
+    "status": "building"
+  },
+  "calibrationAfter": {
+    "frozen": 2,
+    "uniqueDecisions": 2,
+    "scored": 0,
+    "pending": 2,
+    "topActionAccuracy": null,
+    "averageBrier": null,
+    "averageLogLoss": null,
+    "brierSkillVsUniform": null,
+    "sampleConfidence": 0,
+    "averageLeadHours": 18.51,
+    "status": "building"
+  },
+  "audit": {
+    "scored": 0,
+    "frozen": 3,
+    "skipped": 2,
+    "precisionSkipped": 0,
+    "frozenByLead": {
+      "early-45d": 3
+    }
+  },
+  "refreshChanged": true,
+  "webhookStatus": 200,
+  "publicContract": {
+    "passed": true,
+    "passiveEdge": true,
+    "scheduledMeetings": 10,
+    "scheduleOnlyMeetings": 6
+  }
+}
