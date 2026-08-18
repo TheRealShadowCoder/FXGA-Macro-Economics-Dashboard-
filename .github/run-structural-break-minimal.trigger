@@ -1,2 +1,2 @@
-run=2026-08-18T06:45:00+02:00
-reason=Apply structural-break research and pair governance with self-reporting syntax and contract checks.
+run=2026-08-18T06:46:00+02:00
+reason=Run the registered structural-break integration workflow and persist source or exact diagnostic.
