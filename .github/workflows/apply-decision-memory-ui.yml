@@ -1,0 +1,37 @@
+name: Apply Decision Memory UI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-decision-memory-ui.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply research UI integration
+        run: python3 scripts/apply_decision_memory_ui.py
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit decision memory UI
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/components/ResearchView.tsx
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Integrate decision calibration memory into research UI'
+          git pull --rebase origin main
+          git push origin HEAD:main
