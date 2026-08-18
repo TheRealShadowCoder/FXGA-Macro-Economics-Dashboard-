@@ -1,0 +1,69 @@
+name: Apply Historical Analogue Source Minimal
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-historical-analogue-minimal.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Apply and diagnose historical analogue patch
+        run: |
+          set +e
+          mkdir -p /tmp/analogue .github
+          python3 scripts/apply_historical_analogue_upgrade.py > /tmp/analogue/patch.log 2>&1
+          PATCH_RC=$?
+          node --check cloud-run-collector/src/decision-intelligence-core.js > /tmp/analogue/core-check.log 2>&1
+          CORE_RC=$?
+          node --check cloud-run-collector/src/decision-memory.js > /tmp/analogue/memory-check.log 2>&1
+          MEMORY_RC=$?
+          grep -q 'function historicalAnalogueControls' cloud-run-collector/src/decision-intelligence-core.js; G1=$?
+          grep -q 'historicalAnalogues:g.historicalAnalogues' cloud-run-collector/src/decision-intelligence-core.js; G2=$?
+          grep -q 'featureVector:pairFeatureVector(pair)' cloud-run-collector/src/decision-memory.js; G3=$?
+          grep -q 'analogueLibrary' cloud-run-collector/src/decision-memory.js; G4=$?
+          CONTRACT_RC=$(( G1 || G2 || G3 || G4 ))
+          {
+            echo "generated_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "patch_exit=$PATCH_RC"
+            echo "core_syntax_exit=$CORE_RC"
+            echo "memory_syntax_exit=$MEMORY_RC"
+            echo "contract_exit=$CONTRACT_RC"
+            echo '--- patch output ---'
+            cat /tmp/analogue/patch.log
+            echo '--- core syntax output ---'
+            cat /tmp/analogue/core-check.log
+            echo '--- memory syntax output ---'
+            cat /tmp/analogue/memory-check.log
+          } > .github/historical-analogue-diagnostic.txt
+          echo "$PATCH_RC" > /tmp/analogue/patch.rc
+          echo "$CORE_RC" > /tmp/analogue/core.rc
+          echo "$MEMORY_RC" > /tmp/analogue/memory.rc
+          echo "$CONTRACT_RC" > /tmp/analogue/contract.rc
+      - name: Persist source or diagnostic
+        run: |
+          PATCH_RC=$(cat /tmp/analogue/patch.rc)
+          CORE_RC=$(cat /tmp/analogue/core.rc)
+          MEMORY_RC=$(cat /tmp/analogue/memory.rc)
+          CONTRACT_RC=$(cat /tmp/analogue/contract.rc)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/historical-analogue-diagnostic.txt
+          if [ "$PATCH_RC" = 0 ] && [ "$CORE_RC" = 0 ] && [ "$MEMORY_RC" = 0 ] && [ "$CONTRACT_RC" = 0 ]; then
+            git add cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/decision-memory.js
+            MSG='Integrate historical analogue decision intelligence source'
+          else
+            MSG='Record historical analogue integration diagnostic'
+          fi
+          git commit -m "$MSG"
+          git pull --rebase origin main
+          git push origin HEAD:main
