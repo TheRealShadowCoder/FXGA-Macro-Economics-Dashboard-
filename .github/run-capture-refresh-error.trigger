@@ -1,2 +1,2 @@
-run=2026-08-18T14:37:00+02:00
-reason=Capture the current private refresh-intelligence response from active chunk-enabled revision 00087 after the Firestore sharding deployment.
+run=2026-08-18T14:42:00+02:00
+reason=Confirm the chunked private intelligence refresh now sends its signed 5.9 MB snapshot successfully through the deployed 8 MiB intelligence-envelope policy.
