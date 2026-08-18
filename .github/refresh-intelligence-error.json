@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-08-18T12:38:22.820Z",
+  "generatedAt": "2026-08-18T12:45:12.514Z",
   "httpStatus": 200,
   "ok": true,
   "error": null,
   "response": {
     "changed": true,
     "webhook": {
-      "sent": false,
-      "error": "HTTP 401: {\"error\":\"Invalid collector payload size\"}"
+      "sent": true,
+      "status": 200
     },
     "registry": {
       "totalMethods": 9705,
@@ -788,13 +788,13 @@
         "evaluatedHorizons": 0,
         "completed": 0,
         "expired": 0,
-        "recorded": 0,
-        "skipped": 8,
+        "recorded": 8,
+        "skipped": 0,
         "total": 8
       }
     },
     "operationalHealth": {
-      "generatedAt": "2026-08-18T12:38:14.674Z",
+      "generatedAt": "2026-08-18T12:45:04.786Z",
       "status": "healthy",
       "criticalIssues": [],
       "calendarEvents": 242,
@@ -1018,8 +1018,8 @@
       ],
       "agesMinutes": {
         "calendar": 5,
-        "macro": 36,
-        "news": 7,
+        "macro": 43,
+        "news": 13,
         "intelligence": 0
       }
     },
