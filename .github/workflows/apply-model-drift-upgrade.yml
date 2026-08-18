@@ -1,0 +1,58 @@
+name: Apply Model Drift Research Upgrade
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-model-drift-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply model drift upgrade
+        run: python3 scripts/apply_model_drift_upgrade.py
+      - name: Validate collector and drift controls
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildInstitutionalResearch } from './src/institutional-research.js';
+          import { buildDecisionIntelligenceCore } from './src/decision-intelligence-core.js';
+          const start=Date.now()-40*86400000;
+          const values=Array.from({length:34},(_,i)=>100+i*.25+Math.sin(i/2.7)*(i>25?3.5:1));
+          const history=values.map((value,i)=>({date:new Date(start+i*86400000).toISOString(),value}));
+          const observations=[{seriesId:'DRIFT_A',title:'Growth Drift Test',value:values.at(-1),date:history.at(-1).date,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',economy:'USA',categories:['growth'],history}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:35,confidence:70,conviction:60,risk:'normal',components:{structuralDivergence:38,policyDivergence:30,releaseDivergence:14,narrativeDivergence:9},probabilities:{buy:.58,sell:.19,wait:.23}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const research=buildInstitutionalResearch({observations,events:[],market:[],news:[],currencyStates:[],opportunities:primary.rankedOpportunities});
+          if(!research.modelHealth)throw new Error('Model health summary missing');
+          const f=research.forecasts[0];
+          for(const field of ['walkForwardBias','recentRmse','earlierRmse','driftRatio','driftScore','driftStatus'])if(f[field]===undefined)throw new Error(`Forecast drift field missing: ${field}`);
+          const core=buildDecisionIntelligenceCore({decision:primary,observations,events:[],news:[],marketData:[],research});
+          if(!core.pairDecisions[0]?.modelHealth)throw new Error('Decision model-health control missing');
+          console.log(JSON.stringify({modelHealth:research.modelHealth,forecast:{driftScore:f.driftScore,driftStatus:f.driftStatus,bias:f.forecastBias},decisionModelHealth:core.pairDecisions[0].modelHealth},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit model drift upgrade
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/institutional-research.js cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add model drift and forecast error governance'
+          git pull --rebase origin main
+          git push origin HEAD:main
