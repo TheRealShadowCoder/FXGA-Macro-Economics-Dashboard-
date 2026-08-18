@@ -56,7 +56,8 @@ jobs:
       - name: Verify production frontend build
         run: |
           cd "$GITHUB_WORKSPACE"
-          npm ci
+          npm install
+          npm audit --audit-level=moderate
           npm run build
       - name: Persist readiness marker
         run: |
