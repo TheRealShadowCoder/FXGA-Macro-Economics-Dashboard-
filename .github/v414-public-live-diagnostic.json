@@ -1,0 +1,36 @@
+{
+  "generatedAt": "2026-08-18T04:38:12.658Z",
+  "httpStatus": 200,
+  "parseError": null,
+  "pairCount": 0,
+  "decisionCoreVersion": null,
+  "missingPairFields": [],
+  "missingTopLevel": [
+    "structuralBreaks",
+    "evidenceIndependence",
+    "turningPoints",
+    "catalystSequence",
+    "decisionChanges",
+    "analogueLibrary",
+    "crossPairConsistency",
+    "portfolioInteraction"
+  ],
+  "publicContractReady": false,
+  "keys": [
+    "capabilityCoverage",
+    "dataQuality",
+    "features",
+    "forecasts",
+    "generatedAt",
+    "marketAnalytics",
+    "notes",
+    "operatingStandards",
+    "provenance",
+    "regimes",
+    "releaseAnalytics",
+    "risk",
+    "scenarios",
+    "schemaVersion"
+  ],
+  "decisionCoreKeys": []
+}
