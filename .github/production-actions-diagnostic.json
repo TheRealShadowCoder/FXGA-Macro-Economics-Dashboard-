@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-18T12:31:16.586Z",
+  "generatedAt": "2026-08-18T12:41:40.447Z",
   "googleDeploys": [
     {
       "conclusion": "success",
@@ -137,6 +137,17 @@
   "cloudflareDeploys": [
     {
       "conclusion": "success",
+      "createdAt": "2026-08-18T12:40:27Z",
+      "databaseId": 32138080398,
+      "event": "push",
+      "headSha": "39e7e19703fc7f41fe402daded6321a90f74225d",
+      "status": "completed",
+      "updatedAt": "2026-08-18T12:41:17Z",
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32138080398",
+      "workflowName": "Deploy FXGA Production Application"
+    },
+    {
+      "conclusion": "success",
       "createdAt": "2026-08-18T12:24:57Z",
       "databaseId": 32136703367,
       "event": "push",
@@ -255,20 +266,20 @@
       "updatedAt": "2026-08-18T03:15:06Z",
       "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32094751073",
       "workflowName": "Deploy FXGA Production Application"
-    },
-    {
-      "conclusion": "cancelled",
-      "createdAt": "2026-08-18T03:13:54Z",
-      "databaseId": 32094728034,
-      "event": "push",
-      "headSha": "d16354335b53373e638a2bf4e37662b84409ecbd",
-      "status": "completed",
-      "updatedAt": "2026-08-18T03:14:24Z",
-      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32094728034",
-      "workflowName": "Deploy FXGA Production Application"
     }
   ],
   "directLiveVerifier": [
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-08-18T12:31:51Z",
+      "databaseId": 32137312284,
+      "event": "push",
+      "headSha": "32a37f4cc12a7e5717bd6119c1d2a8e88f780365",
+      "status": "completed",
+      "updatedAt": "2026-08-18T12:32:29Z",
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32137312284",
+      "workflowName": "Verify V4.14 Live Direct"
+    },
     {
       "conclusion": "failure",
       "createdAt": "2026-08-18T04:37:09Z",
