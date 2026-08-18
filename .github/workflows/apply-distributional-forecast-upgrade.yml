@@ -1,0 +1,59 @@
+name: Apply Distributional Forecast Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-distributional-forecast-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply distributional forecast patch
+        run: python3 scripts/apply_distributional_forecast_upgrade.py
+      - name: Validate empirical forecast distributions
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildInstitutionalResearch } from './src/institutional-research.js';
+          const start=Date.now()-60*86400000;
+          const values=Array.from({length:44},(_,i)=>100+i*.22+Math.sin(i/2.4)*(i%9===0?3.2:1.2)+(i%13===0?-2.1:0));
+          const history=values.map((value,i)=>({date:new Date(start+i*86400000).toISOString(),value}));
+          const observations=[{seriesId:'DIST_A',title:'Distribution Test',value:values.at(-1),date:history.at(-1).date,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',economy:'USA',categories:['growth'],history}];
+          const research=buildInstitutionalResearch({observations,events:[],market:[],news:[],currencyStates:[],opportunities:[]});
+          const f=research.forecasts[0];
+          if(!f?.distribution)throw new Error('Forecast distribution missing');
+          if(Number(f.distribution.residualCount)<8)throw new Error('Empirical residual depth too low in test');
+          if(f.distribution.method!=='walk-forward-empirical-residuals')throw new Error(`Expected empirical distribution, got ${f.distribution.method}`);
+          if(!Array.isArray(f.interval80)||f.interval80.length!==2||f.interval80[0]>=f.interval80[1])throw new Error('80% interval invalid');
+          if(!Array.isArray(f.interval95)||f.interval95.length!==2||f.interval95[0]>=f.interval95[1])throw new Error('95% interval invalid');
+          if(f.interval95[0]>f.interval80[0]||f.interval95[1]<f.interval80[1])throw new Error('95% interval must contain 80% interval');
+          if(!(f.probabilities.up>0&&f.probabilities.up<1))throw new Error('Directional probability invalid');
+          console.log(JSON.stringify({distribution:f.distribution,probabilities:f.probabilities,interval80:f.interval80,interval95:f.interval95},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit distributional forecasting
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/institutional-research.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add empirical distributional macro forecasting'
+          git pull --rebase origin main
+          git push origin HEAD:main
