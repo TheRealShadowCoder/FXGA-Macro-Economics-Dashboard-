@@ -51,7 +51,31 @@ export type QualityFrameworkInput = {
     }>;
   } | null;
   decisionCore?: {
+    evidenceQuality?: {
+      score?: number;
+      coverage?: number;
+      freshness?: number;
+      historyDepth?: number;
+      sourceBreadth?: number;
+    };
+    audit?: {
+      pairCount?: number;
+      directionalCount?: number;
+      waitCount?: number;
+      governanceVetoes?: number;
+      averageGovernedConfidence?: number;
+    };
+    contradictionSummary?: { contained?: number; material?: number; severe?: number; total?: number };
     pairDecisions?: Array<{
+      quality?: { score?: number; status?: string };
+      evidenceIndependence?: { independenceRatio?: number; globalRatio?: number; factor?: number; status?: string };
+      historicalCalibration?: { status?: string; samples?: number; score?: number | null; hitRate?: number | null; brier?: number | null };
+      modelHealth?: { status?: string; score?: number; drifting?: number; watch?: number; calibratedForecasts?: number };
+      uncertainty?: { score?: number; status?: string };
+      scenarioRobustness?: { available?: boolean; score?: number; matches?: number; flips?: number; waits?: number; total?: number };
+      transitionRisk?: { maxRisk?: number; status?: string; factor?: number; catalystDensity?: number };
+      final?: { direction?: string; confidence?: number; executionGate?: string };
+      contradictions?: { count?: number; weightedSeverity?: number; status?: string };
       crossAsset?: { available?: boolean; score?: number; availableFactors?: number };
       evidenceCompleteness?: { score?: number; mandatoryMissing?: string[]; missing?: string[]; available?: string[] };
       structuralBreak?: { risk?: number; factor?: number; status?: string };
@@ -183,19 +207,26 @@ export function deriveQualityFramework(input: QualityFrameworkInput): QualityFra
   const sources = input.sourceReliability ?? [];
   const forecasts = input.forecasts ?? [];
   const memory = input.decisionMemory;
-  const pairs = input.decisionCore?.pairDecisions ?? [];
+  const core = input.decisionCore;
+  const pairs = core?.pairDecisions ?? [];
   const regimes = input.regimes ?? [];
 
   const sourceScore = avg(sources.map((item) => item.score));
-  const sourceCoverage = avg(sources.map((item) => item.numericCoverage));
-  const sourceFreshness = avg(sources.map((item) => item.freshness));
-  const sourceHistory = avg(sources.map((item) => item.historyDepth));
+  const sourceCoverage = avg(sources.map((item) => normalize01(item.numericCoverage)));
+  const sourceFreshness = avg(sources.map((item) => normalize01(item.freshness)));
+  const sourceHistory = avg(sources.map((item) => normalize01(item.historyDepth)));
   const anomalyQuality = avg(sources.map((item) => 100 - normalize01(item.anomalyRate)));
+
+  const coreEvidenceScore = clamp(Number(core?.evidenceQuality?.score ?? 0));
+  const coreEvidenceCoverage = normalize01(core?.evidenceQuality?.coverage);
+  const coreEvidenceFreshness = normalize01(core?.evidenceQuality?.freshness);
+  const coreEvidenceHistory = normalize01(core?.evidenceQuality?.historyDepth);
+  const coreSourceBreadth = normalize01(core?.evidenceQuality?.sourceBreadth);
 
   const forecastCalibration = avg(forecasts.map((item) => normalize01(item.calibrationConfidence)));
   const modelAgreement = avg(forecasts.map((item) => normalize01(item.modelAgreement)));
   const modelDispersionQuality = avg(forecasts.map((item) => inverse01(item.modelDispersion)));
-  const uncertaintyQuality = avg(forecasts.map((item) => inverse01(item.uncertainty)));
+  const forecastUncertaintyQuality = avg(forecasts.map((item) => inverse01(item.uncertainty)));
   const validationPoints = forecasts.reduce((sum, item) => sum + Math.max(0, Number(item.validationPoints ?? 0)), 0);
   const forecastSamples = forecasts.reduce((sum, item) => sum + Math.max(0, Number(item.sampleSize ?? 0)), 0);
   const walkForwardModels = forecasts.filter((item) => Object.values(item.walkForwardRmse ?? {}).some((value) => value != null && Number.isFinite(Number(value)))).length;
@@ -205,6 +236,23 @@ export function deriveQualityFramework(input: QualityFrameworkInput): QualityFra
   const memoryHit = avg(horizons.filter((row) => row.hitRate != null).map((row) => normalize01(row.hitRate)));
   const memoryNonLoss = avg(horizons.filter((row) => row.nonLossRate != null).map((row) => normalize01(row.nonLossRate)));
   const memoryBrierQuality = avg(horizons.filter((row) => row.brier != null).map((row) => clamp((1 - Number(row.brier)) * 100)));
+
+  const pairQuality = avg(pairs.map((pair) => pair.quality?.score));
+  const pairIndependence = avg(pairs.map((pair) => pair.evidenceIndependence?.independenceRatio == null ? undefined : normalize01(pair.evidenceIndependence.independenceRatio)));
+  const pairHistoricalSamples = pairs.reduce((sum, pair) => sum + Math.max(0, Number(pair.historicalCalibration?.samples ?? 0)), 0);
+  const pairHistoricalHit = avg(pairs.map((pair) => pair.historicalCalibration?.hitRate == null ? undefined : normalize01(pair.historicalCalibration.hitRate)));
+  const pairHistoricalBrierQuality = avg(pairs.map((pair) => pair.historicalCalibration?.brier == null ? undefined : clamp((1 - Number(pair.historicalCalibration.brier)) * 100)));
+  const modelHealthQuality = avg(pairs.map((pair) => pair.modelHealth?.score));
+  const pairUncertaintyQuality = avg(pairs.map((pair) => pair.uncertainty?.score == null ? undefined : clamp(100 - Number(pair.uncertainty.score))));
+  const scenarioQuality = avg(pairs.filter((pair) => pair.scenarioRobustness?.available).map((pair) => pair.scenarioRobustness?.score));
+  const transitionQuality = avg(pairs.map((pair) => pair.transitionRisk?.maxRisk == null ? undefined : clamp(100 - Number(pair.transitionRisk.maxRisk))));
+  const governedConfidence = avg(pairs.map((pair) => pair.final?.confidence));
+  const governanceVetoes = Math.max(0, Number(core?.audit?.governanceVetoes ?? 0));
+  const pairCount = Math.max(0, Number(core?.audit?.pairCount ?? pairs.length));
+  const gatePassRate = pairCount ? clamp(100 * (1 - governanceVetoes / pairCount)) : 0;
+  const contradictionTotal = Math.max(0, Number(core?.contradictionSummary?.total ?? 0));
+  const contradictionSevere = Math.max(0, Number(core?.contradictionSummary?.severe ?? 0));
+  const contradictionQuality = contradictionTotal ? clamp(100 * (1 - contradictionSevere / contradictionTotal)) : 100;
 
   const evidenceCompleteness = avg(pairs.map((pair) => pair.evidenceCompleteness?.score));
   const evidenceAvailable = pairs.reduce((sum, pair) => sum + (pair.evidenceCompleteness?.available?.length ?? 0), 0);
@@ -227,26 +275,106 @@ export function deriveQualityFramework(input: QualityFrameworkInput): QualityFra
   const governanceValidation = validationState.includes('pass') || validationState.includes('valid') || validationState.includes('ready') ? 100 : validationState ? 65 : 35;
 
   const entries: Record<string, { score: number; confidence: number; evidence: number; notes: string[] }> = {
-    'raw-data-quality': { score: avg([baseQuality, scoreOr(scores, ['coverage','completeness'], baseQuality), anomalyQuality || baseQuality]), confidence: sampleConfidence((sources.length * 10) + forecasts.length, 100), evidence: sources.length + forecasts.length, notes: ['Uses current research data-quality score, source anomaly quality and observed coverage.'] },
-    'freshness-timeliness': { score: avg([scoreOr(scores, ['freshness','timeliness'], sourceFreshness || baseQuality), sourceFreshness || baseQuality]), confidence: sampleConfidence(sources.length, 20), evidence: sources.length, notes: ['Rewards fresh upstream evidence and penalizes stale collection states.'] },
-    'source-reliability': { score: avg([sourceScore, sourceCoverage, sourceFreshness, sourceHistory]), confidence: sampleConfidence(sources.length, 20), evidence: sources.length, notes: ['Aggregates provider reliability, coverage, freshness and history depth.'] },
-    'multi-source-reconciliation': { score: avg([sourceScore, evidenceCompleteness, crossFactors ? clamp(crossFactors * 4) : 0]), confidence: sampleConfidence(sources.length + crossAvailable, 30), evidence: sources.length + crossAvailable, notes: ['Higher when multiple reliable evidence channels are simultaneously available.'] },
-    'missing-data-coverage': { score: avg([scoreOr(scores, ['coverage','completeness'], baseQuality), sourceCoverage, evidenceCompleteness]), confidence: sampleConfidence(evidenceAvailable + sources.length, 80), evidence: evidenceAvailable + sources.length, notes: [`Observed evidence items ${evidenceAvailable}; missing evidence items ${evidenceMissing}.`] },
-    'revision-vintage-control': { score: avg([scoreOr(scores, ['revision','vintage','integrity'], baseQuality), governanceValidation]), confidence: clamp(governanceValidation * 0.8), evidence: validationState ? 1 : 0, notes: ['Uses the research validation state as the public proof that point-in-time controls are active.'] },
-    'probability-calibration': { score: avg([forecastCalibration, memoryBrierQuality, horizonBrierQuality]), confidence: sampleConfidence(memorySamples + horizonSamples, 500), evidence: memorySamples + horizonSamples, notes: [`Realized calibration sample ${memorySamples + horizonSamples}.`] },
-    'directional-calibration': { score: avg([memoryHit, memoryNonLoss, horizonHit]), confidence: sampleConfidence(memorySamples + horizonSamples, 500), evidence: memorySamples + horizonSamples, notes: ['Measures whether directional calls actually resolve in the stated direction across recorded horizons.'] },
-    'uncertainty-calibration': { score: avg([uncertaintyQuality, modelDispersionQuality, forecastCalibration]), confidence: sampleConfidence(forecastSamples, 1000), evidence: forecasts.length, notes: ['Uses model uncertainty, ensemble dispersion and calibration confidence.'] },
-    'historical-backtesting': { score: avg([memoryHit, analogueHit, horizonHit, validationPoints ? clamp(Math.log10(validationPoints + 1) * 28) : 0]), confidence: sampleConfidence(memorySamples + analogueSamples + validationPoints, 1000), evidence: memorySamples + analogueSamples + validationPoints, notes: [`Walk-forward checks ${validationPoints}; realized analogue samples ${analogueSamples}.`] },
-    'out-of-sample': { score: avg([forecastCalibration, modelAgreement, walkForwardModels ? clamp((walkForwardModels / Math.max(1, forecasts.length)) * 100) : 0]), confidence: sampleConfidence(validationPoints, 500), evidence: validationPoints, notes: [`${walkForwardModels}/${forecasts.length || 0} forecast rows expose walk-forward RMSE evidence.`] },
-    'leakage-causality': { score: avg([governanceValidation, scoreOr(scores, ['integrity','provenance'], baseQuality)]), confidence: validationState ? 75 : 20, evidence: validationState ? 1 : 0, notes: ['Public score is intentionally conservative because leakage protection needs backend point-in-time tests, not a visual estimate.'] },
-    'robustness-sensitivity': { score: avg([modelAgreement, modelDispersionQuality, structuralQuality, analogueHit]), confidence: sampleConfidence(forecasts.length + analogueSamples, 250), evidence: forecasts.length + analogueSamples, notes: ['Combines ensemble agreement, dispersion, structural stability and realised analogue behaviour.'] },
-    'regime-structural-break': { score: avg([structuralQuality, regimeStability]), confidence: sampleConfidence(regimeSamples + pairs.length, 300), evidence: regimeSamples + pairs.length, notes: ['Low transition probability and low structural-break risk improve the score.'] },
-    'evidence-strength': { score: avg([evidenceCompleteness, sourceScore, sourceFreshness]), confidence: sampleConfidence(evidenceAvailable, 100), evidence: evidenceAvailable, notes: [`Available evidence ${evidenceAvailable}; unresolved or missing evidence ${evidenceMissing}.`] },
-    'evidence-independence': { score: avg([evidenceCompleteness, crossAvailable ? clamp((crossAvailable / Math.max(1, pairs.length)) * 100) : 0, crossFactors ? clamp(crossFactors * 4) : 0]), confidence: sampleConfidence(crossFactors, 40), evidence: crossFactors, notes: [`Independent cross-asset factors currently exposed: ${crossFactors}.`] },
-    'attribution-explainability': { score: input.decisionQualityAttribution ? 92 : pairs.length ? 70 : 40, confidence: input.decisionQualityAttribution ? 90 : 45, evidence: input.decisionQualityAttribution ? 1 : 0, notes: ['Measures whether the engine exposes enough contribution and decision-change information to explain itself.'] },
-    'model-data-drift': { score: avg([structuralQuality, regimeStability, sourceFreshness]), confidence: sampleConfidence(regimeSamples + pairs.length, 300), evidence: regimeSamples + pairs.length, notes: ['Uses structural-break and transition evidence as the current public drift proxy.'] },
-    'decision-quality-gating': { score: avg([riskConfidence, riskQuality, evidenceCompleteness, structuralQuality]), confidence: sampleConfidence(pairs.length + (input.risk?.categories?.length ?? 0), 40), evidence: pairs.length + (input.risk?.categories?.length ?? 0), notes: ['Quality gates should reduce confidence or force abstention when evidence, stability or risk conditions deteriorate.'] },
-    'governance-reproducibility': { score: avg([sloQuality, governanceValidation, baseQuality]), confidence: input.operatingStandards ? 85 : 30, evidence: (input.operatingStandards?.slos?.length ?? 0) + Object.keys(input.operatingStandards?.storageTiers ?? {}).length, notes: ['Based on validation state, service-level objectives and explicit storage/retention controls.'] },
+    'raw-data-quality': {
+      score: avg([baseQuality, scoreOr(scores, ['coverage','completeness'], baseQuality), anomalyQuality || baseQuality, coreEvidenceCoverage || undefined]),
+      confidence: sampleConfidence((sources.length * 10) + forecasts.length, 100), evidence: sources.length + forecasts.length,
+      notes: ['Uses current research data quality, source anomaly resistance, coverage and decision-core evidence coverage.'],
+    },
+    'freshness-timeliness': {
+      score: avg([scoreOr(scores, ['freshness','timeliness'], sourceFreshness || baseQuality), sourceFreshness || undefined, coreEvidenceFreshness || undefined]),
+      confidence: sampleConfidence(sources.length + pairs.length, 30), evidence: sources.length + pairs.length,
+      notes: ['Normalizes source freshness ratios to percentages before scoring and adds decision-core evidence freshness.'],
+    },
+    'source-reliability': {
+      score: avg([sourceScore, sourceCoverage, sourceFreshness, sourceHistory, coreSourceBreadth || undefined]),
+      confidence: sampleConfidence(sources.length, 20), evidence: sources.length,
+      notes: ['Aggregates provider reliability, numeric coverage, freshness, history depth and source breadth.'],
+    },
+    'multi-source-reconciliation': {
+      score: avg([sourceScore, coreEvidenceScore || undefined, evidenceCompleteness || undefined, pairIndependence || undefined, crossFactors ? clamp(crossFactors * 4) : undefined]),
+      confidence: sampleConfidence(sources.length + crossAvailable + pairs.length, 40), evidence: sources.length + crossAvailable + pairs.length,
+      notes: ['Rewards broad reliable evidence, independent confirmation and usable cross-asset factors.'],
+    },
+    'missing-data-coverage': {
+      score: avg([scoreOr(scores, ['coverage','completeness'], baseQuality), sourceCoverage || undefined, coreEvidenceCoverage || undefined, evidenceCompleteness || undefined]),
+      confidence: sampleConfidence(evidenceAvailable + sources.length + pairs.length, 100), evidence: evidenceAvailable + sources.length + pairs.length,
+      notes: [`Observed advanced evidence items ${evidenceAvailable}; missing advanced evidence items ${evidenceMissing}.`],
+    },
+    'revision-vintage-control': {
+      score: avg([scoreOr(scores, ['revision','vintage','integrity'], baseQuality), governanceValidation, coreEvidenceHistory || undefined]),
+      confidence: validationState ? 78 : 20, evidence: validationState ? 1 : 0,
+      notes: ['Public score stays conservative because vintage integrity must be proven by point-in-time backend controls.'],
+    },
+    'probability-calibration': {
+      score: avg([forecastCalibration || undefined, memoryBrierQuality || undefined, pairHistoricalBrierQuality || undefined, horizonBrierQuality || undefined]),
+      confidence: sampleConfidence(memorySamples + pairHistoricalSamples + horizonSamples, 700), evidence: memorySamples + pairHistoricalSamples + horizonSamples,
+      notes: [`Realized probability-calibration sample ${memorySamples + pairHistoricalSamples + horizonSamples}.`],
+    },
+    'directional-calibration': {
+      score: avg([memoryHit || undefined, memoryNonLoss || undefined, pairHistoricalHit || undefined, horizonHit || undefined]),
+      confidence: sampleConfidence(memorySamples + pairHistoricalSamples + horizonSamples, 700), evidence: memorySamples + pairHistoricalSamples + horizonSamples,
+      notes: ['Combines decision memory, pair-level historical calibration and horizon-level realized hit rates.'],
+    },
+    'uncertainty-calibration': {
+      score: avg([forecastUncertaintyQuality || undefined, pairUncertaintyQuality || undefined, modelDispersionQuality || undefined, forecastCalibration || undefined]),
+      confidence: sampleConfidence(forecastSamples + pairHistoricalSamples, 1200), evidence: forecasts.length + pairs.length,
+      notes: ['Combines forecast uncertainty, pair decision uncertainty, ensemble dispersion and calibration confidence.'],
+    },
+    'historical-backtesting': {
+      score: avg([memoryHit || undefined, pairHistoricalHit || undefined, analogueHit || undefined, horizonHit || undefined, validationPoints ? clamp(Math.log10(validationPoints + 1) * 28) : undefined]),
+      confidence: sampleConfidence(memorySamples + pairHistoricalSamples + analogueSamples + validationPoints, 1200), evidence: memorySamples + pairHistoricalSamples + analogueSamples + validationPoints,
+      notes: [`Walk-forward checks ${validationPoints}; pair calibration samples ${pairHistoricalSamples}; analogue samples ${analogueSamples}.`],
+    },
+    'out-of-sample': {
+      score: avg([forecastCalibration || undefined, modelAgreement || undefined, modelHealthQuality || undefined, walkForwardModels ? clamp((walkForwardModels / Math.max(1, forecasts.length)) * 100) : undefined]),
+      confidence: sampleConfidence(validationPoints + pairHistoricalSamples, 700), evidence: validationPoints + pairHistoricalSamples,
+      notes: [`${walkForwardModels}/${forecasts.length || 0} forecast rows expose walk-forward RMSE; pair history adds realized holdout evidence.`],
+    },
+    'leakage-causality': {
+      score: avg([governanceValidation, scoreOr(scores, ['integrity','provenance'], baseQuality), coreEvidenceHistory || undefined]),
+      confidence: validationState ? 75 : 20, evidence: validationState ? 1 : 0,
+      notes: ['Intentionally conservative: leakage protection requires backend point-in-time tests and cannot be inferred from a chart.'],
+    },
+    'robustness-sensitivity': {
+      score: avg([modelAgreement || undefined, modelDispersionQuality || undefined, modelHealthQuality || undefined, scenarioQuality || undefined, structuralQuality || undefined, analogueHit || undefined]),
+      confidence: sampleConfidence(forecasts.length + pairs.length + analogueSamples, 300), evidence: forecasts.length + pairs.length + analogueSamples,
+      notes: ['Uses ensemble agreement, model health, scenario stability, structural stability and realized analogues.'],
+    },
+    'regime-structural-break': {
+      score: avg([structuralQuality || undefined, transitionQuality || undefined, regimeStability || undefined]),
+      confidence: sampleConfidence(regimeSamples + pairs.length, 350), evidence: regimeSamples + pairs.length,
+      notes: ['Low transition probability, low pair transition risk and low structural break risk improve the score.'],
+    },
+    'evidence-strength': {
+      score: avg([coreEvidenceScore || undefined, pairQuality || undefined, evidenceCompleteness || undefined, sourceScore || undefined, sourceFreshness || undefined]),
+      confidence: sampleConfidence(evidenceAvailable + pairs.length + sources.length, 120), evidence: evidenceAvailable + pairs.length + sources.length,
+      notes: [`Decision-core evidence quality ${Math.round(coreEvidenceScore)}; advanced available evidence ${evidenceAvailable}; missing ${evidenceMissing}.`],
+    },
+    'evidence-independence': {
+      score: avg([pairIndependence || undefined, contradictionQuality, evidenceCompleteness || undefined, crossAvailable ? clamp((crossAvailable / Math.max(1, pairs.length)) * 100) : undefined, crossFactors ? clamp(crossFactors * 4) : undefined]),
+      confidence: sampleConfidence(pairs.length + crossFactors, 60), evidence: pairs.length + crossFactors,
+      notes: [`Pair evidence independence ${Math.round(pairIndependence)}%; independent cross-asset factors exposed ${crossFactors}.`],
+    },
+    'attribution-explainability': {
+      score: input.decisionQualityAttribution ? 94 : pairs.length ? 74 : 40,
+      confidence: input.decisionQualityAttribution ? 92 : 48, evidence: input.decisionQualityAttribution ? 1 : 0,
+      notes: ['Measures whether contribution, contradiction, counterfactual and decision-change information are exposed for audit.'],
+    },
+    'model-data-drift': {
+      score: avg([modelHealthQuality || undefined, structuralQuality || undefined, transitionQuality || undefined, regimeStability || undefined, sourceFreshness || undefined]),
+      confidence: sampleConfidence(regimeSamples + pairs.length + forecasts.length, 400), evidence: regimeSamples + pairs.length + forecasts.length,
+      notes: ['Uses model health, structural breaks, transition risk, regime stability and source freshness as live drift evidence.'],
+    },
+    'decision-quality-gating': {
+      score: avg([riskConfidence || undefined, riskQuality, governedConfidence || undefined, gatePassRate, evidenceCompleteness || undefined, pairQuality || undefined, structuralQuality || undefined]),
+      confidence: sampleConfidence(pairs.length + (input.risk?.categories?.length ?? 0), 40), evidence: pairs.length + (input.risk?.categories?.length ?? 0),
+      notes: [`Governance pass rate ${Math.round(gatePassRate)}%; governance vetoes ${governanceVetoes}; governed confidence ${Math.round(governedConfidence)}%.`],
+    },
+    'governance-reproducibility': {
+      score: avg([sloQuality || undefined, governanceValidation, baseQuality, gatePassRate || undefined]),
+      confidence: input.operatingStandards ? 87 : 30, evidence: (input.operatingStandards?.slos?.length ?? 0) + Object.keys(input.operatingStandards?.storageTiers ?? {}).length,
+      notes: ['Based on validation state, service-level objectives, retention controls and decision governance gates.'],
+    },
   };
 
   const families = QUALITY_FAMILIES.map((family) => {
@@ -278,7 +406,7 @@ export function deriveQualityFramework(input: QualityFrameworkInput): QualityFra
   const evidenceQuality = geometric(['evidence-strength','evidence-independence','attribution-explainability']);
   const robustnessQuality = geometric(['robustness-sensitivity','regime-structural-break','model-data-drift']);
   const governanceQuality = geometric(['decision-quality-gating','governance-reproducibility']);
-  const overall = Math.pow(Math.max(1, dataQuality) ** 0.25 * Math.max(1, calibrationQuality) ** 0.25 * Math.max(1, evidenceQuality) ** 0.25 * Math.max(1, robustnessQuality) ** 0.15 * Math.max(1, governanceQuality) ** 0.10, 1);
+  const overall = Math.max(1, dataQuality) ** 0.25 * Math.max(1, calibrationQuality) ** 0.25 * Math.max(1, evidenceQuality) ** 0.25 * Math.max(1, robustnessQuality) ** 0.15 * Math.max(1, governanceQuality) ** 0.10;
   const measuredFamilies = families.filter((family) => family.state === 'measured').length;
   const supportedFamilies = families.filter((family) => family.state === 'measured' || family.state === 'supported').length;
   const status: QualityFrameworkResult['status'] = overall >= 70 && calibrationQuality >= 55 && evidenceQuality >= 60 ? 'qualified' : overall >= 50 ? 'watch' : 'insufficient';
