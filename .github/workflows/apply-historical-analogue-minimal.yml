@@ -21,7 +21,7 @@ jobs:
         run: |
           set +e
           mkdir -p /tmp/analogue .github
-          python3 scripts/apply_historical_analogue_upgrade.py > /tmp/analogue/patch.log 2>&1
+          python3 scripts/apply_historical_analogue_v2.py > /tmp/analogue/patch.log 2>&1
           PATCH_RC=$?
           node --check cloud-run-collector/src/decision-intelligence-core.js > /tmp/analogue/core-check.log 2>&1
           CORE_RC=$?
@@ -44,7 +44,7 @@ jobs:
             cat /tmp/analogue/core-check.log
             echo '--- memory syntax output ---'
             cat /tmp/analogue/memory-check.log
-          } > .github/historical-analogue-diagnostic.txt
+          } > .github/historical-analogue-v2-diagnostic.txt
           echo "$PATCH_RC" > /tmp/analogue/patch.rc
           echo "$CORE_RC" > /tmp/analogue/core.rc
           echo "$MEMORY_RC" > /tmp/analogue/memory.rc
@@ -57,12 +57,12 @@ jobs:
           CONTRACT_RC=$(cat /tmp/analogue/contract.rc)
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/historical-analogue-diagnostic.txt
+          git add .github/historical-analogue-v2-diagnostic.txt
           if [ "$PATCH_RC" = 0 ] && [ "$CORE_RC" = 0 ] && [ "$MEMORY_RC" = 0 ] && [ "$CONTRACT_RC" = 0 ]; then
             git add cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/decision-memory.js
             MSG='Integrate historical analogue decision intelligence source'
           else
-            MSG='Record historical analogue integration diagnostic'
+            MSG='Record historical analogue v2 integration diagnostic'
           fi
           git commit -m "$MSG"
           git pull --rebase origin main
