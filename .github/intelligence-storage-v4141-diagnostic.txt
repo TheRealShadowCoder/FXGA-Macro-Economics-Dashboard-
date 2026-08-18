@@ -1,0 +1,42 @@
+generated_at=2026-08-18T04:54:13Z
+patch_storage_exit=0
+patch_cache_version_exit=0
+runtime_syntax_exit=0
+economist_syntax_exit=0
+contract_exit=0
+production_build_exit=0
+--- storage patch ---
+Large intelligence storage architecture applied to Firestore and Durable Object state.
+--- cache/version patch ---
+Durable Object hot cache, runtime version contract, and v4.14.1 metadata applied.
+--- runtime syntax ---
+--- economist syntax ---
+--- build tail ---
+
+> fxga-macro-intelligence-dashboard@0.3.2 build
+> npm run check:public-copy && tsc -b && vite build
+
+
+> fxga-macro-intelligence-dashboard@0.3.2 check:public-copy
+> node scripts/check-public-copy.mjs
+
+Public presentation quality gate passed across 11 user-facing modules.
+[36mvite v8.2.0 [32mbuilding fxga_macro_intelligence_dashboard environment for production...[36m[39m
+[2Ktransforming...✓ 5 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/fxga_macro_intelligence_dashboard/.vite/manifest.json   0.15 kB │ gzip: 0.11 kB
+dist/fxga_macro_intelligence_dashboard/wrangler.json         1.78 kB │ gzip: 0.92 kB
+dist/fxga_macro_intelligence_dashboard/index.js             34.04 kB │ gzip: 9.50 kB
+
+[32m✓ built in 34ms[39m
+[36mvite v8.2.0 [32mbuilding client environment for production...[36m[39m
+[2Ktransforming...✓ 62 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/client/.assetsignore                0.02 kB
+dist/client/index.html                   1.16 kB │ gzip:  0.51 kB
+dist/client/assets/index-DGIk0X-p.css   95.75 kB │ gzip: 17.76 kB
+dist/client/assets/index-BU3sdV7U.js   337.72 kB │ gzip: 96.51 kB
+
+[32m✓ built in 152ms[39m

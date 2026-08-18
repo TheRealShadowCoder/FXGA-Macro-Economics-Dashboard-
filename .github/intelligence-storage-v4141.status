@@ -1,12 +1,9 @@
-verified_at=2026-08-18T04:53:08Z
+verified_at=2026-08-18T04:54:13Z
 contract=v4.14.1-storage
 collector_version=4.14.1
 firestore_chunking=passed
-firestore_manifest_reassembly=passed
 cloudflare_intelligence_chunking=passed
 cloudflare_hot_cache=passed
 duplicate_research_objects_removed=passed
 runtime_version_sync=passed
-collector_check=passed
-dependency_audit=passed
 production_build=passed
