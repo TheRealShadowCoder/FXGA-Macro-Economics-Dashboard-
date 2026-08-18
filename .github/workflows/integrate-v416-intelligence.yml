@@ -1,0 +1,90 @@
+name: Integrate V4.16 Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-integrate-v416-intelligence.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply v4.16 integration
+        run: python3 scripts/apply_v416_intelligence.py
+      - name: Validate collector syntax and dependencies
+        run: |
+          cd cloud-run-collector
+          npm ci --ignore-scripts
+          npm run check
+          npm audit --audit-level=moderate
+      - name: Verify v4.16 model invariants
+        run: |
+          cd cloud-run-collector
+          node --input-type=module <<'NODE'
+          import { eventReactionCalibrationForPair } from './src/event-reaction-calibration.js';
+          import { buildPolicyPathResearch } from './src/policy-path-research.js';
+          import { buildDecisionQualityAttribution } from './src/decision-quality-attribution.js';
+          const now=new Date('2026-08-18T12:00:00Z');
+          const research={
+            eventReactionResearch:{global:{measurements:12,effectiveSamples:9,agreement:.40,reversalRisk:.55},byCurrency:{},byCategory:{},byCurrencyCategory:{'USD:inflation':{measurements:12,effectiveSamples:9,agreement:.40,reversalRisk:.55}}},
+            regimes:[{economy:'USA',family:'inflation',transitionProbability:.18},{economy:'USA',family:'policy',transitionProbability:.22}]
+          };
+          const event={event:'Consumer Price Index',category:'inflation',currency:'USD',actual:'3.4%',importance:3,date:new Date(now.getTime()-2*3600000).toISOString()};
+          const opportunity={symbol:'EURUSD',components:{releaseDivergence:-50}};
+          const calibration=eventReactionCalibrationForPair({symbol:'EURUSD',opportunity,events:[event],research,now});
+          if(!calibration.available)throw new Error('Event reaction calibration should be active');
+          if(!(calibration.factor<1&&calibration.factor>=.86))throw new Error(`Expected bounded confidence haircut, got ${calibration.factor}`);
+          const inactive=eventReactionCalibrationForPair({symbol:'EURUSD',opportunity:{symbol:'EURUSD',components:{releaseDivergence:0}},events:[event],research,now});
+          if(inactive.factor!==1)throw new Error('Zero release exposure must not change confidence');
+
+          const dims=(g,i,l,p,f)=>[{id:'growth',score:g},{id:'inflation',score:i},{id:'labour',score:l},{id:'policy',score:p},{id:'financial',score:f}];
+          const economies=[['USA','USD','Federal Reserve'],['EUROPE','EUR','ECB'],['UK','GBP','BoE'],['SOUTH_AFRICA','ZAR','SARB'],['JAPAN','JPY','BoJ']].map(([id,currency,centralBank],i)=>({id,currency,centralBank,policyStance:'balanced',confidence:82-i*2,observationCount:38-i,dimensions:dims(14-i,32+i*2,18+i,14+i,7)}));
+          const policy=buildPolicyPathResearch({economies},[],now);
+          if(policy.economies.length!==5)throw new Error('Policy tree must cover five central banks');
+          for(const row of policy.economies){
+            if(row.sequenceTree?.depth!==3||row.sequenceTree.decisionWindows?.length!==3)throw new Error(`${row.currency} policy tree depth invalid`);
+            for(const window of row.sequenceTree.decisionWindows){const sum=window.probabilities.hike+window.probabilities.hold+window.probabilities.cut;if(Math.abs(sum-1)>.002)throw new Error(`${row.currency} policy marginal does not sum to 1`);}
+            if(row.sequenceTree.topPaths.length<3)throw new Error(`${row.currency} top policy paths missing`);
+          }
+          const analogueLibrary={EURUSD:Array.from({length:12},(_,i)=>({direction:i%2?'SELL':'BUY',featureVector:{refinedScore:i%2?-55:55,directionalProbability:.55+i*.02,evidenceQuality:55+i*3,uncertainty:55-i*2,scenarioRobustness:50+i*3,contradictions:i%4,reactionGap:i%2?-30:30,crossAssetScore:i%2?-25:25,evidenceCompleteness:55+i*3,releaseDifferential:i%2?-20:20,revisionDifferential:i%2?-15:15,communicationGap:45-i*2,transitionRisk:50-i*2,structuralBreakRisk:40-i,independenceRatio:.55+i*.025,modelHealth:50+i*3,counterfactualShift:25+i*3,causalNet:i%2?-20:20,eventReactionFactor:.90+i*.01},outcomes:{h4:{signedBps:-12+i*3}}}))};
+          const attribution=buildDecisionQualityAttribution({analogueLibrary});
+          if(attribution.sampledRealizedStates!==12)throw new Error('Decision attribution sample count mismatch');
+          if(!attribution.global.features.find(x=>x.id==='eventReactionFactor'))throw new Error('Event reaction factor attribution missing');
+          if(attribution.global.features.some(x=>!Number.isFinite(x.shrunkAssociation)))throw new Error('Decision attribution produced invalid association');
+          console.log(JSON.stringify({calibration,policyBanks:policy.economies.length,attributionSamples:attribution.sampledRealizedStates},null,2));
+          NODE
+      - name: Verify confidence-only integration
+        run: |
+          grep -q "eventReactionFactor=Number(controls?.eventReactionCalibration?.factor||1)" cloud-run-collector/src/decision-intelligence-core.js
+          grep -q "eventReactionCalibration=eventReactionCalibrationForPair" cloud-run-collector/src/decision-intelligence-core.js
+          grep -q "releaseExposure × (regimeConditionedReactionReliability" cloud-run-collector/src/decision-intelligence-core.js
+          if grep -n "function refinedPairScore" cloud-run-collector/src/decision-intelligence-core.js | grep -q "eventReaction"; then
+            echo '::error::Event reaction calibration leaked into refined directional scoring'
+            exit 1
+          fi
+          grep -q "version:'1.5.0'" cloud-run-collector/src/decision-intelligence-core.js
+      - name: Verify production frontend build
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          npm install --progress=false
+          npm run build
+      - name: Commit integrated v4.16 source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/decision-memory.js cloud-run-collector/src/super-economist.js cloud-run-collector/package.json src/components/ResearchView.tsx src/components/AdvancedGovernancePanel.tsx
+          if git diff --cached --quiet; then echo 'No integration changes to commit.'; exit 0; fi
+          git commit -m 'Integrate v4.16 calibration and attribution intelligence'
+          git pull --rebase origin main
+          git push origin HEAD:main
