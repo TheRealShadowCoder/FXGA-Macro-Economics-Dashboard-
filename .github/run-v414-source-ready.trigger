@@ -1,2 +1,2 @@
-run=2026-08-18T05:57:00+02:00
-reason=Run the registered v4.14 source readiness workflow now that all intelligence layers and UI integrations are present on main.
+run=2026-08-18T14:23:00+02:00
+reason=Verify the complete current v4.14.1 intelligence stack after cross-asset, completeness, analogue memory and structural-break layers are present on main.
