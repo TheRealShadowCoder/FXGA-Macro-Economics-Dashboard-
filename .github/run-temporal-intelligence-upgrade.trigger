@@ -1,2 +1,2 @@
-run=2026-08-18T05:20:00+02:00
-reason=Add release sequence, revision direction, policy communication gap and catalyst decay governance without double-counting correlated evidence.
+run=2026-08-18T05:21:00+02:00
+reason=Run registered guarded temporal governance workflow for release sequences, revisions, policy communications and catalyst decay.
