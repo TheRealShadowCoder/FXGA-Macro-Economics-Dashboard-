@@ -1,0 +1,67 @@
+name: Verify V4.20 Official Policy Ensemble Live
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-v420-official-policy-ensemble-live.trigger'
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  SERVICE: fxga-macro-collector
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: service
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "$PROJECT_ID"
+          SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          test -n "$SERVICE_URL" || { echo '::error::Production collector missing'; exit 1; }
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+      - id: invoke
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service.outputs.url }}
+          id_token_include_email: true
+      - name: Verify private and public v4.20 official policy ensemble
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+          PUBLIC_BASE: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
+        run: node scripts/verify_v420_official_policy_ensemble.mjs
+      - name: Persist v4.20 official policy marker
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/intelligence-v420-official-policy-ensemble-live.status .github/intelligence-v420-official-policy-ensemble-live.json
+          if git diff --cached --quiet; then echo 'Marker unchanged.'; exit 0; fi
+          git commit -m 'Verify live v4.20 official five-bank policy ensemble'
+          git pull --rebase origin main
+          git push origin HEAD:main
