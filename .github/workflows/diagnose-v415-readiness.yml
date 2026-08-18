@@ -1,0 +1,44 @@
+name: Diagnose V4.15 Readiness
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-diagnose-v415-readiness.trigger'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Inspect latest readiness run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUNS=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/verify-v415-source-ready.yml/runs?per_page=5")
+          RUN_ID=$(echo "$RUNS" | jq -r '.workflow_runs[0].id // empty')
+          if [ -z "$RUN_ID" ]; then
+            echo '{"status":"no-run"}' > .github/v415-readiness-diagnostic.json
+            exit 0
+          fi
+          RUN=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
+          JOBS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100")
+          jq -n --argjson run "$RUN" --argjson jobs "$JOBS" '{generatedAt:(now|todate),run:{id:$run.id,status:$run.status,conclusion:$run.conclusion,html_url:$run.html_url,head_sha:$run.head_sha,run_number:$run.run_number},jobs:[$jobs.jobs[]|{id,name,status,conclusion,failedSteps:[.steps[]?|select(.conclusion=="failure")|{name,number,status,conclusion}]}]}' > .github/v415-readiness-diagnostic.json
+          cat .github/v415-readiness-diagnostic.json
+      - name: Persist diagnostic
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/v415-readiness-diagnostic.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Record v4.15 readiness diagnostic'
+          git pull --rebase origin main
+          git push origin HEAD:main
