@@ -1,0 +1,90 @@
+{
+  "generatedAt": "2026-08-18T15:08:27.211Z",
+  "private": {
+    "healthStatus": 200,
+    "version": "4.16.0",
+    "refreshStatus": 200,
+    "refreshChanged": true,
+    "webhook": {
+      "sent": true,
+      "status": 200
+    },
+    "stateStatus": 200,
+    "coreVersion": "1.5.0",
+    "pairs": {
+      "count": 8,
+      "withCalibration": 8,
+      "active": 8,
+      "minFactor": 0.9894,
+      "maxFactor": 0.9975,
+      "maxExposure": 0.55
+    },
+    "policy": {
+      "banks": 5,
+      "marketPricingAvailable": false,
+      "treeDepths": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "windowCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ]
+    },
+    "attributionSamples": 0,
+    "attributionMethodology": "Association attribution over prior frozen decision states with realized market outcomes. Directional features are oriented to the frozen trade direction; risk features are inverted so higher normalized values mean better modeled conditions."
+  },
+  "public": {
+    "researchStatus": 200,
+    "healthStatus": 200,
+    "collectorMode": null,
+    "coreVersion": "1.5.0",
+    "pairs": {
+      "count": 8,
+      "withCalibration": 8,
+      "active": 8,
+      "minFactor": 0.9894,
+      "maxFactor": 0.9975,
+      "maxExposure": 0.55
+    },
+    "policy": {
+      "banks": 5,
+      "marketPricingAvailable": false,
+      "treeDepths": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "windowCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ]
+    },
+    "attributionSamples": 0,
+    "attributionMethodology": "Association attribution over prior frozen decision states with realized market outcomes. Directional features are oriented to the frozen trade direction; risk features are inverted so higher normalized values mean better modeled conditions.",
+    "safety": {
+      "workerSubrequestCeiling": 0,
+      "collectorMaxConcurrentConnections": 0,
+      "browserSoftBudgetSecondsPerUtcDay": 0,
+      "browserSessionReuse": false,
+      "releaseMode": "scheduled release capture -> authenticated live update",
+      "normalStateUpstreamCalendarRequests": 0,
+      "normalStateUpstreamFredRequests": 0,
+      "normalStateUpstreamNewsRequests": 0,
+      "normalStateUpstreamMarketRequests": 0,
+      "releaseWindowPrimary": "primary data service",
+      "applicationEdgeRole": "receive authenticated updates, persist state, serve API/UI and live channel"
+    }
+  }
+}
