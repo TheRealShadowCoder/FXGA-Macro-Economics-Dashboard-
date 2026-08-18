@@ -1,0 +1,8 @@
+{
+  "generatedAt": "2026-08-18T04:48:22.559Z",
+  "httpStatus": 500,
+  "ok": false,
+  "error": "3 INVALID_ARGUMENT: Document 'projects/fxglobalavengerstradingacademy/databases/(default)/documents/fxga_collector_state/intelligence' cannot be written because its size (5,878,825 bytes) exceeds the maximum allowed size of 1,048,576 bytes.",
+  "response": null,
+  "raw": null
+}
