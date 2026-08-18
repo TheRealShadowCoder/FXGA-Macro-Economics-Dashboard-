@@ -21,7 +21,7 @@ jobs:
         run: |
           set +e
           mkdir -p /tmp/structural .github
-          python3 scripts/apply_structural_break_upgrade.py > /tmp/structural/patch.log 2>&1
+          python3 scripts/apply_structural_break_v2.py > /tmp/structural/patch.log 2>&1
           PATCH_RC=$?
           node --check cloud-run-collector/src/institutional-research.js > /tmp/structural/research-check.log 2>&1
           RESEARCH_RC=$?
@@ -30,7 +30,9 @@ jobs:
           grep -q 'function buildStructuralBreaks' cloud-run-collector/src/institutional-research.js; G1=$?
           grep -q 'function structuralBreakControls' cloud-run-collector/src/decision-intelligence-core.js; G2=$?
           grep -q 'structuralBreak:g.structuralBreak' cloud-run-collector/src/decision-intelligence-core.js; G3=$?
-          CONTRACT_RC=$(( G1 || G2 || G3 ))
+          grep -q "id:'structural-stability'" cloud-run-collector/src/decision-intelligence-core.js; G4=$?
+          grep -q 'structuralBreakRisk' cloud-run-collector/src/decision-intelligence-core.js; G5=$?
+          CONTRACT_RC=$(( G1 || G2 || G3 || G4 || G5 ))
           {
             echo "generated_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
             echo "patch_exit=$PATCH_RC"
@@ -43,7 +45,7 @@ jobs:
             cat /tmp/structural/research-check.log
             echo '--- core syntax output ---'
             cat /tmp/structural/core-check.log
-          } > .github/structural-break-diagnostic.txt
+          } > .github/structural-break-v2-diagnostic.txt
           echo "$PATCH_RC" > /tmp/structural/patch.rc
           echo "$RESEARCH_RC" > /tmp/structural/research.rc
           echo "$CORE_RC" > /tmp/structural/core.rc
@@ -56,12 +58,12 @@ jobs:
           CONTRACT_RC=$(cat /tmp/structural/contract.rc)
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/structural-break-diagnostic.txt
+          git add .github/structural-break-v2-diagnostic.txt
           if [ "$PATCH_RC" = 0 ] && [ "$RESEARCH_RC" = 0 ] && [ "$CORE_RC" = 0 ] && [ "$CONTRACT_RC" = 0 ]; then
             git add cloud-run-collector/src/institutional-research.js cloud-run-collector/src/decision-intelligence-core.js
             MSG='Integrate structural break regime-shift source'
           else
-            MSG='Record structural break integration diagnostic'
+            MSG='Record structural break v2 integration diagnostic'
           fi
           git commit -m "$MSG"
           git pull --rebase origin main
