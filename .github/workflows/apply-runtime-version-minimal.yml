@@ -1,0 +1,49 @@
+name: Apply Runtime Version Source Minimal
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-runtime-version-minimal.trigger'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply runtime version contract
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_runtime_version_contract.py
+          node --check cloud-run-collector/src/super-runtime.js
+          grep -q "const SERVICE_VERSION=" cloud-run-collector/src/super-runtime.js
+          grep -q "version:SERVICE_VERSION" cloud-run-collector/src/super-runtime.js
+          grep -q "run-verify-v414-live.trigger" .github/workflows/verify-intelligence-v414-live.yml
+          grep -q "major===4&&minor<14" .github/workflows/verify-intelligence-v414-live.yml
+      - name: Commit runtime version contract
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/super-runtime.js .github/workflows/verify-intelligence-v414-live.yml
+          if git diff --cached --quiet; then
+            echo 'Runtime version source already synchronized.'
+          else
+            git commit -m 'Synchronize runtime health with v4.14 release'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+      - name: Dispatch collector deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-cloud-run-collector.yml --ref main
