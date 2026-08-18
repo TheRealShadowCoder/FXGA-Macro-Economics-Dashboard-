@@ -142,6 +142,10 @@ async function reserve(provider, { cost=1, taskKey='', ttlMs=0 } = {}) {
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const data = snap.exists ? snap.data() : {};
+    const cooldownUntil = Date.parse(data?.cooldownUntil || '');
+    if (Number.isFinite(cooldownUntil) && cooldownUntil > now.getTime()) {
+      return { ok:false, reason:'provider-cooldown', cooldownUntil:data.cooldownUntil };
+    }
     const tasks = data?.tasks && typeof data.tasks === 'object' ? { ...data.tasks } : {};
     if (taskKey && ttlMs > 0) {
       const last = Date.parse(tasks[taskKey]?.lastSuccessAt || '');
@@ -165,7 +169,8 @@ async function reserve(provider, { cost=1, taskKey='', ttlMs=0 } = {}) {
     for (const kind of ['second','minute','day','month']) {
       if (Number.isFinite(Number(policy.enforced?.[kind]))) buckets[kind].used += amount;
     }
-    const next = {
+    tx.set(ref, {
+      ...data,
       provider,
       label:policy.label,
       policyVersion:1,
@@ -176,6 +181,7 @@ async function reserve(provider, { cost=1, taskKey='', ttlMs=0 } = {}) {
       successes:Number(data?.successes || 0),
       failures:Number(data?.failures || 0),
       rateLimited:Number(data?.rateLimited || 0),
+      authorizationFailures:Number(data?.authorizationFailures || 0),
       lastAttemptAt:now.toISOString(),
       lastSuccessAt:data?.lastSuccessAt || null,
       lastFailureAt:data?.lastFailureAt || null,
@@ -183,12 +189,7 @@ async function reserve(provider, { cost=1, taskKey='', ttlMs=0 } = {}) {
       lastError:data?.lastError || null,
       cooldownUntil:data?.cooldownUntil || null,
       tasks,
-    };
-    const cooldownUntil = Date.parse(next.cooldownUntil || '');
-    if (Number.isFinite(cooldownUntil) && cooldownUntil > now.getTime()) {
-      return { ok:false, reason:'provider-cooldown', cooldownUntil:next.cooldownUntil };
-    }
-    tx.set(ref, next, { merge:false });
+    }, { merge:false });
     return { ok:true, provider, cost:amount, rolling30dBytes:rollingBytes };
   });
 }
@@ -213,7 +214,8 @@ async function recordResult(provider, { ok, status=null, bytes=0, error='', task
       };
     }
     const wasRateLimited = Number(status) === 429 || /rate.?limit|too many|10028|10006/i.test(String(error || ''));
-    const cooldownMs = wasRateLimited ? 15 * 60_000 : 0;
+    const authorizationFailure = [401,403].includes(Number(status)) || /invalid api key|api key invalid|unauthori|forbidden|not entitled|subscription/i.test(String(error || ''));
+    const cooldownMs = wasRateLimited ? 15 * 60_000 : authorizationFailure ? 6 * 3_600_000 : 0;
     tx.set(ref, {
       ...data,
       provider,
@@ -224,11 +226,12 @@ async function recordResult(provider, { ok, status=null, bytes=0, error='', task
       successes:Number(data?.successes || 0) + (ok ? 1 : 0),
       failures:Number(data?.failures || 0) + (ok ? 0 : 1),
       rateLimited:Number(data?.rateLimited || 0) + (wasRateLimited ? 1 : 0),
+      authorizationFailures:Number(data?.authorizationFailures || 0) + (authorizationFailure ? 1 : 0),
       lastStatus:status,
       lastError:ok ? null : String(error || `HTTP ${status || 'error'}`).slice(0,240),
       lastSuccessAt:ok ? now.toISOString() : (data?.lastSuccessAt || null),
       lastFailureAt:ok ? (data?.lastFailureAt || null) : now.toISOString(),
-      cooldownUntil:cooldownMs ? new Date(now.getTime() + cooldownMs).toISOString() : (data?.cooldownUntil || null),
+      cooldownUntil:cooldownMs ? new Date(now.getTime() + cooldownMs).toISOString() : (ok ? null : (data?.cooldownUntil || null)),
     }, { merge:false });
   });
 }
@@ -305,6 +308,7 @@ export async function freeTierBudgetStatus() {
       lastStatus:data?.lastStatus ?? null,
       cooldownUntil:data?.cooldownUntil || null,
       rateLimited:Number(data?.rateLimited || 0),
+      authorizationFailures:Number(data?.authorizationFailures || 0),
     };
   }
   return { generatedAt:new Date().toISOString(), policy:'hard local budgets below provider free-tier ceilings', providers:result };
