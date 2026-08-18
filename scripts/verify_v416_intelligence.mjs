@@ -74,9 +74,10 @@ async function verifyPrivate(){
     try{
       const refreshed=await privateCall('/refresh-intelligence','POST',{forceNews:false});
       const state=await privateCall('/state'),intel=state?.intelligence?.payload,research=intel?.research,core=intel?.decisionGovernance,coreCheck=validateCore(core),researchMissing=validateResearch(research),missing=[...coreCheck.missing,...researchMissing];
-      console.log(`private contract attempt ${attempt}: pairs=${coreCheck.pairs.length} activeCalibrations=${coreCheck.active} attribution=${research?.decisionQualityAttribution?.sampledRealizedStates??'missing'} missing=${missing.length} webhook=${refreshed?.webhook?.sent}`);
-      if(!missing.length&&refreshed?.webhook?.sent===true)return {verifiedAt:new Date().toISOString(),reportedHealthVersion:String(health.version),decisionCoreVersion:core.version,pairs:coreCheck.pairs.length,activeCalibrations:coreCheck.active,minFactor:coreCheck.minFactor,maxFactor:coreCheck.maxFactor,maxReleaseExposure:coreCheck.maxExposure,attributionSamples:Number(research.decisionQualityAttribution.sampledRealizedStates||0),policyBanks:research.policyPathResearch.economies.length,policyCurrencies:research.policyPathResearch.economies.map(x=>x.currency),policyTreeDepth:3,marketPricingAvailable:research.policyPathResearch.marketPricingAvailable,webhookStatus:refreshed.webhook.status??null};
-      last=new Error(`Private v4.16 contract missing: ${missing.join(', ')}; webhook sent=${refreshed?.webhook?.sent}`);
+      const webhookOk=refreshed?.changed===false||refreshed?.webhook?.sent===true;
+      console.log(`private contract attempt ${attempt}: pairs=${coreCheck.pairs.length} activeCalibrations=${coreCheck.active} attribution=${research?.decisionQualityAttribution?.sampledRealizedStates??'missing'} missing=${missing.length} changed=${refreshed?.changed} webhook=${refreshed?.webhook?.sent}`);
+      if(!missing.length&&webhookOk)return {verifiedAt:new Date().toISOString(),reportedHealthVersion:String(health.version),decisionCoreVersion:core.version,pairs:coreCheck.pairs.length,activeCalibrations:coreCheck.active,minFactor:coreCheck.minFactor,maxFactor:coreCheck.maxFactor,maxReleaseExposure:coreCheck.maxExposure,attributionSamples:Number(research.decisionQualityAttribution.sampledRealizedStates||0),policyBanks:research.policyPathResearch.economies.length,policyCurrencies:research.policyPathResearch.economies.map(x=>x.currency),policyTreeDepth:3,marketPricingAvailable:research.policyPathResearch.marketPricingAvailable,refreshChanged:Boolean(refreshed?.changed),webhookStatus:refreshed?.changed?refreshed?.webhook?.status??null:'unchanged'};
+      last=new Error(`Private v4.16 contract missing: ${missing.join(', ')}; changed=${refreshed?.changed}; webhook sent=${refreshed?.webhook?.sent}`);
     }catch(error){last=error;console.log(`private contract attempt ${attempt}: ${error.message}`);}await sleep(5000);
   }
   throw last||new Error('Private v4.16 contract did not become ready');
@@ -86,10 +87,10 @@ async function verifyPublic(report){
   for(let attempt=1;attempt<=48;attempt++){
     try{
       const [research,health]=await Promise.all([publicCall('/api/research'),publicCall('/api/health')]);
-      const coreCheck=validateCore(research?.decisionCore),researchMissing=validateResearch(research),missing=[...coreCheck.missing,...researchMissing];
-      if(health?.collectorMode!=='google-cloud-run-webhook')missing.push('public-health.collectorMode');
-      const safety=health?.safety||{};
+      const coreCheck=validateCore(research?.decisionCore),researchMissing=validateResearch(research),missing=[...coreCheck.missing,...researchMissing],safety=health?.safety||{};
       for(const key of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests'])if(Number(safety[key]??-1)!==0)missing.push(`public-health.${key}`);
+      if(Number(safety.workerSubrequestCeiling??-1)!==0)missing.push('public-health.workerSubrequestCeiling');
+      if(!String(safety.applicationEdgeRole||'').includes('receive authenticated updates'))missing.push('public-health.applicationEdgeRole');
       console.log(`public attempt ${attempt}: pairs=${coreCheck.pairs.length} activeCalibrations=${coreCheck.active} attribution=${research?.decisionQualityAttribution?.sampledRealizedStates??'missing'} missing=${missing.length}`);
       if(!missing.length)return {...report,publicContract:{passed:true,pairs:coreCheck.pairs.length,activeCalibrations:coreCheck.active,attributionSamples:Number(research.decisionQualityAttribution.sampledRealizedStates||0),policyBanks:research.policyPathResearch.economies.length,passiveEdge:true}};
       last=new Error(`Public v4.16 contract missing: ${missing.join(', ')}`);
@@ -114,6 +115,7 @@ const lines=[
   `policy_currencies=${report.policyCurrencies.join(',')}`,
   `policy_tree_depth=${report.policyTreeDepth}`,
   `market_pricing_available=${report.marketPricingAvailable}`,
+  `refresh_changed=${report.refreshChanged}`,
   `webhook_status=${report.webhookStatus}`,
   `passive_edge=${report.publicContract.passiveEdge}`,
   'public_contract=passed'
