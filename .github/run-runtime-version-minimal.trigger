@@ -1,2 +1,2 @@
-run=2026-08-18T07:36:00+02:00
-reason=Apply runtime health version synchronization and live-verifier semantic version fallback using minimal source checks, then redeploy the collector.
+run=2026-08-18T07:37:00+02:00
+reason=Run the registered minimal runtime-version source integration on current main, then redeploy Cloud Run explicitly.
