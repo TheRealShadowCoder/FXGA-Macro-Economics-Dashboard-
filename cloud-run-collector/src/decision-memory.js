@@ -53,11 +53,13 @@ export async function recordDecisionMemory(engine,marketData=[]){
   }
   return {recorded,skipped,total:pairs.length};
 }
-async function closestSnapshot(targetMs,toleranceMs,symbol){
-  const from=new Date(targetMs-toleranceMs).toISOString(),to=new Date(targetMs+toleranceMs).toISOString();
-  const snap=await marketSnapshots.where('capturedAt','>=',from).where('capturedAt','<=',to).orderBy('capturedAt','asc').limit(20).get();
+async function loadMarketHistory(limit=260){
+  const snap=await marketSnapshots.orderBy('capturedAt','desc').limit(Math.min(400,Math.max(50,limit))).get();
+  return snap.docs.map(doc=>doc.data()).filter(data=>Number.isFinite(Date.parse(data?.capturedAt||'')));
+}
+function closestSnapshot(history,targetMs,toleranceMs,symbol){
   let best=null;
-  for(const doc of snap.docs){const data=doc.data(),time=Date.parse(data?.capturedAt||'');if(!Number.isFinite(time))continue;const price=derivedPrice(symbol,data?.assets||[]);if(!price||price.stale)continue;const distance=Math.abs(time-targetMs);if(!best||distance<best.distance)best={capturedAt:data.capturedAt,price:price.price,derived:price.derived,sources:price.sources,distance};}
+  for(const data of history){const time=Date.parse(data?.capturedAt||'');if(!Number.isFinite(time)||Math.abs(time-targetMs)>toleranceMs)continue;const price=derivedPrice(symbol,data?.assets||[]);if(!price||price.stale)continue;const distance=Math.abs(time-targetMs);if(!best||distance<best.distance)best={capturedAt:data.capturedAt,price:price.price,derived:price.derived,sources:price.sources,distance};}
   return best;
 }
 function scoreOutcome(document,horizon,point){
@@ -75,8 +77,8 @@ async function summarizeDecisionMemory(){
   await state.doc('decision-memory-summary').set({hash:hash(JSON.stringify(summary)),updatedAt:summary.generatedAt,payload:summary},{merge:false});return summary;
 }
 export async function evaluateDecisionMemory({limit=80}={}){
-  const pending=await memory.where('complete','==',false).limit(Math.min(150,Math.max(1,limit))).get(),now=Date.now();let evaluatedHorizons=0,completed=0,expired=0;
-  for(const doc of pending.docs){const data=doc.data(),decisionMs=Date.parse(data.decisionAt||'');if(!Number.isFinite(decisionMs)){await doc.ref.set({complete:true,evaluationStatus:'invalid-decision-time'},{merge:true});continue;}const outcomes={...(data.outcomes||{})};for(const horizon of HORIZONS){if(outcomes[horizon.id])continue;const targetMs=decisionMs+horizon.ms;if(now<targetMs+horizon.toleranceMs)continue;const point=await closestSnapshot(targetMs,horizon.toleranceMs,data.symbol);if(point){const scored=scoreOutcome(data,horizon,point);if(scored){outcomes[horizon.id]=scored;evaluatedHorizons++;}}}const all=HORIZONS.every(h=>Boolean(outcomes[h.id])),tooOld=now>decisionMs+72*3600000;const complete=all||tooOld;if(complete){completed++;if(!all)expired++;}await doc.ref.set({outcomes,complete,evaluationStatus:all?'complete':tooOld?'expired-missing-horizons':'pending',lastEvaluatedAt:new Date().toISOString()},{merge:true});}
+  const [pending,history]=await Promise.all([memory.where('complete','==',false).limit(Math.min(120,Math.max(1,limit))).get(),loadMarketHistory()]),now=Date.now();let evaluatedHorizons=0,completed=0,expired=0;
+  for(const doc of pending.docs){const data=doc.data(),decisionMs=Date.parse(data.decisionAt||'');if(!Number.isFinite(decisionMs)){await doc.ref.set({complete:true,evaluationStatus:'invalid-decision-time'},{merge:true});continue;}const outcomes={...(data.outcomes||{})};for(const horizon of HORIZONS){if(outcomes[horizon.id])continue;const targetMs=decisionMs+horizon.ms;if(now<targetMs+horizon.toleranceMs)continue;const point=closestSnapshot(history,targetMs,horizon.toleranceMs,data.symbol);if(point){const scored=scoreOutcome(data,horizon,point);if(scored){outcomes[horizon.id]=scored;evaluatedHorizons++;}}}const all=HORIZONS.every(h=>Boolean(outcomes[h.id])),tooOld=now>decisionMs+72*3600000;const complete=all||tooOld;if(complete){completed++;if(!all)expired++;}await doc.ref.set({outcomes,complete,evaluationStatus:all?'complete':tooOld?'expired-missing-horizons':'pending',lastEvaluatedAt:new Date().toISOString()},{merge:true});}
   const summary=await summarizeDecisionMemory();return {evaluatedHorizons,completed,expired,summary};
 }
 export async function readDecisionMemorySummary(){const snap=await state.doc('decision-memory-summary').get();return snap.exists?snap.data()?.payload||null:null;}
