@@ -1,0 +1,60 @@
+name: Apply Reaction Function Gap Intelligence V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-reaction-function-gap-v2.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply robust reaction function gap patch
+        run: python3 scripts/apply_reaction_function_gap_upgrade_v2.py
+      - name: Validate policy repricing governance
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
+          const dims=(growth,inflation,labour,policy,financial)=>[{id:'growth',score:growth},{id:'inflation',score:inflation},{id:'labour',score:labour},{id:'policy',score:policy},{id:'financial',score:financial}];
+          const economies=[{id:'EUROPE',currency:'EUR',centralBank:'ECB',dimensions:dims(28,52,35,8,20)},{id:'USA',currency:'USD',centralBank:'Federal Reserve',dimensions:dims(10,12,5,30,8)}];
+          const history=Array.from({length:20},(_,i)=>({date:new Date(Date.now()-(20-i)*86400000).toISOString(),value:100+i*.2}));
+          const observations=[{seriesId:'RFG',title:'Policy gap test',value:104,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',economy:'EUROPE',categories:['inflation'],history}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:42,confidence:82,conviction:74,risk:'normal',components:{structuralDivergence:45,policyDivergence:25,releaseDivergence:20,narrativeDivergence:10},probabilities:{buy:.66,sell:.13,wait:.21}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const research={dataQuality:{overall:95},risk:{aggregate:8},modelHealth:{score:94,status:'healthy',calibratedForecasts:10},evidenceIndependence:{independenceRatio:1,economies:[]},turningPoints:{economies:[]},catalystSequence:{currencies:[]},scenarios:[{label:'Base',pairs:[{symbol:'EURUSD',direction:'BUY',score:35}]}]};
+          const core=buildDecisionIntelligenceCore({economies,decision:primary,observations,events:[],news:[],marketData:[],research,decisionMemory:null});
+          const pair=core.pairDecisions[0],gap=pair?.reactionFunctionGap;
+          if(!gap)throw new Error('Reaction function gap missing');
+          if(!Number.isFinite(gap.differential))throw new Error('Reaction differential invalid');
+          if(!gap.base?.available||!gap.quote?.available)throw new Error('Economy reaction functions unavailable');
+          if(gap.base.status!=='hawkish-repricing-risk')throw new Error(`Expected EUR hawkish repricing risk, got ${gap.base.status}`);
+          const governed=governDecisionMatrix(primary,core);
+          if(!governed.rankedOpportunities[0]?.decisionCore?.reactionFunctionGap)throw new Error('Reaction gap lost in governed matrix');
+          console.log(JSON.stringify({gap,final:pair.final},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit reaction function intelligence
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add central-bank reaction function gap intelligence'
+          git pull --rebase origin main
+          git push origin HEAD:main
