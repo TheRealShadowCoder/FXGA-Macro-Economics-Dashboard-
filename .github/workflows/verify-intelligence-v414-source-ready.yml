@@ -1,0 +1,102 @@
+name: Verify Intelligence V4.14 Source Ready
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-v414-source-ready.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Require complete v4.14 intelligence source contract
+        run: |
+          set -euo pipefail
+          CORE='cloud-run-collector/src/decision-intelligence-core.js'
+          RESEARCH='cloud-run-collector/src/institutional-research.js'
+          MEMORY='cloud-run-collector/src/decision-memory.js'
+
+          for symbol in \
+            'function reactionFunctionGapForPair' \
+            'function crossAssetConfirmation' \
+            'function evidenceCompletenessControls' \
+            'function historicalAnalogueControls' \
+            'function horizonCalibrationControls' \
+            'function decisionChangeControls' \
+            'function structuralBreakControls' \
+            'function evidenceIndependenceControls' \
+            'function transitionRiskControls' \
+            'function triangleConsistency' \
+            'function portfolioInteraction'; do
+            grep -q "$symbol" "$CORE" || { echo "::error::Missing core contract: $symbol"; exit 1; }
+          done
+
+          for symbol in \
+            'function buildEvidenceIndependence' \
+            'function buildStructuralBreaks' \
+            'function buildTurningPoints' \
+            'function buildCatalystSequence' \
+            'ensembleResiduals' \
+            'residualQuantiles' \
+            'persistence'; do
+            grep -q "$symbol" "$RESEARCH" || { echo "::error::Missing research contract: $symbol"; exit 1; }
+          done
+
+          for symbol in 'featureVector' 'analogueLibrary' 'decisionChanges'; do
+            grep -q "$symbol" "$MEMORY" || { echo "::error::Missing decision-memory contract: $symbol"; exit 1; }
+          done
+
+      - name: Validate collector syntax and dependency security
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          npm audit --audit-level=moderate
+
+      - name: Validate production frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Persist source readiness marker
+        run: |
+          mkdir -p .github
+          cat > .github/intelligence-v414-source-ready.status <<EOF
+          verified_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          contract=v4.14-source
+          reaction_function_gap=present
+          cross_asset_confirmation=present
+          evidence_completeness=present
+          historical_analogues=present
+          horizon_calibration=present
+          decision_change_memory=present
+          structural_breaks=present
+          evidence_independence=present
+          turning_points=present
+          distributional_forecasts=present
+          surprise_persistence=present
+          catalyst_sequencing=present
+          cross_pair_consistency=present
+          portfolio_governance=present
+          backend_check=passed
+          dependency_audit=passed
+          frontend_build=passed
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/intelligence-v414-source-ready.status
+          git commit -m 'Verify v4.14 intelligence source readiness'
+          git pull --rebase origin main
+          git push origin HEAD:main
