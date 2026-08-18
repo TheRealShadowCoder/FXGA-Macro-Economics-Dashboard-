@@ -1,0 +1,91 @@
+{
+  "generatedAt": "2026-08-18T15:09:36.440Z",
+  "researchStatus": 200,
+  "healthStatus": 200,
+  "collectorMode": null,
+  "coreVersion": "1.5.0",
+  "pairCount": 8,
+  "withCalibration": 8,
+  "activeCalibrations": 8,
+  "factors": [
+    {
+      "symbol": "EURZAR",
+      "factor": 0.9899,
+      "exposure": 0.55,
+      "status": "low-follow-through"
+    },
+    {
+      "symbol": "EURUSD",
+      "factor": 0.9899,
+      "exposure": 0.55,
+      "status": "reversal-risk"
+    },
+    {
+      "symbol": "GBPUSD",
+      "factor": 0.995,
+      "exposure": 0.32,
+      "status": "reversal-risk"
+    },
+    {
+      "symbol": "EURGBP",
+      "factor": 0.9927,
+      "exposure": 0.55,
+      "status": "low-follow-through"
+    },
+    {
+      "symbol": "GBPZAR",
+      "factor": 0.9975,
+      "exposure": 0.21,
+      "status": "low-follow-through"
+    },
+    {
+      "symbol": "XAUUSD",
+      "factor": 0.9903,
+      "exposure": 0.53,
+      "status": "reversal-risk"
+    },
+    {
+      "symbol": "USDZAR",
+      "factor": 0.9903,
+      "exposure": 0.53,
+      "status": "reversal-risk"
+    },
+    {
+      "symbol": "USDJPY",
+      "factor": 0.9894,
+      "exposure": 0.53,
+      "status": "reversal-risk"
+    }
+  ],
+  "policyBanks": 5,
+  "policyTreeDepths": [
+    3,
+    3,
+    3,
+    3,
+    3
+  ],
+  "policyWindowCounts": [
+    3,
+    3,
+    3,
+    3,
+    3
+  ],
+  "marketPricingAvailable": false,
+  "attributionSamples": 0,
+  "attributionMethodology": "Association attribution over prior frozen decision states with realized market outcomes. Directional features are oriented to the frozen trade direction; risk features are inverted so higher normalized values mean better modeled conditions. Pearson association",
+  "safety": {
+    "workerSubrequestCeiling": 0,
+    "collectorMaxConcurrentConnections": 0,
+    "browserSoftBudgetSecondsPerUtcDay": 0,
+    "browserSessionReuse": false,
+    "releaseMode": "scheduled release capture -> authenticated live update",
+    "normalStateUpstreamCalendarRequests": 0,
+    "normalStateUpstreamFredRequests": 0,
+    "normalStateUpstreamNewsRequests": 0,
+    "normalStateUpstreamMarketRequests": 0,
+    "releaseWindowPrimary": "primary data service",
+    "applicationEdgeRole": "receive authenticated updates, persist state, serve API/UI and live channel"
+  }
+}
