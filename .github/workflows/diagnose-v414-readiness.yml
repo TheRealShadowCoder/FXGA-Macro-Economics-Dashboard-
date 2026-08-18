@@ -1,0 +1,102 @@
+name: Diagnose V4.14 Readiness
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-diagnose-v414-readiness.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Inspect source contracts and builds
+        run: |
+          set +e
+          CORE='cloud-run-collector/src/decision-intelligence-core.js'
+          RESEARCH='cloud-run-collector/src/institutional-research.js'
+          MEMORY='cloud-run-collector/src/decision-memory.js'
+          mkdir -p /tmp/v414
+
+          : > /tmp/v414/missing.txt
+          for symbol in \
+            'function reactionFunctionGapForPair' \
+            'function crossAssetConfirmation' \
+            'function evidenceCompletenessControls' \
+            'function historicalAnalogueControls' \
+            'function horizonCalibrationControls' \
+            'function decisionChangeControls' \
+            'function structuralBreakControls' \
+            'function evidenceIndependenceControls' \
+            'function transitionRiskControls' \
+            'function triangleConsistency' \
+            'function portfolioInteraction'; do
+            grep -q "$symbol" "$CORE" || echo "core:$symbol" >> /tmp/v414/missing.txt
+          done
+          for symbol in \
+            'function buildEvidenceIndependence' \
+            'function buildStructuralBreaks' \
+            'function buildTurningPoints' \
+            'function buildCatalystSequence' \
+            'ensembleResiduals' \
+            'residualQuantiles' \
+            'persistence'; do
+            grep -q "$symbol" "$RESEARCH" || echo "research:$symbol" >> /tmp/v414/missing.txt
+          done
+          for symbol in 'featureVector' 'analogueLibrary' 'decisionChanges'; do
+            grep -q "$symbol" "$MEMORY" || echo "memory:$symbol" >> /tmp/v414/missing.txt
+          done
+
+          pushd cloud-run-collector >/dev/null
+          npm install --ignore-scripts >/tmp/v414/collector-install.log 2>&1
+          echo $? > /tmp/v414/collector_install_exit
+          npm run check >/tmp/v414/collector-check.log 2>&1
+          echo $? > /tmp/v414/collector_check_exit
+          npm audit --json >/tmp/v414/audit.json 2>/tmp/v414/audit.err
+          echo $? > /tmp/v414/audit_exit
+          popd >/dev/null
+
+          npm install >/tmp/v414/root-install.log 2>&1
+          echo $? > /tmp/v414/root_install_exit
+          npm run build >/tmp/v414/frontend-build.log 2>&1
+          echo $? > /tmp/v414/frontend_build_exit
+
+          node <<'NODE'
+          const fs=require('fs');
+          const readInt=p=>Number(fs.readFileSync(p,'utf8').trim()||0);
+          const missing=fs.readFileSync('/tmp/v414/missing.txt','utf8').split('\n').map(x=>x.trim()).filter(Boolean);
+          let audit={};try{audit=JSON.parse(fs.readFileSync('/tmp/v414/audit.json','utf8'));}catch{}
+          const vul=audit?.metadata?.vulnerabilities||{};
+          const report={
+            generatedAt:new Date().toISOString(),
+            missingContracts:missing,
+            sourceContractsPassed:missing.length===0,
+            collectorInstallExit:readInt('/tmp/v414/collector_install_exit'),
+            collectorCheckExit:readInt('/tmp/v414/collector_check_exit'),
+            auditExit:readInt('/tmp/v414/audit_exit'),
+            vulnerabilities:vul,
+            rootInstallExit:readInt('/tmp/v414/root_install_exit'),
+            frontendBuildExit:readInt('/tmp/v414/frontend_build_exit'),
+          };
+          report.ready=report.sourceContractsPassed&&report.collectorInstallExit===0&&report.collectorCheckExit===0&&report.auditExit===0&&report.rootInstallExit===0&&report.frontendBuildExit===0;
+          fs.writeFileSync('.github/v414-readiness-diagnostic.json',JSON.stringify(report,null,2)+'\n');
+          console.log(JSON.stringify(report,null,2));
+          NODE
+      - name: Persist diagnostic
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/v414-readiness-diagnostic.json
+          git commit -m 'Record v4.14 readiness diagnostic'
+          git pull --rebase origin main
+          git push origin HEAD:main
