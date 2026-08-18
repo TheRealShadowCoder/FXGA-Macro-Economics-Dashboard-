@@ -8,6 +8,8 @@ import { TransitionResearchPanel } from './TransitionResearchPanel';
 import { PolicyEventResearchPanel } from './PolicyEventResearchPanel';
 import { DecisionAttributionPanel, type DecisionQualityAttribution } from './DecisionAttributionPanel';
 import { PolicyCalibrationPanel, type PolicyCalibrationResearch } from './PolicyCalibrationPanel';
+import { QualityCalibrationEvidencePanel } from './QualityCalibrationEvidencePanel';
+import type { QualityFrameworkInput } from '../lib/quality-framework';
 
 type RiskCategory={id:string;score:number;severity:string;confidenceHaircut:number;warning:boolean;stressMultiplier:number};
 type Scenario={id:string;label:string;confidenceChange:number;currencies:Record<string,number>;pairs:Array<{symbol:string;score:number;direction:'BUY'|'SELL'|'WAIT'}>;assets:Record<string,number>};
@@ -74,20 +76,21 @@ export function ResearchView(){
 
   return <>
     <section className="research-hero">
-      <article className="panel research-quality">
+      <article className="panel research-quality" data-explain-key="data-quality">
         <span className="eyebrow">Research Integrity</span>
         <div className="research-score-row"><h2>Data quality</h2><strong className={scoreClass(data.dataQuality.overall)}>{data.dataQuality.overall}</strong></div>
         <p>Coverage, freshness, historical depth and robust anomaly screening are combined into one quality gate before research outputs are used.</p>
         <div className="research-mini-grid">{Object.entries(data.dataQuality.scores).map(([key,value])=><div key={key}><small>{title(key)}</small><b>{value}</b></div>)}</div>
       </article>
-      <article className="panel research-risk">
+      <article className="panel research-risk" data-explain-key="risk state">
         <span className="eyebrow">Portfolio Risk State</span>
         <div className="research-score-row"><h2>{title(data.risk.severity)}</h2><strong className={riskClass(data.risk.aggregate)}>{data.risk.aggregate}</strong></div>
         <p>{data.risk.nextHighImpact?`${data.risk.nextHighImpact.currency} · ${data.risk.nextHighImpact.event} in ${Math.max(0,data.risk.nextHighImpact.minutes)} minutes`:'No immediate high-impact release is inside the active risk window.'}</p>
-        <div className="research-confidence"><span>Confidence after risk controls</span><b>{data.risk.confidenceAfterRisk}%</b></div>
+        <div className="research-confidence" data-explain-key="confidence after risk"><span>Confidence after risk controls</span><b>{data.risk.confidenceAfterRisk}%</b></div>
       </article>
     </section>
 
+    <QualityCalibrationEvidencePanel data={data as unknown as QualityFrameworkInput}/>
     <DecisionCorePanel data={data.decisionCore}/>
     <AdvancedGovernancePanel data={data.decisionCore}/>
     <DecisionMemoryPanel data={data.decisionMemory}/>
@@ -126,7 +129,7 @@ export function ResearchView(){
 
     <section className="panel standards-panel">
       <div className="panel-title"><div><span className="eyebrow">Research Controls</span><h2>Service-level objectives and data retention</h2></div><button onClick={()=>void load()}>{loading?'Refreshing…':'Refresh research'}</button></div>
-      <div className="slo-grid">{data.operatingStandards.slos.map(item=><div key={item.id}><span>{title(item.id)}</span><b>{item.target}%</b><small>{item.window} window · {item.errorBudget}% budget</small></div>)}</div>
+      <div className="slo-grid">{data.operatingStandards.slos.map(item=><div key={item.id} data-explain-key="slo"><span>{title(item.id)}</span><b>{item.target}%</b><small>{item.window} window · {item.errorBudget}% budget</small></div>)}</div>
       <div className="storage-grid">{Object.entries(data.operatingStandards.storageTiers).map(([tier,item])=><div key={tier}><span className="eyebrow">{tier}</span><b>{item.retention}</b><small>{item.purpose}</small></div>)}</div>
     </section>
   </>;
