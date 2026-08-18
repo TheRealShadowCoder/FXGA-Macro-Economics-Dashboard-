@@ -7,6 +7,7 @@ import { DecisionMemoryPanel } from './DecisionMemoryPanel';
 import { TransitionResearchPanel } from './TransitionResearchPanel';
 import { PolicyEventResearchPanel } from './PolicyEventResearchPanel';
 import { DecisionAttributionPanel, type DecisionQualityAttribution } from './DecisionAttributionPanel';
+import { PolicyCalibrationPanel, type PolicyCalibrationResearch } from './PolicyCalibrationPanel';
 
 type RiskCategory={id:string;score:number;severity:string;confidenceHaircut:number;warning:boolean;stressMultiplier:number};
 type Scenario={id:string;label:string;confidenceChange:number;currencies:Record<string,number>;pairs:Array<{symbol:string;score:number;direction:'BUY'|'SELL'|'WAIT'}>;assets:Record<string,number>};
@@ -31,6 +32,7 @@ type ResearchPayload={
   eventReactionResearch?:PolicyEventPanelProps['eventReaction'];
   policyPathResearch?:PolicyEventPanelProps['policyPath'];
   decisionQualityAttribution?:DecisionQualityAttribution;
+  policyCalibration?:PolicyCalibrationResearch|null;
   risk:{aggregate:number;severity:string;confidenceAfterRisk:number;nextHighImpact?:{event:string;currency:string;date:string;minutes:number}|null;categories:RiskCategory[]};
   scenarios:Scenario[];
   regimes:Regime[];
@@ -93,6 +95,7 @@ export function ResearchView(){
     <AdaptiveResearchPanel sources={data.sourceReliability} forecasts={data.forecasts}/>
     <TransitionResearchPanel turningPoints={data.turningPoints} catalystSequence={data.catalystSequence} persistence={data.releaseAnalytics.persistence}/>
     <PolicyEventResearchPanel eventReaction={data.eventReactionResearch} policyPath={data.policyPathResearch}/>
+    <PolicyCalibrationPanel data={data.policyCalibration}/>
 
     <section className="section-head"><div><span className="eyebrow">Risk Decomposition</span><h2>Independent risk controls</h2><p>Every risk family applies its own warning threshold and confidence haircut before a directional view is considered actionable.</p></div></section>
     <section className="risk-grid">{data.risk.categories.map(item=><article className="risk-card" key={item.id}><div><span>{title(item.id)}</span><strong className={riskClass(item.score)}>{item.score}</strong></div><div className="risk-meter"><i style={{width:`${Math.min(100,item.score)}%`}}></i></div><small>{title(item.severity)} · confidence haircut {item.confidenceHaircut} pts</small></article>)}</section>
