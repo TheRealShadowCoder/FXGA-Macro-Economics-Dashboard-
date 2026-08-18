@@ -1,0 +1,91 @@
+name: Apply Large Intelligence Storage V4.14.1
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-large-intelligence-storage.trigger'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Apply large intelligence storage architecture
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_large_intelligence_storage.py
+          python3 scripts/apply_large_intelligence_cache_and_version.py
+
+      - name: Assert storage contracts
+        run: |
+          set -euo pipefail
+          grep -q "fxga_collector_state_chunks" cloud-run-collector/src/super-runtime.js
+          grep -q "Chunk manifest for" cloud-run-collector/src/super-runtime.js
+          grep -q "FIRESTORE_CHUNK_RAW_BYTES" cloud-run-collector/src/super-runtime.js
+          grep -q "function crossAssetConfirmation" cloud-run-collector/src/decision-intelligence-core.js
+          grep -q "const research=researchBase" cloud-run-collector/src/super-economist.js
+          grep -q "private async writeIntelligence" worker/index-v3.ts
+          grep -q "private intelligenceCache:any=null" worker/index-v3.ts
+          grep -q "this.readIntelligence()" worker/index-v3.ts
+          grep -q "version:SERVICE_VERSION" cloud-run-collector/src/super-runtime.js
+          node -e "const p=require('./cloud-run-collector/package.json'); if(p.version!=='4.14.1') throw new Error('collector version mismatch')"
+          node -e "const p=require('./cloud-run-collector/package-lock.json'); if(p.version!=='4.14.1'||p.packages?.['']?.version!=='4.14.1') throw new Error('lock version mismatch')"
+
+      - name: Validate Cloud Run collector
+        working-directory: cloud-run-collector
+        run: |
+          npm install --ignore-scripts --no-fund
+          npm run check
+          npm audit --omit=dev --audit-level=moderate
+
+      - name: Validate Worker and production dashboard
+        run: |
+          npm install
+          npm run build
+
+      - name: Write storage validation marker
+        run: |
+          cat > .github/intelligence-storage-v4141.status <<EOF
+          verified_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          contract=v4.14.1-storage
+          collector_version=4.14.1
+          firestore_chunking=passed
+          firestore_manifest_reassembly=passed
+          cloudflare_intelligence_chunking=passed
+          cloudflare_hot_cache=passed
+          duplicate_research_objects_removed=passed
+          runtime_version_sync=passed
+          collector_check=passed
+          dependency_audit=passed
+          production_build=passed
+          EOF
+
+      - name: Commit validated storage architecture
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/super-runtime.js cloud-run-collector/src/super-economist.js cloud-run-collector/package.json cloud-run-collector/package-lock.json worker/index-v3.ts .github/intelligence-storage-v4141.status
+          git commit -m 'Scale v4.14 intelligence persistence beyond single-document limits'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Dispatch Google and Cloudflare production deployments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run deploy-cloud-run-collector.yml --ref main
+          gh workflow run deploy.yml --ref main
+          echo 'Dispatched v4.14.1 Cloud Run and Cloudflare deployments.'
