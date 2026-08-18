@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ComponentProps } from 'react';
 import './ResearchView.css';
 import { DecisionCorePanel, type DecisionCorePayload } from './DecisionCorePanel';
 import { AdvancedGovernancePanel } from './AdvancedGovernancePanel';
 import { AdaptiveResearchPanel } from './AdaptiveResearchPanel';
 import { DecisionMemoryPanel } from './DecisionMemoryPanel';
 import { TransitionResearchPanel } from './TransitionResearchPanel';
+import { PolicyEventResearchPanel } from './PolicyEventResearchPanel';
 
 type RiskCategory={id:string;score:number;severity:string;confidenceHaircut:number;warning:boolean;stressMultiplier:number};
 type Scenario={id:string;label:string;confidenceChange:number;currencies:Record<string,number>;pairs:Array<{symbol:string;score:number;direction:'BUY'|'SELL'|'WAIT'}>;assets:Record<string,number>};
@@ -17,6 +18,7 @@ type TurningFamily={economy:string;family:string;series:number;risk:number;statu
 type TurningPoints={economies:Array<{economy:string;risk:number;highFamilies:number;watchFamilies:number;direction:string;families:TurningFamily[]}>;rows:TurningFamily[];highRisk:number;watch:number};
 type CatalystSequence={windowHours:number;currencies:Array<{currency:string;events:number;highImpact:number;clusters:number;nearestGapMinutes:number|null;densityScore:number;status:string;next:Array<{event:string;date:string;importance:number;category:string}>}>;totalUpcoming:number;denseCurrencies:number};
 type Regime={economy:string;family:string;score:number;state:string;transitionProbability:number;sampleSize:number};
+type PolicyEventPanelProps=ComponentProps<typeof PolicyEventResearchPanel>;
 type ResearchPayload={
   generatedAt:string;
   dataQuality:{overall:number;severity:string;scores:Record<string,number>;diagnostics:Record<string,number>;outliers:Array<{id:string;robustZ:number;value:number}>};
@@ -25,6 +27,8 @@ type ResearchPayload={
   releaseAnalytics:{completed:number;profiles:ReleaseProfile[];persistence?:ReleasePersistence[]};
   turningPoints?:TurningPoints;
   catalystSequence?:CatalystSequence;
+  eventReactionResearch?:PolicyEventPanelProps['eventReaction'];
+  policyPathResearch?:PolicyEventPanelProps['policyPath'];
   risk:{aggregate:number;severity:string;confidenceAfterRisk:number;nextHighImpact?:{event:string;currency:string;date:string;minutes:number}|null;categories:RiskCategory[]};
   scenarios:Scenario[];
   regimes:Regime[];
@@ -85,6 +89,7 @@ export function ResearchView(){
     <DecisionMemoryPanel data={data.decisionMemory}/>
     <AdaptiveResearchPanel sources={data.sourceReliability} forecasts={data.forecasts}/>
     <TransitionResearchPanel turningPoints={data.turningPoints} catalystSequence={data.catalystSequence} persistence={data.releaseAnalytics.persistence}/>
+    <PolicyEventResearchPanel eventReaction={data.eventReactionResearch} policyPath={data.policyPathResearch}/>
 
     <section className="section-head"><div><span className="eyebrow">Risk Decomposition</span><h2>Independent risk controls</h2><p>Every risk family applies its own warning threshold and confidence haircut before a directional view is considered actionable.</p></div></section>
     <section className="risk-grid">{data.risk.categories.map(item=><article className="risk-card" key={item.id}><div><span>{title(item.id)}</span><strong className={riskClass(item.score)}>{item.score}</strong></div><div className="risk-meter"><i style={{width:`${Math.min(100,item.score)}%`}}></i></div><small>{title(item.severity)} · confidence haircut {item.confidenceHaircut} pts</small></article>)}</section>
