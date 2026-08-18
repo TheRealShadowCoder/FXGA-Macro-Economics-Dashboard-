@@ -1,0 +1,63 @@
+name: Integrate Event Policy Research Source
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-integrate-event-policy-research-source.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply exact source patch
+        run: python3 scripts/apply_event_policy_research_upgrade.py
+      - name: Validate collector source
+        run: |
+          cd cloud-run-collector
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildEventReactionResearch } from './src/event-reaction-research.js';
+          import { buildPolicyPathResearch } from './src/policy-path-research.js';
+          const now=new Date();
+          const measured=(agreement,move)=>({quality:'measured',directionalAgreement:agreement,meanBaseCurrencyMovePct:move});
+          const studies=Array.from({length:8},(_,i)=>({eventId:`cpi-${i}`,event:'Consumer Price Index',category:'inflation',currency:'USD',importance:3,releaseAt:new Date(now.getTime()-(i+1)*86400000).toISOString(),horizons:{'5m':measured(i===7 ? .42 : .70,.03),'15m':measured(.68,.05),'1h':measured(.72,.08),'4h':measured(.66,.07)}}));
+          const reactions=buildEventReactionResearch({studies},now);
+          if(reactions.studyCount!==8||!reactions.byCurrency?.USD||!reactions.byCurrencyCategory?.['USD:inflation'])throw new Error('Event reaction research contract failed');
+          const dims=(g,i,l,p,f)=>[{id:'growth',score:g},{id:'inflation',score:i},{id:'labour',score:l},{id:'policy',score:p},{id:'financial',score:f}];
+          const economyAnalysis={economies:[
+            {id:'USA',currency:'USD',centralBank:'Federal Reserve',policyStance:'balanced',confidence:82,observationCount:40,dimensions:dims(20,48,28,12,10)},
+            {id:'EUROPE',currency:'EUR',centralBank:'ECB',policyStance:'balanced',confidence:76,observationCount:35,dimensions:dims(8,22,10,18,5)},
+            {id:'UK',currency:'GBP',centralBank:'BoE',policyStance:'balanced',confidence:74,observationCount:32,dimensions:dims(5,30,20,20,8)},
+            {id:'SOUTH_AFRICA',currency:'ZAR',centralBank:'SARB',policyStance:'hawkish',confidence:70,observationCount:28,dimensions:dims(6,35,12,28,4)},
+            {id:'JAPAN',currency:'JPY',centralBank:'BoJ',policyStance:'balanced',confidence:68,observationCount:26,dimensions:dims(10,18,10,8,5)}
+          ]};
+          const policy=buildPolicyPathResearch(economyAnalysis,[{event:'Federal Reserve Interest Rate Decision',category:'policy',currency:'USD',date:new Date(now.getTime()+7*86400000).toISOString(),forecast:'4.50%',previous:'4.50%'}],now);
+          if(policy.economies.length!==5||policy.marketPricingAvailable!==false)throw new Error('Policy path research contract failed');
+          const usa=policy.economies.find(x=>x.currency==='USD'),sum=usa.probabilities.hike+usa.probabilities.hold+usa.probabilities.cut;
+          if(Math.abs(sum-1)>.002||!usa.nextMeeting)throw new Error('Policy path probability or meeting contract failed');
+          console.log(JSON.stringify({reactionStudies:reactions.studyCount,usdAgreement:reactions.byCurrency.USD.agreement,policyBanks:policy.economies.length,usa:usa.probabilities},null,2));
+          NODE
+          grep -q "buildEventReactionResearch" src/super-economist.js
+          grep -q "buildPolicyPathResearch" src/super-economist.js
+          grep -q "eventStudies:eventStudyPayload" src/super-runtime.js
+          grep -q "get('event-studies')" src/super-runtime.js
+      - name: Commit integrated research source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/super-economist.js cloud-run-collector/src/super-runtime.js cloud-run-collector/package.json
+          if git diff --cached --quiet; then echo 'Source already integrated.'; exit 0; fi
+          git commit -m 'Integrate event reaction and policy path research'
+          git pull --rebase origin main
+          git push origin HEAD:main
