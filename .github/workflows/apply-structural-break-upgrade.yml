@@ -1,0 +1,67 @@
+name: Apply Structural Break Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-structural-break-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply structural break patch
+        run: python3 scripts/apply_structural_break_upgrade.py
+      - name: Validate structural break research and governance
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildInstitutionalResearch } from './src/institutional-research.js';
+          import { buildDecisionIntelligenceCore } from './src/decision-intelligence-core.js';
+          const now=Date.now();
+          const stable=Array.from({length:20},(_,i)=>100+i*.2+Math.sin(i/4)*.2);
+          const broken=[...stable.slice(0,16),112,114,116,118];
+          const hist=values=>values.map((value,i)=>({date:new Date(now-(20-i)*86400000).toISOString(),value}));
+          const observations=[
+            {seriesId:'BREAK_A',title:'Growth Break',value:broken.at(-1),lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',economy:'EUROPE',categories:['growth'],history:hist(broken)},
+            {seriesId:'STABLE_B',title:'Inflation Stable',value:stable.at(-1),lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',economy:'USA',categories:['inflation'],history:hist(stable)},
+          ];
+          const research=buildInstitutionalResearch({observations,events:[],market:[],news:[],currencyStates:[],opportunities:[]});
+          const brokenRow=research.structuralBreaks?.series?.find(x=>x.seriesId==='BREAK_A');
+          if(!brokenRow)throw new Error('Structural break series diagnostic missing');
+          if(brokenRow.score<50)throw new Error(`Synthetic break score too low: ${brokenRow.score}`);
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:38,confidence:75,conviction:65,risk:'normal',components:{structuralDivergence:42,policyDivergence:30,releaseDivergence:18,narrativeDivergence:8},probabilities:{buy:.61,sell:.17,wait:.22}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const dims=(g,i,l,p,f)=>[{id:'growth',score:g},{id:'inflation',score:i},{id:'labour',score:l},{id:'policy',score:p},{id:'financial',score:f}];
+          const economies=[{id:'EUROPE',currency:'EUR',dimensions:dims(30,20,20,15,10)},{id:'USA',currency:'USD',dimensions:dims(5,10,8,12,5)}];
+          const fullResearch={...research,dataQuality:{...research.dataQuality,overall:90},risk:{aggregate:10},modelHealth:{score:88,status:'healthy',calibratedForecasts:8},scenarios:[{label:'Base',pairs:[{symbol:'EURUSD',direction:'BUY',score:30}]}]};
+          const core=buildDecisionIntelligenceCore({economies,decision:primary,observations,events:[],news:[],marketData:[],research:fullResearch});
+          const control=core.pairDecisions[0]?.structuralBreak;
+          if(!control)throw new Error('Structural break pair control missing');
+          if(!Number.isFinite(control.risk))throw new Error('Structural break pair risk invalid');
+          console.log(JSON.stringify({brokenRow,control},null,2));
+          NODE
+      - name: Validate frontend production build
+        run: |
+          npm install
+          npm run build
+      - name: Commit structural break intelligence
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/institutional-research.js cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add structural break regime-shift intelligence'
+          git pull --rebase origin main
+          git push origin HEAD:main
