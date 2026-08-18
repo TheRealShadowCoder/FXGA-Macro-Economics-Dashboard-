@@ -1,0 +1,9 @@
+generated_at=2026-08-18T04:27:15Z
+patch_exit=0
+research_syntax_exit=0
+core_syntax_exit=0
+contract_exit=0
+--- patch output ---
+Structural-break v3 integration applied.
+--- research syntax output ---
+--- core syntax output ---

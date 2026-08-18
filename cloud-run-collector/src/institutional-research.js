@@ -167,6 +167,21 @@ function buildTurningPoints(features=[]){
   return {generatedAt:iso(),economies,rows:rows.sort((a,b)=>b.risk-a.risk),highRisk:rows.filter(x=>x.status==='high').length,watch:rows.filter(x=>x.status==='watch').length};
 }
 
+function structuralBreakForSeries(item){
+  const values=(item?.history||[]).map(x=>num(x?.value)).filter(Number.isFinite);if(values.length<12)return null;
+  const recent=values.slice(-4),prior=values.slice(-12,-4);if(prior.length<6)return null;
+  const recentMean=mean(recent),priorMean=mean(prior),priorSd=Math.max(stdev(prior),Math.abs(priorMean)*.003,1e-9),recentSd=stdev(recent),levelShift=Math.abs(recentMean-priorMean)/priorSd,varianceRatio=recentSd*recentSd/Math.max(priorSd*priorSd,1e-12),priorSlope=(prior.at(-1)-prior[0])/Math.max(1,prior.length-1),recentSlope=(recent.at(-1)-recent[0])/Math.max(1,recent.length-1),directionFlip=Math.sign(priorSlope)!==0&&Math.sign(recentSlope)!==0&&Math.sign(priorSlope)!==Math.sign(recentSlope),varianceShock=Math.abs(Math.log(Math.max(varianceRatio,1e-6))),score=Math.round(clamp(24*levelShift+18*varianceShock+(directionFlip?22:0),0,100));
+  return {seriesId:item.seriesId,title:item.title,economy:item.economy||item.economies?.[0]||'GLOBAL',family:macroFamily(item),score,status:score>=78?'break':score>=52?'watch':'stable',levelShift:Number(levelShift.toFixed(3)),varianceRatio:Number(varianceRatio.toFixed(3)),directionFlip,recentMean:Number(recentMean.toFixed(6)),priorMean:Number(priorMean.toFixed(6)),recentSlope:Number(recentSlope.toFixed(6)),priorSlope:Number(priorSlope.toFixed(6)),sampleSize:values.length};
+}
+function buildStructuralBreaks(observations=[]){
+  const series=observations.map(structuralBreakForSeries).filter(Boolean).sort((a,b)=>b.score-a.score),groups={};
+  for(const row of series){const key=`${row.economy}:${row.family}`;(groups[key]??=[]).push(row);}
+  const families=Object.entries(groups).map(([key,rows])=>{const [economy,family]=key.split(':'),maxRisk=Math.max(...rows.map(x=>x.score)),avg=mean(rows.map(x=>x.score)),breaks=rows.filter(x=>x.status==='break').length,watch=rows.filter(x=>x.status==='watch').length,risk=Math.round(clamp(.55*maxRisk+.45*avg,0,100));return {economy,family,risk,status:risk>=72?'break':risk>=48?'watch':'stable',breaks,watch,series:rows.length,topSeries:rows.slice(0,5)};}).sort((a,b)=>b.risk-a.risk);
+  const economyMap={};for(const row of families)(economyMap[row.economy]??=[]).push(row);
+  const economies=Object.entries(economyMap).map(([economy,rows])=>({economy,risk:Math.round(Math.max(...rows.map(x=>x.risk))),breakFamilies:rows.filter(x=>x.status==='break').length,watchFamilies:rows.filter(x=>x.status==='watch').length,status:rows.some(x=>x.status==='break')?'break':rows.some(x=>x.status==='watch')?'watch':'stable',families:rows})).sort((a,b)=>b.risk-a.risk);
+  return {generatedAt:iso(),series:series.slice(0,220),families,economies,breakSeries:series.filter(x=>x.status==='break').length,watchSeries:series.filter(x=>x.status==='watch').length,methodology:'Recent four-observation level, variance and slope behavior is compared with the preceding eight observations. This is a structural-instability diagnostic, not a claim of causal break timing.'};
+}
+
 function ar1Forecast(values){
   const xs=values.filter(Number.isFinite);
   if(xs.length<4)return null;
@@ -457,6 +472,7 @@ export function buildInstitutionalResearch({observations=[],events=[],market=[],
   const sourceReliability=buildSourceReliability(observations);
   const evidenceIndependence=buildEvidenceIndependence(observations,sourceReliability);
   const features=buildFeatures(observations);
+  const structuralBreaks=buildStructuralBreaks(observations);
   const turningPoints=buildTurningPoints(features);
   const forecasts=buildForecasts(observations);
   const modelHealth=buildModelHealth(forecasts);
@@ -470,7 +486,7 @@ export function buildInstitutionalResearch({observations=[],events=[],market=[],
   const provenance=buildProvenance({observations,events,market,news,features,forecasts,releaseAnalytics,risk,scenarios});
   return {
     schemaVersion:1,generatedAt:iso(),
-    dataQuality,sourceReliability,evidenceIndependence,modelHealth,turningPoints,catalystSequence,features:features.slice(0,220),forecasts,releaseAnalytics,marketAnalytics,regimes,risk,scenarios,
+    dataQuality,sourceReliability,evidenceIndependence,modelHealth,structuralBreaks,turningPoints,catalystSequence,features:features.slice(0,220),forecasts,releaseAnalytics,marketAnalytics,regimes,risk,scenarios,
     operatingStandards,provenance,
     capabilityCoverage:{domains:DOMAIN_COVERAGE.map(([id,name,status])=>({id,name,status})),active:DOMAIN_COVERAGE.filter(x=>x[2]==='active').length,foundation:DOMAIN_COVERAGE.filter(x=>x[2]==='foundation').length,historyBuilding:DOMAIN_COVERAGE.filter(x=>x[2]==='history-building').length,total:40},
     notes:{
