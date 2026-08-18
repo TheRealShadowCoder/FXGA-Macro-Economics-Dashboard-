@@ -1,0 +1,52 @@
+name: Promote V4.18 Policy Horizon
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-promote-v418-policy-horizon.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Require integrated v4.18 source
+        run: |
+          set -euo pipefail
+          grep -q "policyCatalystDays: Math.min(Math.max(Number(process.env.POLICY_CATALYST_DAYS || 75), 31), 120)" cloud-run-collector/src/server-v2.js
+          grep -q "fetchPolicyCatalystHorizon(new Date(to.getTime()+1000),policyTo)" cloud-run-collector/src/server-v2.js
+          grep -q "scheduleReleaseTasks(events.filter((event)=>!event.policyCatalystHorizonOnly))" cloud-run-collector/src/server-v2.js
+          grep -q "policyCatalystSegments" cloud-run-collector/src/policy-catalyst-horizon.js
+          grep -q "policyProvenance" cloud-run-collector/src/policy-path-research.js
+          grep -q "extended policy horizon" src/components/PolicyEventResearchPanel.tsx
+      - name: Promote collector and validate security
+        run: |
+          cd cloud-run-collector
+          npm version 4.18.0 --no-git-tag-version --ignore-scripts
+          npm ci --ignore-scripts
+          npm run check
+          npm audit --omit=dev --audit-level=moderate
+      - name: Revalidate frontend
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          npm install --progress=false
+          npm run build
+      - name: Commit v4.18 package metadata
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/package.json cloud-run-collector/package-lock.json
+          if git diff --cached --quiet; then echo 'Collector already at 4.18.0.'; exit 0; fi
+          git commit -m 'Promote FXGA policy horizon v4.18.0'
+          git pull --rebase origin main
+          git push origin HEAD:main
