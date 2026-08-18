@@ -1,0 +1,138 @@
+{
+  "verifiedAt": "2026-08-18T18:27:44.842Z",
+  "reportedHealthVersion": "4.18.0",
+  "bootstrap": {
+    "events": 256,
+    "changed": true,
+    "scheduled": {
+      "clusters": 82,
+      "tasksCreated": 76,
+      "samplingPolicy": {
+        "highImpactSeconds": [
+          -300,
+          0,
+          60,
+          300,
+          900,
+          3600,
+          14400
+        ],
+        "mediumImpactSeconds": [
+          -300,
+          0,
+          300,
+          900,
+          3600,
+          14400
+        ],
+        "lowImpactSeconds": [
+          -900,
+          0,
+          900,
+          3600
+        ],
+        "preReleaseBaselineAwaited": true,
+        "eventStudyHorizonsSeconds": [
+          300,
+          900,
+          3600,
+          14400
+        ]
+      }
+    },
+    "marketPulse": {
+      "intervalMinutes": 15,
+      "hours": 26,
+      "created": 73,
+      "existing": 31,
+      "skippedClosed": 0
+    },
+    "history": {
+      "persisted": 76,
+      "historyDays": 7
+    },
+    "sourceHealth": {
+      "fxstreet": {
+        "ok": true,
+        "events": 256
+      },
+      "myfxbook": {
+        "ok": true,
+        "events": 221,
+        "mode": "html"
+      },
+      "cnbc": {
+        "ok": true,
+        "items": 26
+      },
+      "policyCatalysts": {
+        "ok": true,
+        "source": "FXStreet public calendar feed",
+        "segments": 3,
+        "failedSegments": 0,
+        "events": 0,
+        "windowStart": "2026-09-01T18:26:58.656Z",
+        "windowEnd": "2026-11-01T18:26:57.656Z",
+        "failures": []
+      }
+    },
+    "market": {
+      "changed": true,
+      "requested": 16,
+      "live": 16,
+      "staleRetained": 0,
+      "failed": 0,
+      "durationMs": 12570,
+      "technical": {
+        "changed": true,
+        "counts": {
+          "assets": 9,
+          "confirmed": 0,
+          "contextAligned": 0,
+          "conflict": 0,
+          "warming": 9
+        },
+        "generatedAt": "2026-08-18T18:27:27.631Z"
+      }
+    }
+  },
+  "calendar": {
+    "days": 14,
+    "policyCatalystDays": 75,
+    "windowEnd": "2026-09-01T18:26:57.656Z",
+    "policyWindowEnd": "2026-11-01T18:26:57.656Z",
+    "totalEvents": 256,
+    "extendedCount": 0,
+    "extendedCurrencies": [],
+    "extendedEvents": []
+  },
+  "sourceHealth": {
+    "ok": true,
+    "source": "FXStreet public calendar feed",
+    "segments": 3,
+    "failedSegments": 0,
+    "events": 0,
+    "windowStart": "2026-09-01T18:26:58.656Z",
+    "windowEnd": "2026-11-01T18:26:57.656Z",
+    "failures": []
+  },
+  "policyResearch": {
+    "banks": 5,
+    "scheduledMeetings": 4,
+    "extendedMeetings": 0,
+    "extendedIds": []
+  },
+  "policyCalibration": {
+    "frozen": 2,
+    "scored": 0,
+    "pending": 2,
+    "status": "building"
+  },
+  "refreshChanged": true,
+  "webhookStatus": 200,
+  "publicContract": {
+    "passed": true,
+    "passiveEdge": true,
+    "extendedMeetings": 0
+  }
+}
