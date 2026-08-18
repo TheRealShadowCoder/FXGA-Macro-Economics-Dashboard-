@@ -20,8 +20,18 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - name: Apply v4.16 integration
-        run: python3 scripts/apply_v416_intelligence.py
+      - name: Repair current pipeline anchor and apply v4.16 integration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/apply_v416_intelligence.py')
+          text=p.read_text()
+          old="replace_once(path,\"'historical-decision-calibration','release-sequence'\", \"'historical-decision-calibration','realized-decision-quality-attribution','release-sequence'\")"
+          new="replace_once(path,\"'historical-decision-calibration','realized-event-reaction-research'\", \"'historical-decision-calibration','realized-decision-quality-attribution','realized-event-reaction-research'\")"
+          if old in text:text=text.replace(old,new,1)
+          p.write_text(text)
+          PY
+          python3 scripts/apply_v416_intelligence.py
       - name: Validate collector syntax and dependencies
         run: |
           cd cloud-run-collector
@@ -69,11 +79,14 @@ jobs:
           grep -q "eventReactionFactor=Number(controls?.eventReactionCalibration?.factor||1)" cloud-run-collector/src/decision-intelligence-core.js
           grep -q "eventReactionCalibration=eventReactionCalibrationForPair" cloud-run-collector/src/decision-intelligence-core.js
           grep -q "releaseExposure × (regimeConditionedReactionReliability" cloud-run-collector/src/decision-intelligence-core.js
-          if grep -n "function refinedPairScore" cloud-run-collector/src/decision-intelligence-core.js | grep -q "eventReaction"; then
-            echo '::error::Event reaction calibration leaked into refined directional scoring'
-            exit 1
-          fi
           grep -q "version:'1.5.0'" cloud-run-collector/src/decision-intelligence-core.js
+          python3 - <<'PY'
+          from pathlib import Path
+          text=Path('cloud-run-collector/src/decision-intelligence-core.js').read_text()
+          start=text.index('function refinedPairScore')
+          end=text.index('function thesisForPair',start)
+          if 'eventReaction' in text[start:end]:raise SystemExit('Event reaction calibration leaked into refined directional scoring')
+          PY
       - name: Verify production frontend build
         run: |
           cd "$GITHUB_WORKSPACE"
@@ -83,7 +96,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/decision-memory.js cloud-run-collector/src/super-economist.js cloud-run-collector/package.json src/components/ResearchView.tsx src/components/AdvancedGovernancePanel.tsx
+          git add scripts/apply_v416_intelligence.py cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/decision-memory.js cloud-run-collector/src/super-economist.js cloud-run-collector/package.json src/components/ResearchView.tsx src/components/AdvancedGovernancePanel.tsx
           if git diff --cached --quiet; then echo 'No integration changes to commit.'; exit 0; fi
           git commit -m 'Integrate v4.16 calibration and attribution intelligence'
           git pull --rebase origin main
