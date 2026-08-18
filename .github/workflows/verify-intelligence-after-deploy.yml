@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 env:
@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - id: auth
         uses: google-github-actions/auth@v3
         with:
@@ -84,12 +86,14 @@ jobs:
           const calibrated=(research?.forecasts||[]).filter(f=>f?.modelWeights&&Number(f?.validationPoints||0)>0);
           if(calibrated.length<1)throw new Error('Walk-forward calibrated forecasts missing');
           if(!intel.decisionMemory||typeof intel.decisionMemory!=='object')throw new Error('Decision memory summary missing');
-          console.log(JSON.stringify({pairs:core.pairDecisions.length,evidenceQuality:core.evidenceQuality?.score,modelHealth:research.modelHealth,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,decisionMemory:{sampled:intel.decisionMemory.sampledDecisions||0,pending:intel.decisionMemory.pending||0}},null,2));
+          const report={verifiedAt:new Date().toISOString(),pairs:core.pairDecisions.length,evidenceQuality:core.evidenceQuality?.score,modelHealth:research.modelHealth,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,decisionMemory:{sampled:intel.decisionMemory.sampledDecisions||0,pending:intel.decisionMemory.pending||0}};
+          fs.writeFileSync('/tmp/intelligence-verification.json',JSON.stringify(report,null,2));
+          console.log(JSON.stringify(report,null,2));
           NODE
       - name: Verify public research contract
         run: |
           node <<'NODE'
-          const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          const fs=require('fs'),base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
           async function read(){const r=await fetch(base+'/api/research',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),text=await r.text();if(!r.ok)throw new Error(`/api/research ${r.status}: ${text.slice(0,400)}`);return JSON.parse(text);}
           let last;
@@ -98,7 +102,10 @@ jobs:
               const research=await read(),core=research?.decisionCore;
               const calibrated=(research?.forecasts||[]).filter(f=>f?.modelWeights&&Number(f?.validationPoints||0)>0);
               if(core?.pairDecisions?.length>=8&&research?.modelHealth&&Array.isArray(research?.sourceReliability)&&calibrated.length>0&&research?.decisionMemory){
-                console.log('PUBLIC INTELLIGENCE VERIFIED',JSON.stringify({pairs:core.pairDecisions.length,modelHealth:research.modelHealth.status,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,decisionMemorySamples:research.decisionMemory.sampledDecisions||0}));
+                const report=JSON.parse(fs.readFileSync('/tmp/intelligence-verification.json','utf8'));
+                report.publicContract={pairs:core.pairDecisions.length,modelHealth:research.modelHealth.status,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,decisionMemorySamples:research.decisionMemory.sampledDecisions||0};
+                fs.writeFileSync('/tmp/intelligence-verification.json',JSON.stringify(report,null,2));
+                console.log('PUBLIC INTELLIGENCE VERIFIED',JSON.stringify(report.publicContract));
                 process.exit(0);
               }
               last=new Error('Waiting for current research intelligence contract');
@@ -107,3 +114,28 @@ jobs:
           }
           throw last||new Error('Public research contract did not update');
           NODE
+      - name: Persist verification marker
+        run: |
+          mkdir -p .github
+          node <<'NODE'
+          const fs=require('fs');
+          const report=JSON.parse(fs.readFileSync('/tmp/intelligence-verification.json','utf8'));
+          const lines=[
+            `verified_at=${report.verifiedAt}`,
+            `pairs=${report.pairs}`,
+            `evidence_quality=${report.evidenceQuality ?? 'n/a'}`,
+            `model_health=${report.publicContract?.modelHealth ?? report.modelHealth?.status ?? 'n/a'}`,
+            `source_reliability=${report.sourceReliability}`,
+            `calibrated_forecasts=${report.calibratedForecasts}`,
+            `decision_memory_samples=${report.publicContract?.decisionMemorySamples ?? report.decisionMemory?.sampled ?? 0}`,
+            `public_contract=passed`,
+          ];
+          fs.writeFileSync('.github/intelligence-verification.status',lines.join('\n')+'\n');
+          NODE
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/intelligence-verification.status
+          if git diff --cached --quiet; then echo 'Verification marker unchanged.'; exit 0; fi
+          git commit -m 'Verify live decision intelligence contract'
+          git pull --rebase origin main
+          git push origin HEAD:main
