@@ -1,0 +1,60 @@
+name: Apply Turning Point Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-turning-point-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply turning point research patch
+        run: python3 scripts/apply_turning_point_upgrade.py
+      - name: Validate turning point and persistence intelligence
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildInstitutionalResearch } from './src/institutional-research.js';
+          import { buildDecisionIntelligenceCore } from './src/decision-intelligence-core.js';
+          const now=new Date(),start=now.getTime()-40*86400000;
+          const mk=(id,economy,category,turn)=>{const vals=Array.from({length:24},(_,i)=>100+(turn&&i>18?18-i:i*.45)+Math.sin(i/3));const history=vals.map((value,i)=>({date:new Date(start+i*86400000).toISOString(),value}));return {seriesId:id,title:`${category} ${id}`,value:vals.at(-1),date:history.at(-1).date,lastUpdated:now.toISOString(),frequency:'Monthly',source:'Primary',economy,categories:[category],history};};
+          const observations=[mk('EU_G','EUROPE','growth',true),mk('EU_I','EUROPE','inflation',false),mk('US_G','USA','growth',false),mk('US_L','USA','employment',false)];
+          const events=[];for(let i=0;i<6;i++)events.push({id:`eu${i}`,currency:'EUR',event:'Growth Release',category:'growth',date:new Date(now.getTime()-(i+1)*10*3600000).toISOString(),importance:3,actual:String(1.2+i*.1),forecast:'1.0',previous:'0.9',currencyBias:'bullish',currencyBiasScore:1});
+          events.push({id:'next-eu',currency:'EUR',event:'Central Bank Decision',category:'policy',date:new Date(now.getTime()+45*60000).toISOString(),importance:3});events.push({id:'next-us',currency:'USD',event:'Employment Report',category:'employment',date:new Date(now.getTime()+80*60000).toISOString(),importance:3});
+          const economyAnalysis={economies:[{id:'EUROPE',currency:'EUR',score:30,regime:'growth expansion',observationCount:2},{id:'USA',currency:'USD',score:15,regime:'mixed transition',observationCount:2}]};
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:36,confidence:72,conviction:62,risk:'normal',components:{structuralDivergence:40,policyDivergence:30,releaseDivergence:20,narrativeDivergence:10},probabilities:{buy:.59,sell:.18,wait:.23}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const research=buildInstitutionalResearch({observations,events,market:[],news:[],economyAnalysis,currencyStates:[],opportunities:primary.rankedOpportunities});
+          if(!research.turningPoints?.rows?.length)throw new Error('Turning point research missing');
+          if(!Array.isArray(research.releaseAnalytics?.persistence))throw new Error('Surprise persistence missing');
+          if(!research.catalystSequence?.currencies?.length)throw new Error('Catalyst sequence missing');
+          const core=buildDecisionIntelligenceCore({economies:economyAnalysis.economies,decision:primary,observations,events,news:[],marketData:[],research,now});
+          const pair=core.pairDecisions[0];if(!pair?.transitionRisk)throw new Error('Pair transition risk missing');
+          console.log(JSON.stringify({turning:research.turningPoints.economies,persistence:research.releaseAnalytics.persistence.slice(0,3),catalysts:research.catalystSequence.currencies,transitionRisk:pair.transitionRisk},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit turning point intelligence
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/institutional-research.js cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add turning point and surprise persistence intelligence'
+          git pull --rebase origin main
+          git push origin HEAD:main
