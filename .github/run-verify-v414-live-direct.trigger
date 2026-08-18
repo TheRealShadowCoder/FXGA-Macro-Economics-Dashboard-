@@ -1,2 +1,2 @@
-run=2026-08-18T14:34:00+02:00
-reason=Refresh the deployed chunk-enabled v4.14.1 collector, reconstruct private state, and verify the public Research contract end to end.
+run=2026-08-18T14:44:00+02:00
+reason=Run the repaired ESM verifier against the active chunk-enabled collector and deployed large signed-intelligence webhook boundary.
