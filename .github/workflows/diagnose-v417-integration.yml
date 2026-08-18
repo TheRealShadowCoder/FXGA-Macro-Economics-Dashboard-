@@ -1,0 +1,44 @@
+name: Diagnose V4.17 Integration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-diagnose-v417-integration.trigger'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Capture latest v4.17 integration run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,subprocess,datetime
+          repo=os.environ['GH_REPO']
+          runs=json.loads(subprocess.check_output(['gh','run','list','--repo',repo,'--workflow','integrate-v417-policy-calibration.yml','--limit','3','--json','databaseId,status,conclusion,createdAt,updatedAt,headSha,url,workflowName'],text=True))
+          out={'generatedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'runs':runs}
+          if runs:
+              rid=str(runs[0]['databaseId'])
+              out['latestJobs']=json.loads(subprocess.check_output(['gh','run','view',rid,'--repo',repo,'--json','jobs'],text=True)).get('jobs',[])
+          open('.github/v417-integration-diagnostic.json','w').write(json.dumps(out,indent=2)+'\n')
+          PY
+      - name: Persist diagnostic
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/v417-integration-diagnostic.json
+          git commit -m 'Record v4.17 integration diagnostic'
+          git pull --rebase origin main
+          git push origin HEAD:main
