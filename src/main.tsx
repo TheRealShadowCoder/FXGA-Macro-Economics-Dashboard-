@@ -1,6 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { ExplainabilityLayer } from './components/ExplainabilityLayer';
+import { QualityFrameworkDock } from './components/QualityFrameworkDock';
 import './google-live-refresh';
 import './public-finish';
 import './styles.css';
@@ -14,5 +16,7 @@ import './institutional-finish.css';
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
+    <QualityFrameworkDock />
+    <ExplainabilityLayer />
   </StrictMode>,
 );
