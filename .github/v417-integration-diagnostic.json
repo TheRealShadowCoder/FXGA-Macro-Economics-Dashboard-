@@ -1,0 +1,124 @@
+{
+  "generatedAt": "2026-08-18T15:19:35.728640+00:00",
+  "runs": [
+    {
+      "conclusion": "success",
+      "createdAt": "2026-08-18T15:18:22Z",
+      "databaseId": 32153646813,
+      "headSha": "43cf0e88f28bd020c794b8437d319f08f07c56e1",
+      "status": "completed",
+      "updatedAt": "2026-08-18T15:19:00Z",
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32153646813",
+      "workflowName": "Integrate V4.17 Policy Calibration"
+    }
+  ],
+  "latestJobs": [
+    {
+      "completedAt": "2026-08-18T15:18:59Z",
+      "conclusion": "success",
+      "databaseId": 95765452737,
+      "name": "integrate",
+      "startedAt": "2026-08-18T15:18:25Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-08-18T15:18:26Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-08-18T15:18:25Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:27Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v6",
+          "number": 2,
+          "startedAt": "2026-08-18T15:18:26Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:30Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v6",
+          "number": 3,
+          "startedAt": "2026-08-18T15:18:27Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:30Z",
+          "conclusion": "success",
+          "name": "Apply policy calibration integration",
+          "number": 4,
+          "startedAt": "2026-08-18T15:18:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:36Z",
+          "conclusion": "success",
+          "name": "Validate collector and dependency security",
+          "number": 5,
+          "startedAt": "2026-08-18T15:18:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:36Z",
+          "conclusion": "success",
+          "name": "Verify policy scoring mathematics",
+          "number": 6,
+          "startedAt": "2026-08-18T15:18:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:36Z",
+          "conclusion": "success",
+          "name": "Verify immutable policy audit integration",
+          "number": 7,
+          "startedAt": "2026-08-18T15:18:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:56Z",
+          "conclusion": "success",
+          "name": "Verify production frontend build",
+          "number": 8,
+          "startedAt": "2026-08-18T15:18:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:58Z",
+          "conclusion": "success",
+          "name": "Commit v4.17 source",
+          "number": 9,
+          "startedAt": "2026-08-18T15:18:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:58Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v6",
+          "number": 17,
+          "startedAt": "2026-08-18T15:18:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:58Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v6",
+          "number": 18,
+          "startedAt": "2026-08-18T15:18:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T15:18:58Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 19,
+          "startedAt": "2026-08-18T15:18:58Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32153646813/job/95765452737"
+    }
+  ]
+}
