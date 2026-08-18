@@ -18,13 +18,14 @@ jobs:
         with:
           fetch-depth: 0
       - name: Apply cross asset patch
-        run: python3 scripts/apply_cross_asset_confirmation_upgrade.py
+        run: python3 scripts/apply_cross_asset_confirmation_v2.py
       - name: Syntax check
         run: node --check cloud-run-collector/src/decision-intelligence-core.js
       - name: Assert contract
         run: |
           grep -q 'function crossAssetConfirmation' cloud-run-collector/src/decision-intelligence-core.js
           grep -q 'crossAsset:g.crossAsset' cloud-run-collector/src/decision-intelligence-core.js
+          grep -q 'crossAssetFactorValue' cloud-run-collector/src/decision-intelligence-core.js
       - name: Commit
         run: |
           git config user.name 'github-actions[bot]'
