@@ -1,0 +1,17 @@
+verified_at=2026-08-18T18:37:11.843Z
+contract=v4.19-policy-lead-calibration-live
+reported_health_version=4.19.0
+audit_version=2
+frozen_snapshots=2
+unique_policy_decisions=2
+scored_snapshots=0
+pending_snapshots=2
+active_lead_buckets=24h:2
+lead_comparison_count=4
+migration_baseline_preserved=true
+refresh_changed=true
+webhook_status=200
+passive_edge=true
+legacy_rows_rewritten=false
+missing_lead_windows_backfilled=false
+public_contract=passed

@@ -1,0 +1,182 @@
+{
+  "verifiedAt": "2026-08-18T18:37:11.843Z",
+  "reportedHealthVersion": "4.19.0",
+  "global": {
+    "frozen": 2,
+    "uniqueDecisions": 2,
+    "scored": 0,
+    "pending": 2,
+    "topActionAccuracy": null,
+    "averageBrier": null,
+    "averageLogLoss": null,
+    "brierSkillVsUniform": null,
+    "sampleConfidence": 0,
+    "averageLeadHours": 18.51,
+    "status": "building"
+  },
+  "bucketCounts": {
+    "early-45d": {
+      "frozen": 0,
+      "scored": 0,
+      "pending": 0
+    },
+    "14d": {
+      "frozen": 0,
+      "scored": 0,
+      "pending": 0
+    },
+    "7d": {
+      "frozen": 0,
+      "scored": 0,
+      "pending": 0
+    },
+    "24h": {
+      "frozen": 2,
+      "scored": 0,
+      "pending": 2
+    },
+    "final": {
+      "frozen": 0,
+      "scored": 0,
+      "pending": 0
+    }
+  },
+  "leadBuckets": [
+    {
+      "id": "early-45d",
+      "label": "14–45 days",
+      "targetHours": 1080,
+      "minExclusiveHours": 336,
+      "maxHours": 1080
+    },
+    {
+      "id": "14d",
+      "label": "7–14 days",
+      "targetHours": 336,
+      "minExclusiveHours": 168,
+      "maxHours": 336
+    },
+    {
+      "id": "7d",
+      "label": "1–7 days",
+      "targetHours": 168,
+      "minExclusiveHours": 24,
+      "maxHours": 168
+    },
+    {
+      "id": "24h",
+      "label": "6–24 hours",
+      "targetHours": 24,
+      "minExclusiveHours": 6,
+      "maxHours": 24
+    },
+    {
+      "id": "final",
+      "label": "Final ≤6 hours",
+      "targetHours": 6,
+      "minExclusiveHours": 0,
+      "maxHours": 6
+    }
+  ],
+  "leadComparisons": [
+    {
+      "fromBucket": "early-45d",
+      "toBucket": "14d",
+      "pairs": 0,
+      "averageBrierImprovement": null,
+      "averageLogLossImprovement": null,
+      "status": "building"
+    },
+    {
+      "fromBucket": "14d",
+      "toBucket": "7d",
+      "pairs": 0,
+      "averageBrierImprovement": null,
+      "averageLogLossImprovement": null,
+      "status": "building"
+    },
+    {
+      "fromBucket": "7d",
+      "toBucket": "24h",
+      "pairs": 0,
+      "averageBrierImprovement": null,
+      "averageLogLossImprovement": null,
+      "status": "building"
+    },
+    {
+      "fromBucket": "24h",
+      "toBucket": "final",
+      "pairs": 0,
+      "averageBrierImprovement": null,
+      "averageLogLossImprovement": null,
+      "status": "building"
+    }
+  ],
+  "byCurrency": {
+    "EUR": {
+      "frozen": 1,
+      "uniqueDecisions": 1,
+      "scored": 0,
+      "pending": 1,
+      "topActionAccuracy": null,
+      "averageBrier": null,
+      "averageLogLoss": null,
+      "brierSkillVsUniform": null,
+      "sampleConfidence": 0,
+      "averageLeadHours": 13.1,
+      "status": "building"
+    },
+    "USD": {
+      "frozen": 1,
+      "uniqueDecisions": 1,
+      "scored": 0,
+      "pending": 1,
+      "topActionAccuracy": null,
+      "averageBrier": null,
+      "averageLogLoss": null,
+      "brierSkillVsUniform": null,
+      "sampleConfidence": 0,
+      "averageLeadHours": 23.93,
+      "status": "building"
+    }
+  },
+  "refreshChanged": true,
+  "webhookStatus": 200,
+  "audit": {
+    "scored": 0,
+    "frozen": 0,
+    "skipped": 5,
+    "frozenByLead": {}
+  },
+  "publicContract": {
+    "passed": true,
+    "passiveEdge": true,
+    "bucketCounts": {
+      "early-45d": {
+        "frozen": 0,
+        "scored": 0,
+        "pending": 0
+      },
+      "14d": {
+        "frozen": 0,
+        "scored": 0,
+        "pending": 0
+      },
+      "7d": {
+        "frozen": 0,
+        "scored": 0,
+        "pending": 0
+      },
+      "24h": {
+        "frozen": 2,
+        "scored": 0,
+        "pending": 2
+      },
+      "final": {
+        "frozen": 0,
+        "scored": 0,
+        "pending": 0
+      }
+    }
+  }
+}
