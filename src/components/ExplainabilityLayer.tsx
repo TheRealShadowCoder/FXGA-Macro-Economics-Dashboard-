@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { genericExplanation, resolveExplanation, type Explanation } from '../lib/explainability';
 import { resolveMacroExplanation } from '../lib/macro-explainability';
+import { resolveDecisionExplanation } from '../lib/decision-explainability';
 import './ExplainabilityLayer.css';
 
 type PopoverState = {
@@ -44,7 +45,7 @@ function contextCandidates(target: HTMLElement): ContextCandidate[] {
 function chooseExplanation(target: HTMLElement) {
   const candidates = contextCandidates(target);
   for (const candidate of candidates) {
-    const explanation = resolveExplanation(candidate.key, candidate.text) ?? resolveMacroExplanation(candidate.text);
+    const explanation = resolveExplanation(candidate.key, candidate.text) ?? resolveMacroExplanation(candidate.text) ?? resolveDecisionExplanation(candidate.text);
     if (explanation) return { explanation, context: candidate.text };
   }
   const fallback = candidates.find((candidate) => /[a-zA-Z]{3}/.test(candidate.text) && candidate.text.length >= 6) ?? candidates[0];
@@ -84,9 +85,9 @@ export function ExplainabilityLayer() {
     const preferLeft = popover.x > window.innerWidth * 0.58;
     const preferUp = popover.y > window.innerHeight * 0.58;
     return {
-      left: preferLeft ? undefined : Math.min(popover.x + 12, window.innerWidth - 440),
+      left: preferLeft ? undefined : Math.max(12, Math.min(popover.x + 12, window.innerWidth - 440)),
       right: preferLeft ? Math.max(12, window.innerWidth - popover.x + 12) : undefined,
-      top: preferUp ? undefined : Math.min(popover.y + 12, window.innerHeight - 520),
+      top: preferUp ? undefined : Math.max(12, Math.min(popover.y + 12, window.innerHeight - 520)),
       bottom: preferUp ? Math.max(12, window.innerHeight - popover.y + 12) : undefined,
     };
   }, [popover]);
