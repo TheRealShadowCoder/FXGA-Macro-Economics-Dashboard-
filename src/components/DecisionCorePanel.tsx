@@ -14,6 +14,11 @@ type PairDecision={
   refined:{score:number};
   scenarioRobustness?:{available:boolean;score:number;status:string;matches:number;flips:number;waits:number;total:number};
   uncertainty?:{score:number;status:string;posteriorEntropy:number;data:number;contradictions:number;market:number;scenario:number;risk:number};
+  historicalCalibration?:{status:string;samples:number;score:number|null;hitRate:number|null;brier:number|null};
+  modelHealth?:{status:string;score:number;drifting:number;watch:number;calibratedForecasts:number};
+  causalTransmission?:{status:string;availableNodes:number;missingNodes:string[];aligned:number;opposed:number;agreement:number;netTransmission:number;nodes:Array<{id:string;label:string;value:number|null;available:boolean}>};
+  counterfactual?:{baselineScore:number;minimumAdverseShift:number|null;fragility:string;weakestComponents:string[];whatWouldChangeTheMind:string[]};
+  temporalIntelligence?:{status:string;factor:number;conflicts:string[];releaseDifferential:number;revisionDifferential:number;communicationGap:number;catalysts?:{lastHighImpact?:{event:string;currency:string;date:string}|null;nextHighImpact?:{event:string;currency:string;date:string;minutes:number}|null;catalystAgeHours?:number|null}};
   premortem?:PremortemItem[];
   thesis:{statement:string;drivers:Array<{label:string;value:number}>;opposingEvidence:Array<{label:string;value:number}>;invalidations:string[];counterThesis:string};
   final:{direction:string;confidence:number;dynamicThreshold:number;reason:string[];executionGate:string};
@@ -36,7 +41,7 @@ export function DecisionCorePanel({data}:{data?:DecisionCorePayload|null}){
   if(!data)return null;
   const ranked=[...data.pairDecisions].sort((a,b)=>Math.max(b.bayesian.posterior.buy,b.bayesian.posterior.sell)-Math.max(a.bayesian.posterior.buy,a.bayesian.posterior.sell));
   return <>
-    <section className="section-head decision-core-head" aria-label="Decision governance research"><div><span className="eyebrow">Decision Governance</span><h2>Second-pass evidence reconciliation before execution</h2><p>Each directional view is challenged by probability updating, expectation gaps, contradictions, scenario robustness, uncertainty, data quality and explicit invalidation rules. A disagreement becomes WAIT rather than an automatic reversal.</p></div></section>
+    <section className="section-head decision-core-head" aria-label="Decision governance research"><div><span className="eyebrow">Decision Governance</span><h2>Second-pass evidence reconciliation before execution</h2><p>Each directional view is challenged by probability updating, causal transmission, expectation gaps, counterfactual fragility, temporal evidence, scenario robustness, uncertainty, historical calibration and explicit invalidation rules. A disagreement becomes WAIT rather than an automatic reversal.</p></div></section>
     <section className="decision-core-summary">
       <article className="panel decision-core-kpi"><span>Evidence quality</span><strong className={data.evidenceQuality.score>=75?'positive':data.evidenceQuality.score>=55?'neutral':'negative'}>{data.evidenceQuality.score}</strong><small>{data.evidenceQuality.status} · freshness {pct(data.evidenceQuality.freshness)}</small></article>
       <article className="panel decision-core-kpi"><span>Directional</span><strong>{data.audit.directionalCount}</strong><small>{data.audit.waitCount} held at WAIT</small></article>
@@ -62,12 +67,19 @@ export function DecisionCorePanel({data}:{data?:DecisionCorePayload|null}){
             <span>Posterior peak <b>{pct(best)}</b></span>
             <span>Scenario robustness <b>{item.scenarioRobustness?.available?`${item.scenarioRobustness.score}%`:'Not measured'}</b></span>
             <span>Uncertainty <b className={(item.uncertainty?.score??0)>=60?'negative':(item.uncertainty?.score??0)>=40?'neutral':'positive'}>{item.uncertainty?.score??'—'}</b></span>
+            <span>Causal chain <b>{item.causalTransmission?.status??'—'}</b></span>
+            <span>Counterfactual <b className={item.counterfactual?.fragility==='high'?'negative':item.counterfactual?.fragility==='medium'?'neutral':'positive'}>{item.counterfactual?.fragility??'—'}</b></span>
+            <span>Temporal evidence <b>{item.temporalIntelligence?.status??'—'}</b></span>
+            <span>History calibration <b>{item.historicalCalibration?.status??'building'}</b></span>
           </div>
           <p className="decision-thesis">{item.thesis.statement}</p>
           {item.thesis.drivers.length>0&&<div className="decision-chip-row">{item.thesis.drivers.map(driver=><span key={driver.label}>{driver.label} {sign(driver.value)}</span>)}</div>}
           {item.contradictions.items.length>0&&<div className="decision-warning"><strong>Opposing evidence</strong>{item.contradictions.items.slice(0,2).map((c,index)=><span key={`${c.layer}-${index}`}>{c.reason}</span>)}</div>}
           <details className="decision-details"><summary>Decision audit</summary><div>
             <strong>Governance</strong>{item.final.reason.map((reason,index)=><p key={`g-${index}`}>{reason}</p>)}
+            <strong>Causal transmission</strong><p>{item.causalTransmission?`${item.causalTransmission.status}; ${item.causalTransmission.aligned} aligned, ${item.causalTransmission.opposed} opposed, ${item.causalTransmission.availableNodes} verified nodes.`:'Not available.'}</p>
+            {item.counterfactual?.whatWouldChangeTheMind?.length?<><strong>Counterfactual stress</strong>{item.counterfactual.whatWouldChangeTheMind.map((rule,index)=><p key={`c-${index}`}>{rule}</p>)}</>:null}
+            {item.temporalIntelligence?<><strong>Temporal evidence</strong><p>Release differential {sign(item.temporalIntelligence.releaseDifferential)} · revision differential {sign(item.temporalIntelligence.revisionDifferential)} · communication gap {Math.round(item.temporalIntelligence.communicationGap)}.</p>{item.temporalIntelligence.conflicts.map((conflict,index)=><p key={`t-${index}`}>Conflict: {conflict.replaceAll('-',' ')}</p>)}</>:null}
             <strong>Counter thesis</strong><p>{item.thesis.counterThesis}</p>
             <strong>Invalidation</strong>{item.thesis.invalidations.slice(0,4).map((rule,index)=><p key={`i-${index}`}>{rule}</p>)}
             {item.premortem?.length?<><strong>Pre-mortem</strong>{item.premortem.slice(0,4).map((risk,index)=><p key={`p-${index}`}>{risk.condition} Response: {risk.response}</p>)}</>:null}
