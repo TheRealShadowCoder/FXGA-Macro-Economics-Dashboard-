@@ -1,4 +1,6 @@
 const MAX_SKEW_MS = 5 * 60_000;
+const MAX_INTELLIGENCE_ENVELOPE_BYTES = 8 * 1024 * 1024;
+const MAX_STANDARD_ENVELOPE_BYTES = 2 * 1024 * 1024;
 
 function hex(bytes: ArrayBuffer) {
   return Array.from(new Uint8Array(bytes)).map((value) => value.toString(16).padStart(2, '0')).join('');
@@ -20,8 +22,11 @@ export async function verifyCollectorWebhook(request: Request, secret: string) {
   if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > MAX_SKEW_MS) throw new Error('Collector webhook timestamp is stale');
   if (!/^[0-9a-f-]{16,80}$/i.test(requestId)) throw new Error('Invalid collector request ID');
 
+  const contentLength = Number(request.headers.get('Content-Length') ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_INTELLIGENCE_ENVELOPE_BYTES) throw new Error('Invalid collector payload size');
   const rawBody = await request.text();
-  if (!rawBody || rawBody.length > 2_000_000) throw new Error('Invalid collector payload size');
+  const rawBytes = new TextEncoder().encode(rawBody).byteLength;
+  if (!rawBody || rawBytes > MAX_INTELLIGENCE_ENVELOPE_BYTES) throw new Error('Invalid collector payload size');
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const digest = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}.${requestId}.${rawBody}`));
   const expected = `sha256=${hex(digest)}`;
@@ -31,5 +36,6 @@ export async function verifyCollectorWebhook(request: Request, secret: string) {
   try { payload = JSON.parse(rawBody) as Record<string, any>; }
   catch { throw new Error('Collector webhook body is not valid JSON'); }
   if (payload.version !== 1 || typeof payload.type !== 'string' || !payload.payload) throw new Error('Unsupported collector payload schema');
+  if (payload.type !== 'intelligence-snapshot' && rawBytes > MAX_STANDARD_ENVELOPE_BYTES) throw new Error('Invalid collector payload size');
   return { rawBody, payload, requestId, timestampMs };
 }
