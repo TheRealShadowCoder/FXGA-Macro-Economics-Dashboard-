@@ -34,7 +34,7 @@ jobs:
           import { buildPolicyPathResearch } from './src/policy-path-research.js';
           const now=new Date();
           const measured=(agreement,move)=>({quality:'measured',directionalAgreement:agreement,meanBaseCurrencyMovePct:move});
-          const studies=Array.from({length:8},(_,i)=>({eventId:`cpi-${i}`,event:'Consumer Price Index',category:'inflation',currency:'USD',importance:3,releaseAt:new Date(now.getTime()-(i+1)*86400000).toISOString(),horizons:{'5m':measured(i===7?.42:.70,.03),'15m':measured(.68,.05),'1h':measured(.72,.08),'4h':measured(.66,.07)}}));
+          const studies=Array.from({length:8},(_,i)=>({eventId:`cpi-${i}`,event:'Consumer Price Index',category:'inflation',currency:'USD',importance:3,releaseAt:new Date(now.getTime()-(i+1)*86400000).toISOString(),horizons:{'5m':measured(i===7 ? .42 : .70,.03),'15m':measured(.68,.05),'1h':measured(.72,.08),'4h':measured(.66,.07)}}));
           const reactions=buildEventReactionResearch({studies},now);
           if(reactions.studyCount!==8)throw new Error('Event reaction study count mismatch');
           if(!reactions.byCurrency?.USD||reactions.byCurrency.USD.measurements<20)throw new Error('USD reaction memory missing');
