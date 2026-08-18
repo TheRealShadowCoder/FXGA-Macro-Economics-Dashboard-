@@ -1,2 +1,2 @@
-run=2026-08-18T07:31:00+02:00
-reason=Synchronize Cloud Run health version with package.json, fix semantic version verification, and explicitly redeploy the production collector.
+run=2026-08-18T07:32:00+02:00
+reason=Run the registered runtime-version contract workflow on current main, then redeploy Cloud Run with health version sourced from package.json.
