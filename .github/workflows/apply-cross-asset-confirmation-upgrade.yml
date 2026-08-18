@@ -1,0 +1,68 @@
+name: Apply Cross Asset Confirmation Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-cross-asset-confirmation-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply cross asset confirmation patch
+        run: python3 scripts/apply_cross_asset_confirmation_upgrade.py
+      - name: Validate independent cross asset confirmation
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
+          const market=[
+            {id:'DXY',symbol:'.DXY',price:98,changePercent:-.65},
+            {id:'US2Y',symbol:'US2Y',price:3.1,changePercent:-.55},
+            {id:'US10Y',symbol:'US10Y',price:3.8,changePercent:-.35},
+            {id:'SPX',symbol:'.SPX',price:6000,changePercent:.70},
+            {id:'VIX',symbol:'.VIX',price:15,changePercent:-4.0},
+            {id:'GOLD',symbol:'@GC.1',price:2600,changePercent:.55},
+            {id:'EURUSD',symbol:'EUR=',price:1.12,changePercent:.40}
+          ];
+          const history=Array.from({length:18},(_,i)=>({date:new Date(Date.now()-(18-i)*86400000).toISOString(),value:100+i*.2}));
+          const observations=[{seriesId:'XA',title:'Cross asset test',value:104,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',economy:'EUROPE',categories:['growth'],history}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:42,confidence:80,conviction:70,risk:'normal',components:{structuralDivergence:45,policyDivergence:35,releaseDivergence:20,narrativeDivergence:10},probabilities:{buy:.65,sell:.14,wait:.21}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const dims=(g,i,l,p,f)=>[{id:'growth',score:g},{id:'inflation',score:i},{id:'labour',score:l},{id:'policy',score:p},{id:'financial',score:f}];
+          const economies=[{id:'EUROPE',currency:'EUR',dimensions:dims(25,20,20,18,15)},{id:'USA',currency:'USD',dimensions:dims(5,10,8,12,5)}];
+          const research={dataQuality:{overall:94},risk:{aggregate:8},modelHealth:{score:92,status:'healthy',calibratedForecasts:10},evidenceIndependence:{independenceRatio:1,economies:[]},turningPoints:{economies:[]},catalystSequence:{currencies:[]},scenarios:[{label:'Base',pairs:[{symbol:'EURUSD',direction:'BUY',score:35}]}]};
+          const core=buildDecisionIntelligenceCore({economies,decision:primary,observations,events:[],news:[],marketData:market,research,decisionMemory:null});
+          const pair=core.pairDecisions[0];
+          if(!pair?.crossAsset?.available)throw new Error('Cross-asset confirmation missing');
+          if(pair.crossAsset.alignment!=='aligned')throw new Error(`Expected aligned cross-asset signal, got ${pair.crossAsset.alignment}`);
+          if(pair.crossAsset.used.length<3)throw new Error('Too few independent cross-asset factors consumed');
+          const governed=governDecisionMatrix(primary,core);
+          if(!governed.rankedOpportunities[0]?.decisionCore?.crossAsset)throw new Error('Cross-asset audit lost in governed matrix');
+          console.log(JSON.stringify(pair.crossAsset,null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit cross asset confirmation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add independent cross-asset confirmation intelligence'
+          git pull --rebase origin main
+          git push origin HEAD:main
