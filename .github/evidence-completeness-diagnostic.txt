@@ -1,0 +1,7 @@
+generated_at=2026-08-18T04:08:56Z
+patch_exit=1
+syntax_exit=0
+contract_exit=1
+--- patch output ---
+evidence completeness pair output: expected one anchor, found 2
+--- syntax output ---
