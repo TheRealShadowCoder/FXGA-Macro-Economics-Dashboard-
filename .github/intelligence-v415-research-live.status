@@ -1,0 +1,10 @@
+verified_at=2026-08-18T14:34:28.089Z
+contract=v4.15-research-live
+reported_health_version=4.15.0
+event_studies=19
+event_reaction_status=low-follow-through
+event_reaction_measurements=55
+policy_banks=5
+policy_currencies=USD,EUR,GBP,ZAR,JPY
+market_pricing_available=false
+public_contract=passed
