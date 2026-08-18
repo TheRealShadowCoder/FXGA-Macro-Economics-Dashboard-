@@ -1,0 +1,25 @@
+import fs from 'node:fs';
+
+const serviceUrl=String(process.env.SERVICE_URL||'').replace(/\/$/,'');
+const token=String(process.env.TOKEN||'');
+const publicBase=String(process.env.PUBLIC_BASE||'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev').replace(/\/$/,'');
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+if(!serviceUrl||!token)throw new Error('SERVICE_URL and TOKEN are required');
+
+async function privateCall(path,method='GET',body){const response=await fetch(serviceUrl+path,{method,headers:{Authorization:`Bearer ${token}`,Accept:'application/json','Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)}),text=await response.text();if(!response.ok)throw new Error(`${path} HTTP ${response.status}: ${text.slice(0,800)}`);return JSON.parse(text);}
+function validateResearch(research){
+  const missing=[];
+  const reactions=research?.eventReactionResearch,policy=research?.policyPathResearch;
+  if(!reactions)missing.push('eventReactionResearch');
+  else {if(typeof reactions.studyCount!=='number')missing.push('eventReactionResearch.studyCount');if(!reactions.global||!reactions.byCurrency||!reactions.byCategory||!reactions.byCurrencyCategory)missing.push('eventReactionResearch.profiles');if(!String(reactions.methodology||'').includes('Measured event-study reactions only'))missing.push('eventReactionResearch.methodology');}
+  if(!policy)missing.push('policyPathResearch');
+  else {if(policy.type!=='model-implied-policy-path')missing.push('policyPathResearch.type');if(policy.marketPricingAvailable!==false)missing.push('policyPathResearch.marketPricingAvailable');if(!Array.isArray(policy.economies)||policy.economies.length!==5)missing.push(`policyPathResearch.economies:${policy.economies?.length??0}`);for(const row of policy.economies||[]){const p=row?.probabilities||{},sum=Number(p.hike||0)+Number(p.hold||0)+Number(p.cut||0);if(Math.abs(sum-1)>.01)missing.push(`${row?.currency||'policy'}:probability-sum`);if(!row.centralBank||!row.pathPressure||!row.scenarios)missing.push(`${row?.currency||'policy'}:path-contract`);}}
+  return {ok:missing.length===0,missing,reactions,policy};
+}
+async function verifyPrivate(){let last;for(let attempt=1;attempt<=30;attempt++){try{const health=await privateCall('/health');await privateCall('/refresh-intelligence','POST',{forceNews:false});const state=await privateCall('/state'),research=state?.intelligence?.payload?.research,check=validateResearch(research);console.log(`private attempt ${attempt}: eventStudies=${check.reactions?.studyCount??'missing'} banks=${check.policy?.economies?.length??0} missing=${check.missing.length}`);if(check.ok)return {verifiedAt:new Date().toISOString(),reportedHealthVersion:String(health.version??'unknown'),eventStudies:check.reactions.studyCount,eventReactionStatus:check.reactions.global?.status??'unknown',eventReactionMeasurements:check.reactions.global?.measurements??0,policyBanks:check.policy.economies.length,policyCurrencies:check.policy.economies.map(x=>x.currency),marketPricingAvailable:check.policy.marketPricingAvailable};last=new Error(`Private v4.15 research missing: ${check.missing.join(', ')}`);}catch(error){last=error;console.log(`private attempt ${attempt}: ${error.message}`);}await sleep(5000);}throw last||new Error('Private v4.15 research did not become ready');}
+async function verifyPublic(report){let last;for(let attempt=1;attempt<=40;attempt++){try{const response=await fetch(publicBase+'/api/research',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),text=await response.text();if(!response.ok)throw new Error(`/api/research HTTP ${response.status}: ${text.slice(0,600)}`);const research=JSON.parse(text),check=validateResearch(research);console.log(`public attempt ${attempt}: eventStudies=${check.reactions?.studyCount??'missing'} banks=${check.policy?.economies?.length??0} missing=${check.missing.length}`);if(check.ok)return {...report,publicContract:{passed:true,eventStudies:check.reactions.studyCount,policyBanks:check.policy.economies.length}};last=new Error(`Public v4.15 research missing: ${check.missing.join(', ')}`);}catch(error){last=error;console.log(`public attempt ${attempt}: ${error.message}`);}await sleep(5000);}throw last||new Error('Public v4.15 research did not become ready');}
+const report=await verifyPublic(await verifyPrivate());
+const lines=[`verified_at=${report.verifiedAt}`,'contract=v4.15-research-live',`reported_health_version=${report.reportedHealthVersion}`,`event_studies=${report.publicContract.eventStudies}`,`event_reaction_status=${report.eventReactionStatus}`,`event_reaction_measurements=${report.eventReactionMeasurements}`,`policy_banks=${report.publicContract.policyBanks}`,`policy_currencies=${report.policyCurrencies.join(',')}`,`market_pricing_available=${report.marketPricingAvailable}`,'public_contract=passed'];
+fs.writeFileSync('.github/intelligence-v415-research-live.status',lines.join('\n')+'\n');
+fs.writeFileSync('/tmp/v415-research.json',JSON.stringify(report,null,2));
+console.log(JSON.stringify(report,null,2));
