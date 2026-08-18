@@ -1,31 +1,25 @@
 {
-  "generatedAt": "2026-08-18T12:36:03.530Z",
+  "generatedAt": "2026-08-18T12:46:47.887Z",
   "httpStatus": 200,
   "parseError": null,
-  "pairCount": 0,
-  "decisionCoreVersion": null,
+  "pairCount": 8,
+  "decisionCoreVersion": "1.4.0",
   "missingPairFields": [],
-  "missingTopLevel": [
-    "structuralBreaks",
-    "evidenceIndependence",
-    "turningPoints",
-    "catalystSequence",
-    "decisionChanges",
-    "analogueLibrary",
-    "crossPairConsistency",
-    "portfolioInteraction"
-  ],
-  "publicContractReady": false,
+  "missingTopLevel": [],
+  "publicContractReady": true,
   "keys": [
     "capabilityCoverage",
+    "catalystSequence",
     "dataQuality",
     "decisionCore",
     "decisionMemory",
+    "evidenceIndependence",
     "features",
     "forecasts",
     "generatedAt",
     "intelligenceGeneratedAt",
     "marketAnalytics",
+    "modelHealth",
     "notes",
     "operatingStandards",
     "provenance",
@@ -33,7 +27,25 @@
     "releaseAnalytics",
     "risk",
     "scenarios",
-    "schemaVersion"
+    "schemaVersion",
+    "sourceReliability",
+    "structuralBreaks",
+    "turningPoints"
   ],
-  "decisionCoreKeys": []
+  "decisionCoreKeys": [
+    "audit",
+    "contradictionSummary",
+    "crossPairConsistency",
+    "equations",
+    "evidenceGraph",
+    "evidenceQuality",
+    "expectationGaps",
+    "generatedAt",
+    "methodology",
+    "pairDecisions",
+    "portfolioInteraction",
+    "principles",
+    "researchContext",
+    "version"
+  ]
 }
