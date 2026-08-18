@@ -1,0 +1,78 @@
+name: Capture Refresh Intelligence Error
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-capture-refresh-error.trigger'
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  SERVICE: fxga-macro-collector
+  GCP_REGION: us-central1
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: config
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: service
+        run: |
+          gcloud config set project "$GCP_PROJECT_ID"
+          SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+      - id: invoke
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+          token_format: id_token
+          id_token_audience: ${{ steps.service.outputs.url }}
+          id_token_include_email: true
+      - name: Call refresh and capture sanitized response
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          set +e
+          STATUS=$(curl --max-time 300 -sS -o /tmp/refresh-body.txt -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"forceNews":false}' "$SERVICE_URL/refresh-intelligence")
+          echo "$STATUS" >/tmp/status
+          node <<'NODE'
+          const fs=require('fs');
+          const status=Number(fs.readFileSync('/tmp/status','utf8').trim()||0),raw=fs.readFileSync('/tmp/refresh-body.txt','utf8');
+          const sanitize=v=>String(v??'').replace(/AIza[0-9A-Za-z_-]{20,}/g,'[REDACTED_API_KEY]').replace(/sk-[A-Za-z0-9_-]{12,}/g,'[REDACTED_SECRET]').replace(/Bearer\s+[A-Za-z0-9._-]+/gi,'Bearer [REDACTED]');
+          let parsed=null;try{parsed=JSON.parse(raw)}catch{}
+          const report={generatedAt:new Date().toISOString(),httpStatus:status,ok:status>=200&&status<300,error:parsed?.error?sanitize(parsed.error):null,response:parsed&&!parsed.error?parsed:null,raw:parsed?null:sanitize(raw).slice(0,5000)};
+          fs.writeFileSync('.github/refresh-intelligence-error.json',JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
+          NODE
+      - name: Persist refresh diagnostic
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/refresh-intelligence-error.json
+          git commit -m 'Capture refresh-intelligence runtime error'
+          git pull --rebase origin main
+          git push origin HEAD:main
