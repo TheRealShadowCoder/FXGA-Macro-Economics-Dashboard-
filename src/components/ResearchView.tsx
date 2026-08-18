@@ -6,6 +6,7 @@ import { AdaptiveResearchPanel } from './AdaptiveResearchPanel';
 import { DecisionMemoryPanel } from './DecisionMemoryPanel';
 import { TransitionResearchPanel } from './TransitionResearchPanel';
 import { PolicyEventResearchPanel } from './PolicyEventResearchPanel';
+import { DecisionAttributionPanel, type DecisionQualityAttribution } from './DecisionAttributionPanel';
 
 type RiskCategory={id:string;score:number;severity:string;confidenceHaircut:number;warning:boolean;stressMultiplier:number};
 type Scenario={id:string;label:string;confidenceChange:number;currencies:Record<string,number>;pairs:Array<{symbol:string;score:number;direction:'BUY'|'SELL'|'WAIT'}>;assets:Record<string,number>};
@@ -29,6 +30,7 @@ type ResearchPayload={
   catalystSequence?:CatalystSequence;
   eventReactionResearch?:PolicyEventPanelProps['eventReaction'];
   policyPathResearch?:PolicyEventPanelProps['policyPath'];
+  decisionQualityAttribution?:DecisionQualityAttribution;
   risk:{aggregate:number;severity:string;confidenceAfterRisk:number;nextHighImpact?:{event:string;currency:string;date:string;minutes:number}|null;categories:RiskCategory[]};
   scenarios:Scenario[];
   regimes:Regime[];
@@ -87,6 +89,7 @@ export function ResearchView(){
     <DecisionCorePanel data={data.decisionCore}/>
     <AdvancedGovernancePanel data={data.decisionCore}/>
     <DecisionMemoryPanel data={data.decisionMemory}/>
+    <DecisionAttributionPanel data={data.decisionQualityAttribution}/>
     <AdaptiveResearchPanel sources={data.sourceReliability} forecasts={data.forecasts}/>
     <TransitionResearchPanel turningPoints={data.turningPoints} catalystSequence={data.catalystSequence} persistence={data.releaseAnalytics.persistence}/>
     <PolicyEventResearchPanel eventReaction={data.eventReactionResearch} policyPath={data.policyPathResearch}/>

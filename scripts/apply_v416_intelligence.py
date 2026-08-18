@@ -36,7 +36,7 @@ replace_once(path,"  const eventReactionResearch=buildEventReactionResearch(even
 replace_once(path,"  const research={...researchBase,eventReactionResearch,policyPathResearch};\n", "  const research={...researchBase,eventReactionResearch,policyPathResearch,decisionQualityAttribution};\n")
 replace_once(path,"'decayed-release-surprise','official-narrative'", "'decayed-release-surprise','regime-conditioned-event-reaction-calibration','official-narrative'")
 replace_once(path,"'central-bank-reaction','decayed-release-surprise'", "'central-bank-reaction','multi-decision-policy-path-tree','decayed-release-surprise'")
-replace_once(path,"'historical-decision-calibration','release-sequence'", "'historical-decision-calibration','realized-decision-quality-attribution','release-sequence'")
+replace_once(path,"'historical-decision-calibration','realized-event-reaction-research'", "'historical-decision-calibration','realized-decision-quality-attribution','realized-event-reaction-research'")
 
 # Collector check covers new production modules.
 path='cloud-run-collector/package.json'

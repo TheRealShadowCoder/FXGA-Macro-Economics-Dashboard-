@@ -60,7 +60,9 @@ function pairFeatureVector(pair){
     independenceRatio:Number(pair?.evidenceIndependence?.independenceRatio??1),
     modelHealth:Number(pair?.modelHealth?.score||0),
     counterfactualShift:Number(pair?.counterfactual?.minimumAdverseShift||100),
-    causalNet:Number(pair?.causalTransmission?.netTransmission||0)
+    causalNet:Number(pair?.causalTransmission?.netTransmission||0),
+    eventReactionFactor:Number(pair?.eventReactionCalibration?.factor||1),
+    eventReactionExposure:Number(pair?.eventReactionCalibration?.releaseExposure||0)
   };
 }
 
