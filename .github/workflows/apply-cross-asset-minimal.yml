@@ -17,20 +17,48 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Apply cross asset patch
-        run: python3 scripts/apply_cross_asset_confirmation_v2.py
-      - name: Syntax check
-        run: node --check cloud-run-collector/src/decision-intelligence-core.js
-      - name: Assert contract
+      - name: Apply and diagnose cross asset patch
         run: |
+          set +e
+          mkdir -p /tmp/cross-asset .github
+          python3 scripts/apply_cross_asset_confirmation_v2.py > /tmp/cross-asset/patch.log 2>&1
+          PATCH_RC=$?
+          node --check cloud-run-collector/src/decision-intelligence-core.js > /tmp/cross-asset/check.log 2>&1
+          CHECK_RC=$?
           grep -q 'function crossAssetConfirmation' cloud-run-collector/src/decision-intelligence-core.js
+          G1=$?
           grep -q 'crossAsset:g.crossAsset' cloud-run-collector/src/decision-intelligence-core.js
+          G2=$?
           grep -q 'crossAssetFactorValue' cloud-run-collector/src/decision-intelligence-core.js
-      - name: Commit
+          G3=$?
+          CONTRACT_RC=$(( G1 || G2 || G3 ))
+          {
+            echo "generated_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "patch_exit=$PATCH_RC"
+            echo "syntax_exit=$CHECK_RC"
+            echo "contract_exit=$CONTRACT_RC"
+            echo '--- patch output ---'
+            cat /tmp/cross-asset/patch.log
+            echo '--- syntax output ---'
+            cat /tmp/cross-asset/check.log
+          } > .github/cross-asset-v2-diagnostic.txt
+          echo "$PATCH_RC" > /tmp/cross-asset/patch.rc
+          echo "$CHECK_RC" > /tmp/cross-asset/check.rc
+          echo "$CONTRACT_RC" > /tmp/cross-asset/contract.rc
+      - name: Persist source or exact diagnostic
         run: |
+          PATCH_RC=$(cat /tmp/cross-asset/patch.rc)
+          CHECK_RC=$(cat /tmp/cross-asset/check.rc)
+          CONTRACT_RC=$(cat /tmp/cross-asset/contract.rc)
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add cloud-run-collector/src/decision-intelligence-core.js
-          git commit -m 'Integrate cross-asset confirmation source'
+          git add .github/cross-asset-v2-diagnostic.txt
+          if [ "$PATCH_RC" = 0 ] && [ "$CHECK_RC" = 0 ] && [ "$CONTRACT_RC" = 0 ]; then
+            git add cloud-run-collector/src/decision-intelligence-core.js
+            MSG='Integrate cross-asset confirmation source'
+          else
+            MSG='Record cross-asset integration diagnostic'
+          fi
+          git commit -m "$MSG"
           git pull --rebase origin main
           git push origin HEAD:main
