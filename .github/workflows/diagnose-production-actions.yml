@@ -1,0 +1,43 @@
+name: Diagnose Production Actions
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-diagnose-production-actions.trigger'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Inspect deployment and verifier runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          gh run list --workflow deploy-cloud-run-collector.yml --limit 12 --json databaseId,workflowName,headSha,status,conclusion,event,createdAt,updatedAt,url > /tmp/google.json
+          gh run list --workflow deploy.yml --limit 12 --json databaseId,workflowName,headSha,status,conclusion,event,createdAt,updatedAt,url > /tmp/cloudflare.json
+          gh run list --workflow verify-v414-live-direct.yml --limit 8 --json databaseId,workflowName,headSha,status,conclusion,event,createdAt,updatedAt,url > /tmp/direct.json
+          gh run list --workflow verify-intelligence-v414-live.yml --limit 8 --json databaseId,workflowName,headSha,status,conclusion,event,createdAt,updatedAt,url > /tmp/live.json
+          node <<'NODE'
+          const fs=require('fs'),read=p=>{try{return JSON.parse(fs.readFileSync(p,'utf8'))}catch{return []}};
+          const report={generatedAt:new Date().toISOString(),googleDeploys:read('/tmp/google.json'),cloudflareDeploys:read('/tmp/cloudflare.json'),directLiveVerifier:read('/tmp/direct.json'),postDeployVerifier:read('/tmp/live.json')};
+          fs.writeFileSync('.github/production-actions-diagnostic.json',JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
+          NODE
+      - name: Persist Actions diagnostic
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/production-actions-diagnostic.json
+          git commit -m 'Record production Actions deployment diagnostic'
+          git pull --rebase origin main
+          git push origin HEAD:main
