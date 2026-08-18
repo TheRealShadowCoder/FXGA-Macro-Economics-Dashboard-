@@ -37,7 +37,8 @@ jobs:
           npm audit --audit-level=moderate
       - name: Revalidate frontend
         run: |
-          npm ci
+          npm install
+          npm audit --audit-level=moderate
           npm run build
       - name: Commit v4.15 package metadata
         run: |
