@@ -1,0 +1,66 @@
+name: Integrate V4.17 Policy Calibration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-integrate-v417-policy-calibration.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply policy calibration integration
+        run: python3 scripts/apply_v417_policy_calibration.py
+      - name: Validate collector and dependency security
+        run: |
+          cd cloud-run-collector
+          npm ci --ignore-scripts
+          npm run check
+          npm audit --audit-level=moderate
+      - name: Verify policy scoring mathematics
+        run: |
+          cd cloud-run-collector
+          node --input-type=module <<'NODE'
+          import { policyCalibrationMath } from './src/policy-calibration.js';
+          const {outcomeForEvent,scoreForecast,summarizeRows}=policyCalibrationMath;
+          const hike=outcomeForEvent({actual:'4.50%',previous:'4.25%'}),hold=outcomeForEvent({actual:'4.25%',previous:'4.25%'}),cut=outcomeForEvent({actual:'4.00%',previous:'4.25%'});
+          if(hike?.action!=='hike'||hold?.action!=='hold'||cut?.action!=='cut')throw new Error('Policy outcome classifier failed');
+          const strong=scoreForecast({hike:.82,hold:.13,cut:.05},hike),weak=scoreForecast({hike:.10,hold:.80,cut:.10},hike);
+          if(!(strong.brier<weak.brier&&strong.logLoss<weak.logLoss&&strong.topCorrect===true&&weak.topCorrect===false))throw new Error('Policy scoring monotonicity failed');
+          const summary=summarizeRows(Array.from({length:8},(_,i)=>({scored:true,brier:i<6?.10:.50,logLoss:i<6?.2:1.4,topCorrect:i<6})));
+          if(summary.scored!==8||!Number.isFinite(summary.averageBrier)||!Number.isFinite(summary.brierSkillVsUniform))throw new Error('Policy summary invalid');
+          console.log(JSON.stringify({hike,hold,cut,strong:{brier:strong.brier,logLoss:strong.logLoss},weak:{brier:weak.brier,logLoss:weak.logLoss},summary},null,2));
+          NODE
+      - name: Verify immutable policy audit integration
+        run: |
+          grep -q "freezePolicyForecasts" cloud-run-collector/src/super-runtime.js
+          grep -q "scorePolicyForecasts" cloud-run-collector/src/super-runtime.js
+          grep -q "policyCalibration" cloud-run-collector/src/super-economist.js
+          grep -q "frozen-policy-probability-audit" cloud-run-collector/src/super-economist.js
+          grep -q "nextMeeting:meeting?{id:meeting.id" cloud-run-collector/src/policy-path-research.js
+          grep -q "PolicyCalibrationPanel" src/components/ResearchView.tsx
+      - name: Verify production frontend build
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          npm install --progress=false
+          npm run build
+      - name: Commit v4.17 source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/apply_v417_policy_calibration.py cloud-run-collector/src/super-economist.js cloud-run-collector/src/super-runtime.js cloud-run-collector/package.json src/components/ResearchView.tsx
+          if git diff --cached --quiet; then echo 'No integration changes to commit.'; exit 0; fi
+          git commit -m 'Integrate frozen central bank policy forecast calibration'
+          git pull --rebase origin main
+          git push origin HEAD:main
