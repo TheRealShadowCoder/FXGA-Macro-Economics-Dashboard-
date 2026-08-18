@@ -66,12 +66,30 @@ jobs:
           TOKEN: ${{ steps.invoke.outputs.id_token }}
         run: |
           set -euo pipefail
-          post(){ local name="$1" path="$2" body="${3:-{}}" code; code=$(curl --max-time 300 -sS -o "/tmp/$name.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$body" "$SERVICE_URL$path"); echo "$name HTTP $code"; test "$code" -ge 200 -a "$code" -lt 300 || { cat "/tmp/$name.json" | head -c 1800; exit 1; }; }
-          get(){ local name="$1" path="$2" code; code=$(curl --max-time 120 -sS -o "/tmp/$name.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$SERVICE_URL$path"); echo "$name HTTP $code"; test "$code" -ge 200 -a "$code" -lt 300 || { cat "/tmp/$name.json" | head -c 1800; exit 1; }; }
+          post(){
+            local name="$1"
+            local path="$2"
+            local body="${3:-}"
+            local code
+            if [ -z "$body" ]; then body='{}'; fi
+            code=$(curl --max-time 300 -sS -o "/tmp/$name.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data "$body" "$SERVICE_URL$path")
+            echo "$name HTTP $code"
+            test "$code" -ge 200 -a "$code" -lt 300 || { cat "/tmp/$name.json" | head -c 1800; exit 1; }
+          }
+          get(){
+            local name="$1"
+            local path="$2"
+            local code
+            code=$(curl --max-time 120 -sS -o "/tmp/$name.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$SERVICE_URL$path")
+            echo "$name HTTP $code"
+            test "$code" -ge 200 -a "$code" -lt 300 || { cat "/tmp/$name.json" | head -c 1800; exit 1; }
+          }
+
           get health /health
           post market /market-sync '{}'
           post intelligence /refresh-intelligence '{"forceNews":false}'
           get state /state
+
           node <<'NODE'
           const fs=require('fs');
           const health=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
@@ -82,6 +100,7 @@ jobs:
           const providers=health?.freeTierMarketData?.providers||{};
           const unmounted=requiredProviders.filter(id=>providers[id]?.configured!==true);
           if(unmounted.length)throw new Error(`Free-tier provider secrets not mounted: ${unmounted.join(', ')}`);
+
           const state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8'));
           const intel=state?.intelligence?.payload,research=intel?.research,core=intel?.decisionGovernance,pairs=core?.pairDecisions||[];
           if(!intel||!research||!core)throw new Error('Current intelligence state is incomplete');
