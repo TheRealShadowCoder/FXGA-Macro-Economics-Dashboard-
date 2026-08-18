@@ -27,6 +27,29 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Idempotently ensure all v4.14 source layers
+        run: |
+          set -euo pipefail
+          CORE='cloud-run-collector/src/decision-intelligence-core.js'
+          RESEARCH='cloud-run-collector/src/institutional-research.js'
+          MEMORY='cloud-run-collector/src/decision-memory.js'
+
+          if ! grep -q 'function reactionFunctionGapForPair' "$CORE"; then
+            python3 scripts/apply_reaction_function_gap_upgrade_v2.py
+          fi
+          if ! grep -q 'function crossAssetConfirmation' "$CORE"; then
+            python3 scripts/apply_cross_asset_confirmation_v3.py
+          fi
+          if ! grep -q 'function evidenceCompletenessControls' "$CORE"; then
+            python3 scripts/apply_evidence_completeness_v2.py
+          fi
+          if ! grep -q 'function historicalAnalogueControls' "$CORE" || ! grep -q 'analogueLibrary' "$MEMORY"; then
+            python3 scripts/apply_historical_analogue_v2.py
+          fi
+          if ! grep -q 'function buildStructuralBreaks' "$RESEARCH" || ! grep -q 'function structuralBreakControls' "$CORE"; then
+            python3 scripts/apply_structural_break_v2.py
+          fi
+
       - name: Require complete v4.14 intelligence source contract
         run: |
           set -euo pipefail
@@ -129,7 +152,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add cloud-run-collector/package.json cloud-run-collector/package-lock.json cloud-run-collector/src/decision-intelligence-core.js .github/intelligence-v414-source-ready.status
+          git add cloud-run-collector/package.json cloud-run-collector/package-lock.json cloud-run-collector/src/decision-intelligence-core.js cloud-run-collector/src/decision-memory.js cloud-run-collector/src/institutional-research.js .github/intelligence-v414-source-ready.status
           if git diff --cached --quiet; then
             echo 'V4.14 promotion already committed.'
           else
