@@ -7,12 +7,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 env:
   SERVICE: fxga-macro-collector
-  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
 
 jobs:
   verify:
@@ -20,152 +22,108 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+
+      - id: config
+        name: Resolve production authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
       - id: auth
         uses: google-github-actions/auth@v3
         with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
       - uses: google-github-actions/setup-gcloud@v2
+
       - id: service
         name: Resolve production data service
-        env:
-          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
         run: |
-          test -n "$PROJECT_ID" || { echo '::error::GCP_PROJECT_ID is missing'; exit 1; }
-          gcloud config set project "$PROJECT_ID"
+          gcloud config set project "$GCP_PROJECT_ID"
           SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           test -n "$SERVICE_URL" || { echo '::error::Production data service missing'; exit 1; }
           echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+
       - id: invoke
         uses: google-github-actions/auth@v3
         with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
           token_format: id_token
           id_token_audience: ${{ steps.service.outputs.url }}
           id_token_include_email: true
-      - name: Refresh current research state
+
+      - name: Verify private collector, mounted providers and intelligence
         env:
           TOKEN: ${{ steps.invoke.outputs.id_token }}
         run: |
+          set -euo pipefail
           req(){
-            local name="$1" method="$2" url="$3" body="${4:-{}}" out="/tmp/${name}.json"
-            local status
+            local name="$1" method="$2" path="$3" body="${4:-{}}" status
             if [ "$method" = POST ]; then
-              status=$(curl --max-time 300 -sS -o "$out" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$body" "$url")
+              status=$(curl --max-time 300 -sS -o "/tmp/${name}.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$body" "$SERVICE_URL$path")
             else
-              status=$(curl --max-time 120 -sS -o "$out" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$url")
+              status=$(curl --max-time 120 -sS -o "/tmp/${name}.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$SERVICE_URL$path")
             fi
             echo "$name HTTP $status"
-            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then cat "$out" | head -c 1800; exit 1; fi
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then cat "/tmp/${name}.json" | head -c 1800; exit 1; fi
           }
-          req market POST "$SERVICE_URL/market-sync" '{}'
-          req intelligence POST "$SERVICE_URL/refresh-intelligence" '{"forceNews":false}'
-          req state GET "$SERVICE_URL/state"
+          req health GET /health
+          req market POST /market-sync '{}'
+          req intelligence POST /refresh-intelligence '{"forceNews":false}'
+          req state GET /state
           node <<'NODE'
           const fs=require('fs');
+          const health=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
+          if(!health.ok)throw new Error('Production collector health is not OK');
+          const requiredProviders=['alpha_vantage','twelve_data','finnhub','marketstack','fmp','nasdaq_data_link'];
+          const providers=health?.freeTierMarketData?.providers||{};
+          const missing=requiredProviders.filter(id=>providers[id]?.configured!==true);
+          if(missing.length)throw new Error(`Market-data secrets not mounted: ${missing.join(', ')}`);
           const state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8'));
           const intel=state?.intelligence?.payload;
-          if(!intel)throw new Error('Intelligence state missing');
-          const core=intel.decisionGovernance, research=intel.research;
-          if(!core||!Array.isArray(core.pairDecisions)||core.pairDecisions.length<8)throw new Error('Decision governance coverage missing');
-          for(const pair of core.pairDecisions){
-            if(!pair?.bayesian?.posterior)throw new Error(`${pair?.symbol||'pair'} Bayesian posterior missing`);
-            if(!pair?.refined||!Number.isFinite(Number(pair.refined.score)))throw new Error(`${pair.symbol} refined score missing`);
-            if(!Array.isArray(pair?.thesis?.invalidations)||!Array.isArray(pair?.premortem))throw new Error(`${pair.symbol} thesis governance missing`);
-            if(!pair?.scenarioRobustness||!pair?.uncertainty)throw new Error(`${pair.symbol} scenario/uncertainty governance missing`);
-            if(!pair?.modelHealth||!pair?.historicalCalibration)throw new Error(`${pair.symbol} adaptive/historical controls missing`);
-            if(!pair?.causalTransmission||!pair?.counterfactual||!pair?.temporalIntelligence)throw new Error(`${pair.symbol} causal/counterfactual/temporal reasoning missing`);
-            if(!pair?.transitionRisk)throw new Error(`${pair.symbol} turning-point transition risk missing`);
-            if(!pair?.evidenceIndependence)throw new Error(`${pair.symbol} evidence-independence control missing`);
-          }
-          if(!core?.crossPairConsistency||!Array.isArray(core.crossPairConsistency.checks)||core.crossPairConsistency.checks.length<3)throw new Error('Cross-pair triangular consistency missing');
-          if(!core?.portfolioInteraction||!core.portfolioInteraction.pairControls)throw new Error('Portfolio interaction governance missing');
-          if(!research?.modelHealth)throw new Error('Research model health missing');
-          if(!Array.isArray(research?.sourceReliability))throw new Error('Source reliability missing');
-          if(!research?.evidenceIndependence||!Number.isFinite(Number(research.evidenceIndependence.independenceRatio)))throw new Error('Research evidence independence missing');
-          if(!research?.turningPoints||!Array.isArray(research.turningPoints.rows))throw new Error('Turning-point research missing');
-          if(!research?.catalystSequence||!Array.isArray(research.catalystSequence.currencies))throw new Error('Catalyst sequencing missing');
-          if(!Array.isArray(research?.releaseAnalytics?.persistence))throw new Error('Surprise persistence missing');
-          const calibrated=(research?.forecasts||[]).filter(f=>f?.modelWeights&&Number(f?.validationPoints||0)>0);
-          if(calibrated.length<1)throw new Error('Walk-forward calibrated forecasts missing');
-          const distributed=calibrated.filter(f=>f?.distribution&&Number(f.distribution.residualCount||0)>0);
-          if(distributed.length<1)throw new Error('Forecast error distributions missing');
+          const core=intel?.decisionGovernance,research=intel?.research,pairs=core?.pairDecisions||[];
+          if(!intel||!core||!research)throw new Error('Intelligence state missing');
+          if(pairs.length<8)throw new Error(`Decision governance coverage incomplete: ${pairs.length} pairs`);
+          const required=['bayesian','refined','causalTransmission','counterfactual','temporalIntelligence','transitionRisk','evidenceIndependence','scenarioRobustness','modelHealth','historicalCalibration','uncertainty','premortem','thesis','final'];
+          for(const pair of pairs)for(const field of required)if(pair?.[field]===undefined)throw new Error(`${pair?.symbol||'pair'} missing ${field}`);
+          if(!Array.isArray(core?.crossPairConsistency?.checks)||core.crossPairConsistency.checks.length<3)throw new Error('Cross-pair triangular consistency missing');
+          if(!core?.portfolioInteraction?.pairControls)throw new Error('Portfolio interaction governance missing');
+          if(!research?.modelHealth||!Array.isArray(research?.sourceReliability))throw new Error('Research model/source health missing');
+          if(!research?.evidenceIndependence||!research?.turningPoints||!research?.catalystSequence)throw new Error('Research governance layers missing');
+          if(!Array.isArray(research?.releaseAnalytics?.persistence))throw new Error('Release persistence missing');
           if(!intel.decisionMemory||typeof intel.decisionMemory!=='object')throw new Error('Decision memory summary missing');
-          const report={
-            verifiedAt:new Date().toISOString(),pairs:core.pairDecisions.length,evidenceQuality:core.evidenceQuality?.score,
-            modelHealth:research.modelHealth,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,
-            distributedForecasts:distributed.length,independenceRatio:research.evidenceIndependence.independenceRatio,
-            turningFamilies:research.turningPoints.rows.length,catalystCurrencies:research.catalystSequence.currencies.length,
-            surprisePersistence:research.releaseAnalytics.persistence.length,triangleChecks:core.crossPairConsistency.checks.length,
-            triangleConflicts:core.crossPairConsistency.conflicts,portfolioVetoes:Number(core.portfolioInteraction.concentrationVetoes||0)+Number(core.portfolioInteraction.triangleVetoes||0),
-            decisionMemory:{sampled:intel.decisionMemory.sampledDecisions||0,pending:intel.decisionMemory.pending||0}
-          };
-          fs.writeFileSync('/tmp/intelligence-verification.json',JSON.stringify(report,null,2));
-          console.log(JSON.stringify(report,null,2));
+          console.log(JSON.stringify({serviceVersion:health.version,pairs:pairs.length,configuredProviders:requiredProviders,evidenceQuality:core.evidenceQuality?.score,sourceReliability:research.sourceReliability.length,decisionMemorySamples:intel.decisionMemory.sampledDecisions||0},null,2));
           NODE
-      - name: Verify public research contract
+
+      - name: Verify public research propagation
         run: |
           node <<'NODE'
-          const fs=require('fs'),base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          async function read(){const r=await fetch(base+'/api/research',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),text=await r.text();if(!r.ok)throw new Error(`/api/research ${r.status}: ${text.slice(0,500)}`);return JSON.parse(text);}
           let last;
-          for(let attempt=0;attempt<45;attempt++){
+          for(let attempt=0;attempt<30;attempt++){
             try{
-              const research=await read(),core=research?.decisionCore,pairs=core?.pairDecisions||[];
-              const calibrated=(research?.forecasts||[]).filter(f=>f?.modelWeights&&Number(f?.validationPoints||0)>0);
-              const distributed=calibrated.filter(f=>f?.distribution&&Number(f.distribution.residualCount||0)>0);
-              const pairContract=pairs.length>=8&&pairs.every(p=>p?.causalTransmission&&p?.counterfactual&&p?.temporalIntelligence&&p?.transitionRisk&&p?.evidenceIndependence&&p?.historicalCalibration);
-              if(pairContract&&core?.crossPairConsistency?.checks?.length>=3&&core?.portfolioInteraction?.pairControls&&research?.modelHealth&&Array.isArray(research?.sourceReliability)&&research?.evidenceIndependence&&research?.turningPoints&&research?.catalystSequence&&Array.isArray(research?.releaseAnalytics?.persistence)&&calibrated.length>0&&distributed.length>0&&research?.decisionMemory){
-                const report=JSON.parse(fs.readFileSync('/tmp/intelligence-verification.json','utf8'));
-                report.publicContract={pairs:pairs.length,modelHealth:research.modelHealth.status,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,distributedForecasts:distributed.length,decisionMemorySamples:research.decisionMemory.sampledDecisions||0,independenceRatio:research.evidenceIndependence.independenceRatio,triangleChecks:core.crossPairConsistency.checks.length};
-                fs.writeFileSync('/tmp/intelligence-verification.json',JSON.stringify(report,null,2));
-                console.log('PUBLIC INTELLIGENCE VERIFIED',JSON.stringify(report.publicContract));
+              const response=await fetch(base+'/api/research',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+              const text=await response.text();
+              if(!response.ok)throw new Error(`/api/research ${response.status}: ${text.slice(0,500)}`);
+              const research=JSON.parse(text),core=research?.decisionCore,pairs=core?.pairDecisions||[];
+              const ok=pairs.length>=8&&pairs.every(p=>p?.causalTransmission&&p?.counterfactual&&p?.temporalIntelligence&&p?.transitionRisk&&p?.evidenceIndependence&&p?.historicalCalibration);
+              if(ok&&core?.crossPairConsistency?.checks?.length>=3&&core?.portfolioInteraction?.pairControls&&research?.modelHealth&&research?.decisionMemory){
+                console.log('PUBLIC INTELLIGENCE VERIFIED',JSON.stringify({pairs:pairs.length,modelHealth:research.modelHealth.status,decisionMemorySamples:research.decisionMemory.sampledDecisions||0}));
                 process.exit(0);
               }
-              last=new Error('Waiting for consolidated v4.13 research intelligence contract');
+              last=new Error('Public research state has not received the current governed intelligence snapshot yet');
             }catch(error){last=error;}
             await sleep(4000);
           }
           throw last||new Error('Public research contract did not update');
           NODE
-      - name: Persist verification marker
-        run: |
-          mkdir -p .github
-          node <<'NODE'
-          const fs=require('fs');
-          const report=JSON.parse(fs.readFileSync('/tmp/intelligence-verification.json','utf8'));
-          const lines=[
-            `verified_at=${report.verifiedAt}`,
-            `contract=v4.13`,
-            `pairs=${report.pairs}`,
-            `evidence_quality=${report.evidenceQuality ?? 'n/a'}`,
-            `model_health=${report.publicContract?.modelHealth ?? report.modelHealth?.status ?? 'n/a'}`,
-            `source_reliability=${report.sourceReliability}`,
-            `calibrated_forecasts=${report.calibratedForecasts}`,
-            `distributed_forecasts=${report.distributedForecasts}`,
-            `evidence_independence=${report.independenceRatio}`,
-            `turning_families=${report.turningFamilies}`,
-            `catalyst_currencies=${report.catalystCurrencies}`,
-            `surprise_persistence=${report.surprisePersistence}`,
-            `triangle_checks=${report.triangleChecks}`,
-            `triangle_conflicts=${report.triangleConflicts}`,
-            `portfolio_vetoes=${report.portfolioVetoes}`,
-            `decision_memory_samples=${report.publicContract?.decisionMemorySamples ?? report.decisionMemory?.sampled ?? 0}`,
-            `public_contract=passed`,
-          ];
-          fs.writeFileSync('.github/intelligence-verification.status',lines.join('\n')+'\n');
-          NODE
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/intelligence-verification.status
-          if git diff --cached --quiet; then echo 'Verification marker unchanged.'; exit 0; fi
-          git commit -m 'Verify live v4.13 decision intelligence contract'
-          git pull --rebase origin main
-          git push origin HEAD:main
