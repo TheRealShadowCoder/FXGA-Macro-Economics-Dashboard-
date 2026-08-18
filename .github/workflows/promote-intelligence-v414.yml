@@ -1,0 +1,53 @@
+name: Promote Intelligence V4.14
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-promote-intelligence-v414.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Require source readiness marker
+        run: |
+          test -f .github/intelligence-v414-source-ready.status || { echo '::error::v4.14 source readiness marker missing'; exit 1; }
+          grep -q '^contract=v4.14-source$' .github/intelligence-v414-source-ready.status
+          grep -q '^backend_check=passed$' .github/intelligence-v414-source-ready.status
+          grep -q '^dependency_audit=passed$' .github/intelligence-v414-source-ready.status
+          grep -q '^frontend_build=passed$' .github/intelligence-v414-source-ready.status
+      - name: Set collector release version
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const path='cloud-run-collector/package.json';
+          const pkg=JSON.parse(fs.readFileSync(path,'utf8'));
+          pkg.version='4.14.0';
+          fs.writeFileSync(path,JSON.stringify(pkg,null,2)+'\n');
+          NODE
+      - name: Revalidate promoted collector
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          npm audit --audit-level=moderate
+      - name: Commit promoted version
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/package.json cloud-run-collector/package-lock.json
+          if git diff --cached --quiet; then echo 'Collector is already v4.14.0.'; exit 0; fi
+          git commit -m 'Promote decision intelligence v4.14.0'
+          git pull --rebase origin main
+          git push origin HEAD:main
