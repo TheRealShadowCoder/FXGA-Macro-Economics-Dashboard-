@@ -3,7 +3,7 @@
   "private": true,
   "version": "4.20.0",
   "type": "module",
-  "fxgaDeploymentProfile": "free-tier-market-router-v1",
+  "fxgaDeploymentProfile": "free-tier-market-router-v2",
   "engines": {
     "node": ">=24"
   },
