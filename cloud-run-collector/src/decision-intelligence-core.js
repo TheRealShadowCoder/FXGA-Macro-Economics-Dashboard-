@@ -144,10 +144,46 @@ function thesisForPair(opportunity,posterior,refined,contradictions,catalysts,qu
   if(expectationGap.marketAvailable)invalidations.push('Verified price response persists against the fundamental thesis through the active event window.');
   return {direction,statement:`${opportunity.symbol}: ${direction} thesis after Bayesian evidence reconciliation; refined score ${refined.score}.`,drivers,opposingEvidence:opponents,catalysts,invalidations,quality:quality.status,counterThesis:opponents.length?`The strongest counter-thesis is ${opponents[0].label} at ${Math.round(opponents[0].value)}.`:'No major modeled component currently forms a strong counter-thesis; event and market-confirmation risk remain.'};
 }
-function finalDecision(opportunity,posterior,refined,contradictions,quality){
+function scenarioRobustness(research,symbol,preferredDirection){
+  const scenarios=Array.isArray(research?.scenarios)?research.scenarios:[];
+  const observations=[];
+  for(const scenario of scenarios){
+    const pair=(scenario?.pairs||[]).find(item=>String(item?.symbol||'').toUpperCase()===String(symbol||'').toUpperCase());
+    if(!pair)continue;
+    const direction=String(pair.direction||'WAIT').toUpperCase();
+    observations.push({scenario:scenario.label||scenario.id,direction,score:Number(pair.score||0),matches:direction===preferredDirection,wait:direction==='WAIT'});
+  }
+  if(!observations.length)return {available:false,score:50,factor:.88,matches:0,flips:0,waits:0,total:0,observations:[],status:'not-measured'};
+  const matches=observations.filter(x=>x.matches).length,waits=observations.filter(x=>x.wait).length,flips=observations.length-matches-waits;
+  const score=Math.round(100*(matches+.45*waits)/observations.length),factor=clamp(.55+.45*score/100,.55,1);
+  return {available:true,score,factor:Number(factor.toFixed(3)),matches,flips,waits,total:observations.length,observations,status:score>=70?'robust':score>=45?'conditional':'fragile'};
+}
+function researchRiskControls(research){
+  const aggregate=Number(research?.risk?.aggregate||0),quality=Number(research?.dataQuality?.overall||0),severity=String(research?.risk?.severity||'normal');
+  const riskPenalty=clamp(1-aggregate/180,.48,1),qualityFactor=quality>0?clamp(quality/85,.60,1):.82;
+  return {aggregate,quality,severity,riskPenalty:Number(riskPenalty.toFixed(3)),qualityFactor:Number(qualityFactor.toFixed(3)),nextHighImpact:research?.risk?.nextHighImpact||null};
+}
+function uncertaintyDecomposition(posterior,contradictions,quality,expectationGap,scenario,risk){
+  const probs=[posterior.buy,posterior.sell,posterior.wait].map(x=>Math.max(1e-9,Number(x||0))),entropy=-probs.reduce((s,p)=>s+p*Math.log(p),0)/Math.log(3);
+  const dataUncertainty=1-clamp(quality.score/100,0,1),contradictionUncertainty=clamp(contradictions.weightedSeverity/6,0,1),marketUncertainty=expectationGap.marketAvailable?clamp(Math.abs(Number(expectationGap.gap||0))/100,0,1):.55,scenarioUncertainty=scenario.available?1-scenario.score/100:.50,riskUncertainty=clamp(risk.aggregate/100,0,1);
+  const total=clamp(.28*entropy+.20*dataUncertainty+.18*contradictionUncertainty+.12*marketUncertainty+.12*scenarioUncertainty+.10*riskUncertainty,0,1);
+  return {total:Number(total.toFixed(4)),score:Math.round(total*100),posteriorEntropy:Number(entropy.toFixed(4)),data:Math.round(dataUncertainty*100),contradictions:Math.round(contradictionUncertainty*100),market:Math.round(marketUncertainty*100),scenario:Math.round(scenarioUncertainty*100),risk:Math.round(riskUncertainty*100),status:total>=.62?'high':total>=.38?'moderate':'contained'};
+}
+function buildPremortem(opportunity,contradictions,expectationGap,scenario,risk,quality){
+  const failures=[];
+  if(quality.score<70)failures.push({risk:'evidence-quality',severity:'high',condition:'Evidence freshness, breadth or historical depth deteriorates further.',response:'Downgrade to WAIT until coverage recovers.'});
+  if(contradictions.count)failures.push({risk:'contradiction-escalation',severity:contradictions.status==='severe'?'high':'medium',condition:'Opposing macro, policy, release or market evidence strengthens.',response:'Require a fresh score and posterior reconciliation before execution.'});
+  if(expectationGap.marketAvailable&&Math.abs(Number(expectationGap.gap||0))>=20)failures.push({risk:'expectation-gap-persistence',severity:'medium',condition:'Price continues to reject the fundamental expectation gap.',response:'Treat price rejection as evidence against the thesis rather than assuming delayed convergence.'});
+  if(scenario.available&&scenario.status!=='robust')failures.push({risk:'scenario-fragility',severity:scenario.status==='fragile'?'high':'medium',condition:'A plausible macro stress scenario flips or neutralizes the pair direction.',response:'Reduce confidence or hold WAIT until the catalyst resolves.'});
+  if(risk.aggregate>=50||risk.nextHighImpact)failures.push({risk:'event-or-portfolio-risk',severity:risk.aggregate>=70?'high':'medium',condition:'Event or portfolio risk overwhelms the modeled directional edge.',response:'Apply event lockout or risk haircut before technical confirmation.'});
+  if(!failures.length)failures.push({risk:'unmodeled-shock',severity:'low',condition:'A new policy, geopolitical or liquidity shock arrives outside the modeled evidence set.',response:'Invalidate cached conviction and force a full evidence refresh.'});
+  return failures.slice(0,6);
+}
+function finalDecision(opportunity,posterior,refined,contradictions,quality,controls){
   const maxDirectional=Math.max(posterior.buy,posterior.sell),posteriorDirection=posterior.buy>=posterior.sell?'BUY':'SELL',original=String(opportunity.direction||'WAIT').toUpperCase();
-  const confidence=Math.round(100*Math.min(maxDirectional,Number(opportunity.confidence||0)/100||maxDirectional)*contradictions.penalty*Math.max(.45,quality.score/100));
-  const dynamicThreshold=Math.round(18+12*(1-confidence/100)+3*Math.min(4,contradictions.weightedSeverity));
+  const scenarioFactor=Number(controls?.scenario?.factor||.88),riskPenalty=Number(controls?.risk?.riskPenalty||.82),researchQuality=Number(controls?.risk?.qualityFactor||.82),uncertaintyPenalty=clamp(1-Number(controls?.uncertainty?.total||.5)*.35,.62,1);
+  const confidence=Math.round(100*Math.min(maxDirectional,Number(opportunity.confidence||0)/100||maxDirectional)*contradictions.penalty*Math.max(.45,quality.score/100)*scenarioFactor*riskPenalty*researchQuality*uncertaintyPenalty);
+  const dynamicThreshold=Math.round(18+12*(1-confidence/100)+3*Math.min(4,contradictions.weightedSeverity)+6*Number(controls?.uncertainty?.total||0));
   const reason=[];
   let direction=posteriorDirection;
   if(original==='WAIT'){direction='WAIT';reason.push('Primary macro engine has no directional edge.');}
@@ -156,6 +192,9 @@ function finalDecision(opportunity,posterior,refined,contradictions,quality){
   if(maxDirectional<.46){direction='WAIT';reason.push('Posterior directional probability is not decisive.');}
   if(confidence<38){direction='WAIT';reason.push('Governed confidence is below the minimum decision threshold.');}
   if(contradictions.status==='severe'){direction='WAIT';reason.push('Contradiction severity is too high for directional execution.');}
+  if(controls?.scenario?.available&&controls.scenario.status==='fragile'){direction='WAIT';reason.push('Directional thesis is fragile across plausible macro scenarios.');}
+  if(Number(controls?.risk?.aggregate||0)>=78){direction='WAIT';reason.push('Research risk state is too elevated for directional execution.');}
+  if(Number(controls?.uncertainty?.total||0)>=.68){direction='WAIT';reason.push('Combined model and evidence uncertainty is too high.');}
   if(String(opportunity.risk||'')==='event-lockout'){direction='WAIT';reason.push('High-impact event lockout is active.');}
   return {direction,confidence,dynamicThreshold,reason:reason.length?reason:['Primary and governance layers agree; decision remains eligible for technical confirmation.'],executionGate:direction==='WAIT'?'NO_DIRECTIONAL_EXECUTION':'AWAIT_TECHNICAL_CONFIRMATION'};
 }
@@ -173,13 +212,13 @@ function decisionAudit(pairDecisions){
 }
 
 export function buildDecisionIntelligenceCore({economies=[],decision={},observations=[],events=[],news=[],marketData=null,research=null,now=new Date()}={}){
-  const nowMs=now.getTime(),quality=evidenceQuality(observations),opportunities=Array.isArray(decision?.rankedOpportunities)?decision.rankedOpportunities:[];
+  const nowMs=now.getTime(),baseQuality=evidenceQuality(observations),researchQuality=Number(research?.dataQuality?.overall||0),quality=researchQuality>0?{...baseQuality,score:Math.round(.72*baseQuality.score+.28*researchQuality),status:(.72*baseQuality.score+.28*researchQuality)>=80?'strong':(.72*baseQuality.score+.28*researchQuality)>=60?'usable':'weak',researchQuality}:baseQuality,opportunities=Array.isArray(decision?.rankedOpportunities)?decision.rankedOpportunities:[];
   const pairDecisions=opportunities.map(opportunity=>{
-    const marketSignal=marketAssetSignal(opportunity.symbol,marketData),expectationGap=expectationGapForPair(opportunity,events,marketData,nowMs),bayesian=bayesianPosterior(opportunity,marketSignal,expectationGap,quality),contradictions=contradictionAudit(opportunity,bayesian.posterior,marketSignal,expectationGap),refined=refinedPairScore(opportunity,expectationGap,marketSignal,contradictions),catalysts=nearestCatalysts(events,opportunity.symbol,nowMs),thesis=thesisForPair(opportunity,bayesian.posterior,refined,contradictions,catalysts,quality,expectationGap),final=finalDecision(opportunity,bayesian.posterior,refined,contradictions,quality);
-    return {symbol:opportunity.symbol,originalDirection:opportunity.direction,originalScore:Number(opportunity.score||0),quality,bayesian,expectationGap,marketSignal,contradictions,refined,thesis,final};
+    const marketSignal=marketAssetSignal(opportunity.symbol,marketData),expectationGap=expectationGapForPair(opportunity,events,marketData,nowMs),bayesian=bayesianPosterior(opportunity,marketSignal,expectationGap,quality),contradictions=contradictionAudit(opportunity,bayesian.posterior,marketSignal,expectationGap),refined=refinedPairScore(opportunity,expectationGap,marketSignal,contradictions),catalysts=nearestCatalysts(events,opportunity.symbol,nowMs),preferred=bayesian.posterior.buy>=bayesian.posterior.sell?'BUY':'SELL',scenario=scenarioRobustness(research,opportunity.symbol,preferred),risk=researchRiskControls(research),uncertainty=uncertaintyDecomposition(bayesian.posterior,contradictions,quality,expectationGap,scenario,risk),premortem=buildPremortem(opportunity,contradictions,expectationGap,scenario,risk,quality),thesis=thesisForPair(opportunity,bayesian.posterior,refined,contradictions,catalysts,quality,expectationGap),final=finalDecision(opportunity,bayesian.posterior,refined,contradictions,quality,{scenario,risk,uncertainty});
+    return {symbol:opportunity.symbol,originalDirection:opportunity.direction,originalScore:Number(opportunity.score||0),quality,bayesian,expectationGap,marketSignal,contradictions,refined,scenarioRobustness:scenario,riskControls:risk,uncertainty,premortem,thesis,final};
   });
   const graph=evidenceGraph(pairDecisions,quality),audit=decisionAudit(pairDecisions),expectationGaps=pairDecisions.map(x=>x.expectationGap),contradictionSummary={contained:pairDecisions.filter(x=>x.contradictions.status==='contained').length,material:pairDecisions.filter(x=>x.contradictions.status==='material').length,severe:pairDecisions.filter(x=>x.contradictions.status==='severe').length,total:pairDecisions.reduce((s,x)=>s+x.contradictions.count,0)};
-  return {version:'1.0.0',generatedAt:now.toISOString(),methodology:'Primary macro decision -> tempered Bayesian update -> expectation-gap analysis -> contradiction governance -> refined pair differential -> thesis/invalidation -> conservative execution gate.',principles:['WAIT is a valid decision','correlated evidence is temperature-shrunk','missing market evidence cannot create confirmation','contradictions raise thresholds','a governance disagreement vetoes execution rather than flipping the trade','every directional thesis carries explicit invalidation conditions'],evidenceQuality:quality,pairDecisions,expectationGaps,contradictionSummary,evidenceGraph:graph,audit,researchContext:{dataQualityOverall:Number(research?.dataQuality?.overall||0),riskAggregate:Number(research?.risk?.aggregate||0),newsItems:Array.isArray(news)?news.length:0,economies:Array.isArray(economies)?economies.length:0},equations:{bayes:'posterior(state) ∝ prior(state) × Π tempered likelihood(evidence | state)',refinedScore:'S* = contradictionPenalty × weighted(primaryEdge, policy, release, consensusExpectation, verifiedMarket)',governedConfidence:'C* = min(posterior directional probability, primary confidence) × contradictionPenalty × evidenceQuality',decision:'Directional only when primary direction agrees with posterior, |S*| clears dynamic threshold, confidence ≥ 38, contradictions are not severe, and no event lockout is active.'}};
+  return {version:'1.0.0',generatedAt:now.toISOString(),methodology:'Primary macro decision -> tempered Bayesian update -> expectation-gap analysis -> contradiction governance -> refined pair differential -> thesis/invalidation -> conservative execution gate.',principles:['WAIT is a valid decision','correlated evidence is temperature-shrunk','missing market evidence cannot create confirmation','contradictions raise thresholds','scenario fragility reduces confidence','research risk applies an explicit haircut','uncertainty is decomposed before execution','a governance disagreement vetoes execution rather than flipping the trade','every directional thesis carries explicit invalidation conditions','every decision carries a pre-mortem failure map'],evidenceQuality:quality,pairDecisions,expectationGaps,contradictionSummary,evidenceGraph:graph,audit,researchContext:{dataQualityOverall:Number(research?.dataQuality?.overall||0),riskAggregate:Number(research?.risk?.aggregate||0),newsItems:Array.isArray(news)?news.length:0,economies:Array.isArray(economies)?economies.length:0},equations:{uncertainty:'U = 0.28×posteriorEntropy + 0.20×dataUncertainty + 0.18×contradictions + 0.12×marketGap + 0.12×scenarioFragility + 0.10×risk',scenarioRobustness:'SR = share of plausible scenarios retaining direction, with WAIT receiving partial credit',bayes:'posterior(state) ∝ prior(state) × Π tempered likelihood(evidence | state)',refinedScore:'S* = contradictionPenalty × weighted(primaryEdge, policy, release, consensusExpectation, verifiedMarket)',governedConfidence:'C* = min(posterior directional probability, primary confidence) × contradictionPenalty × evidenceQuality',decision:'Directional only when primary direction agrees with posterior, |S*| clears dynamic threshold, confidence ≥ 38, contradictions are not severe, and no event lockout is active.'}};
 }
 
 export function governDecisionMatrix(decision,core){
