@@ -19,6 +19,8 @@ type PairDecision={
   causalTransmission?:{status:string;availableNodes:number;missingNodes:string[];aligned:number;opposed:number;agreement:number;netTransmission:number;nodes:Array<{id:string;label:string;value:number|null;available:boolean}>};
   counterfactual?:{baselineScore:number;minimumAdverseShift:number|null;fragility:string;weakestComponents:string[];whatWouldChangeTheMind:string[]};
   temporalIntelligence?:{status:string;factor:number;conflicts:string[];releaseDifferential:number;revisionDifferential:number;communicationGap:number;catalysts?:{lastHighImpact?:{event:string;currency:string;date:string}|null;nextHighImpact?:{event:string;currency:string;date:string;minutes:number}|null;catalystAgeHours?:number|null}};
+  transitionRisk?:{status:string;maxRisk:number;factor:number;turningPointFactor:number;catalystFactor:number;divergentDirections:boolean;catalystDensity:number};
+  evidenceIndependence?:{status:string;independenceRatio:number;factor:number;globalRatio:number};
   premortem?:PremortemItem[];
   thesis:{statement:string;drivers:Array<{label:string;value:number}>;opposingEvidence:Array<{label:string;value:number}>;invalidations:string[];counterThesis:string};
   final:{direction:string;confidence:number;dynamicThreshold:number;reason:string[];executionGate:string};
@@ -28,6 +30,8 @@ export type DecisionCorePayload={
   methodology:string;
   evidenceQuality:{score:number;status:string;coverage:number;freshness:number;historyDepth:number;sourceBreadth:number};
   contradictionSummary:{contained:number;material:number;severe:number;total:number};
+  crossPairConsistency?:{checks:Array<{target:string;equation:string;direct:number;implied:number;gap:number;status:string;weakestSymbol:string|null}>;conflicts:number;divergent:number;consistent:number;vetoSymbols:string[]};
+  portfolioInteraction?:{accepted:string[];grossExposureUnits:number;largestExposure:{currency:string;units:number}|null;concentrationVetoes:number;triangleVetoes:number};
   audit:{pairCount:number;directionalCount:number;waitCount:number;governanceVetoes:number;severeContradictions:number;averageGovernedConfidence:number};
   pairDecisions:PairDecision[];
 };
@@ -40,12 +44,14 @@ const probabilityClass=(direction:string)=>direction==='BUY'?'positive':directio
 export function DecisionCorePanel({data}:{data?:DecisionCorePayload|null}){
   if(!data)return null;
   const ranked=[...data.pairDecisions].sort((a,b)=>Math.max(b.bayesian.posterior.buy,b.bayesian.posterior.sell)-Math.max(a.bayesian.posterior.buy,a.bayesian.posterior.sell));
+  const crossPairVetoes=data.crossPairConsistency?.vetoSymbols?.length??0;
+  const portfolioVetoes=data.portfolioInteraction?.concentrationVetoes??0;
   return <>
-    <section className="section-head decision-core-head" aria-label="Decision governance research"><div><span className="eyebrow">Decision Governance</span><h2>Second-pass evidence reconciliation before execution</h2><p>Each directional view is challenged by probability updating, causal transmission, expectation gaps, counterfactual fragility, temporal evidence, scenario robustness, uncertainty, historical calibration and explicit invalidation rules. A disagreement becomes WAIT rather than an automatic reversal.</p></div></section>
+    <section className="section-head decision-core-head" aria-label="Decision governance research"><div><span className="eyebrow">Decision Governance</span><h2>Second-pass evidence reconciliation before execution</h2><p>Each directional view is challenged by probability updating, causal transmission, expectation gaps, counterfactual fragility, temporal evidence, turning-point risk, evidence independence, scenario robustness, uncertainty, historical calibration and explicit invalidation rules. Cross-pair inconsistencies and concentrated currency exposure can block otherwise valid single-pair ideas.</p></div></section>
     <section className="decision-core-summary">
       <article className="panel decision-core-kpi"><span>Evidence quality</span><strong className={data.evidenceQuality.score>=75?'positive':data.evidenceQuality.score>=55?'neutral':'negative'}>{data.evidenceQuality.score}</strong><small>{data.evidenceQuality.status} · freshness {pct(data.evidenceQuality.freshness)}</small></article>
       <article className="panel decision-core-kpi"><span>Directional</span><strong>{data.audit.directionalCount}</strong><small>{data.audit.waitCount} held at WAIT</small></article>
-      <article className="panel decision-core-kpi"><span>Governance vetoes</span><strong className={data.audit.governanceVetoes?'neutral':'positive'}>{data.audit.governanceVetoes}</strong><small>Primary ideas blocked by second-pass evidence</small></article>
+      <article className="panel decision-core-kpi"><span>Governance vetoes</span><strong className={data.audit.governanceVetoes||crossPairVetoes||portfolioVetoes?'neutral':'positive'}>{data.audit.governanceVetoes+crossPairVetoes+portfolioVetoes}</strong><small>{crossPairVetoes} cross-pair · {portfolioVetoes} concentration</small></article>
       <article className="panel decision-core-kpi"><span>Contradictions</span><strong className={data.contradictionSummary.severe?'negative':data.contradictionSummary.material?'neutral':'positive'}>{data.contradictionSummary.total}</strong><small>{data.contradictionSummary.severe} severe · {data.contradictionSummary.material} material</small></article>
     </section>
     <section className="decision-core-grid">
@@ -64,9 +70,12 @@ export function DecisionCorePanel({data}:{data?:DecisionCorePayload|null}){
             <span>Expectation gap <b>{item.expectationGap.gap==null?'Not priced':sign(item.expectationGap.gap)}</b></span>
             <span>Contradictions <b>{item.contradictions.count}</b></span>
             <span>Evidence <b>{item.quality.score}</b></span>
+            <span>Independent evidence <b>{item.evidenceIndependence?`${Math.round(item.evidenceIndependence.independenceRatio*100)}%`:'—'}</b></span>
             <span>Posterior peak <b>{pct(best)}</b></span>
             <span>Scenario robustness <b>{item.scenarioRobustness?.available?`${item.scenarioRobustness.score}%`:'Not measured'}</b></span>
             <span>Uncertainty <b className={(item.uncertainty?.score??0)>=60?'negative':(item.uncertainty?.score??0)>=40?'neutral':'positive'}>{item.uncertainty?.score??'—'}</b></span>
+            <span>Turning-point risk <b className={(item.transitionRisk?.maxRisk??0)>=75?'negative':(item.transitionRisk?.maxRisk??0)>=50?'neutral':'positive'}>{item.transitionRisk?.maxRisk??'—'}</b></span>
+            <span>Catalyst density <b>{item.transitionRisk?.catalystDensity??'—'}</b></span>
             <span>Causal chain <b>{item.causalTransmission?.status??'—'}</b></span>
             <span>Counterfactual <b className={item.counterfactual?.fragility==='high'?'negative':item.counterfactual?.fragility==='medium'?'neutral':'positive'}>{item.counterfactual?.fragility??'—'}</b></span>
             <span>Temporal evidence <b>{item.temporalIntelligence?.status??'—'}</b></span>
@@ -80,6 +89,8 @@ export function DecisionCorePanel({data}:{data?:DecisionCorePayload|null}){
             <strong>Causal transmission</strong><p>{item.causalTransmission?`${item.causalTransmission.status}; ${item.causalTransmission.aligned} aligned, ${item.causalTransmission.opposed} opposed, ${item.causalTransmission.availableNodes} verified nodes.`:'Not available.'}</p>
             {item.counterfactual?.whatWouldChangeTheMind?.length?<><strong>Counterfactual stress</strong>{item.counterfactual.whatWouldChangeTheMind.map((rule,index)=><p key={`c-${index}`}>{rule}</p>)}</>:null}
             {item.temporalIntelligence?<><strong>Temporal evidence</strong><p>Release differential {sign(item.temporalIntelligence.releaseDifferential)} · revision differential {sign(item.temporalIntelligence.revisionDifferential)} · communication gap {Math.round(item.temporalIntelligence.communicationGap)}.</p>{item.temporalIntelligence.conflicts.map((conflict,index)=><p key={`t-${index}`}>Conflict: {conflict.replaceAll('-',' ')}</p>)}</>:null}
+            {item.transitionRisk?<><strong>Transition risk</strong><p>{item.transitionRisk.status}; turning-point risk {item.transitionRisk.maxRisk}, catalyst density {item.transitionRisk.catalystDensity}, confidence factor {item.transitionRisk.factor}.</p></>:null}
+            {item.evidenceIndependence?<><strong>Evidence independence</strong><p>{item.evidenceIndependence.status}; effective independence {Math.round(item.evidenceIndependence.independenceRatio*100)}%.</p></>:null}
             <strong>Counter thesis</strong><p>{item.thesis.counterThesis}</p>
             <strong>Invalidation</strong>{item.thesis.invalidations.slice(0,4).map((rule,index)=><p key={`i-${index}`}>{rule}</p>)}
             {item.premortem?.length?<><strong>Pre-mortem</strong>{item.premortem.slice(0,4).map((risk,index)=><p key={`p-${index}`}>{risk.condition} Response: {risk.response}</p>)}</>:null}
