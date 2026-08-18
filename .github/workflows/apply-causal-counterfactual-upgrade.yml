@@ -1,0 +1,57 @@
+name: Apply Causal Counterfactual Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-causal-counterfactual-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply causal and counterfactual patch
+        run: python3 scripts/apply_causal_counterfactual_upgrade.py
+      - name: Validate decision behavior
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore } from './src/decision-intelligence-core.js';
+          const dimensions=(g,i,l,p,f)=>[{id:'growth',score:g},{id:'inflation',score:i},{id:'labour',score:l},{id:'policy',score:p},{id:'financial',score:f}];
+          const economies=[{id:'USA',currency:'USD',dimensions:dimensions(20,30,15,35,10)},{id:'EUROPE',currency:'EUR',dimensions:dimensions(45,20,30,15,25)}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:35,confidence:72,conviction:64,risk:'normal',components:{structuralDivergence:38,policyDivergence:32,releaseDivergence:18,narrativeDivergence:10},probabilities:{buy:.60,sell:.18,wait:.22}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const research={dataQuality:{overall:90},risk:{aggregate:20},modelHealth:{score:85,status:'healthy',calibratedForecasts:20},scenarios:[{id:'base',label:'Base',pairs:[{symbol:'EURUSD',direction:'BUY',score:30}]}]};
+          const history=Array.from({length:16},(_,i)=>({date:new Date(Date.now()-(16-i)*86400000).toISOString(),value:100+i*.2}));
+          const observations=[{seriesId:'TEST',title:'Growth',value:103,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',history}];
+          const core=buildDecisionIntelligenceCore({economies,decision:primary,observations,events:[],news:[],marketData:[],research,decisionMemory:null});
+          const pair=core.pairDecisions[0];
+          if(!pair?.causalTransmission||pair.causalTransmission.nodes.length<5)throw new Error('Causal transmission map missing');
+          if(!pair?.counterfactual||!Array.isArray(pair.counterfactual.tests)||pair.counterfactual.tests.length<3)throw new Error('Counterfactual tests missing');
+          if(!Array.isArray(pair.counterfactual.whatWouldChangeTheMind))throw new Error('Counterfactual change conditions missing');
+          console.log(JSON.stringify({causal:pair.causalTransmission,counterfactual:pair.counterfactual,final:pair.final},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit causal counterfactual upgrade
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/decision-intelligence-core.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add causal transmission and counterfactual governance'
+          git pull --rebase origin main
+          git push origin HEAD:main
