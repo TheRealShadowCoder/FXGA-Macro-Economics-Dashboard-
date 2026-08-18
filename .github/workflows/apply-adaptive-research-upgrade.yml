@@ -1,0 +1,62 @@
+name: Apply Adaptive Research Upgrade
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-adaptive-research-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply adaptive research patch
+        run: python3 scripts/apply_adaptive_research_upgrade.py
+      - name: Validate collector and adaptive forecasting
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildInstitutionalResearch } from './src/institutional-research.js';
+          const start=Date.now()-36*86400000;
+          const values=Array.from({length:30},(_,i)=>100+i*.35+Math.sin(i/3)*1.4);
+          const history=values.map((value,i)=>({date:new Date(start+i*86400000).toISOString(),value}));
+          const observations=[
+            {seriesId:'SERIES_A',title:'Growth Activity',value:values.at(-1),date:history.at(-1).date,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary Source A',economy:'USA',categories:['growth'],history},
+            {seriesId:'SERIES_B',title:'Inflation Trend',value:3.1,date:history.at(-1).date,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary Source B',economy:'USA',categories:['inflation'],history:history.map((x,i)=>({...x,value:2.2+i*.03+Math.cos(i/4)*.08}))}
+          ];
+          const research=buildInstitutionalResearch({observations,events:[],market:[],news:[],economyAnalysis:{},currencyStates:[],opportunities:[]});
+          if(!Array.isArray(research.sourceReliability)||research.sourceReliability.length<2)throw new Error('Source reliability output missing');
+          const forecast=research.forecasts.find(x=>x.seriesId==='SERIES_A');
+          if(!forecast)throw new Error('Adaptive forecast missing');
+          if(!forecast.modelWeights||!forecast.walkForwardRmse)throw new Error('Walk-forward calibration missing');
+          const sum=Object.values(forecast.modelWeights).reduce((a,b)=>a+Number(b||0),0);
+          if(Math.abs(sum-1)>0.01)throw new Error(`Model weights do not sum to one: ${sum}`);
+          if(Number(forecast.validationPoints)<=0)throw new Error('Validation points missing');
+          if(!Number.isFinite(Number(forecast.calibrationConfidence)))throw new Error('Calibration confidence invalid');
+          console.log(JSON.stringify({weights:forecast.modelWeights,rmse:forecast.walkForwardRmse,validationPoints:forecast.validationPoints,calibrationConfidence:forecast.calibrationConfidence,sourceReliability:research.sourceReliability},null,2));
+          NODE
+      - name: Validate frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit adaptive research upgrade
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/institutional-research.js
+          if git diff --cached --quiet; then echo 'No changes to commit.'; exit 0; fi
+          git commit -m 'Add adaptive walk-forward forecasting and source reliability'
+          git pull --rebase origin main
+          git push origin HEAD:main
