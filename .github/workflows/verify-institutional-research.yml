@@ -7,14 +7,21 @@ on:
       - '.github/workflows/verify-institutional-research.yml'
       - 'src/**'
       - 'worker/**'
-      - 'cloud-run-collector/**'
+  workflow_run:
+    workflows: ['Deploy FXGA Google Cloud Collector']
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: verify-institutional-research-production
+  cancel-in-progress: true
+
 jobs:
   verify:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -38,42 +45,57 @@ jobs:
           console.log('Public-language and brand contract passed.');
           NODE
 
-      - name: Verify live research contracts
+      - name: Verify complete live institutional research contract
         run: |
           node <<'NODE'
           const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          async function get(path){const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}});const t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,800)}`);return JSON.parse(t)}
-          let research;
-          for(let i=0;i<12;i++){
-            try{research=await get('/api/research');if(research?.risk?.categories?.length>=10)break;}catch(e){if(i===11)throw e;}
-            await sleep(3000);
+          async function get(path){
+            const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+            const text=await r.text();
+            if(!r.ok)throw new Error(`${path} ${r.status}: ${text.slice(0,800)}`);
+            return JSON.parse(text);
           }
-          if(!research||Number(research.schemaVersion)!==1)throw new Error('Research schema is unavailable');
-          if(typeof research.dataQuality?.overall!=='number')throw new Error('Institutional research data-quality score missing');
-          if(!Array.isArray(research.features)||research.features.length===0)throw new Error('Feature-engineering output missing');
-          if(!Array.isArray(research.forecasts)||research.forecasts.length===0)throw new Error('Forecast ensemble output missing');
-          if(!Array.isArray(research.regimes)||research.regimes.length===0)throw new Error('Regime map missing');
-          if(!Array.isArray(research.risk?.categories)||research.risk.categories.length<10)throw new Error('Independent risk categories incomplete');
-          if(!Array.isArray(research.scenarios)||research.scenarios.length<10)throw new Error('Scenario laboratory incomplete');
-          if(Number(research.capabilityCoverage?.total)!==40)throw new Error('Upgrade-domain coverage registry incomplete');
-          if(!research.provenance?.reproducibilityHash)throw new Error('Reproducibility hash missing');
-          if(!Array.isArray(research.operatingStandards?.slos)||research.operatingStandards.slos.length<7)throw new Error('Operating SLOs incomplete');
-
-          const quality=await get('/api/data-quality');
-          const coverage=quality?.macro?.coverage;
-          if(!coverage||typeof coverage.effectiveCoveragePercent!=='number')throw new Error('Live macro acquisition-quality endpoint invalid');
-          if(Number(coverage.usableObservations||0)<100)throw new Error('Live macro acquisition quality below usable-observation floor');
-          if(Number(coverage.effectiveCoveragePercent||0)<75)throw new Error('Live macro effective coverage below safety floor');
-          if(!quality?.macro?.failures||typeof quality.macro.failures.total!=='number')throw new Error('Macro failure diagnostics missing');
-
-          const scenarios=await get('/api/scenarios');
-          if(!Array.isArray(scenarios?.scenarios)||scenarios.scenarios.length<10)throw new Error('Scenario endpoint invalid');
-          const releases=await get('/api/release-analytics');
-          if(!Array.isArray(releases?.profiles))throw new Error('Release analytics endpoint invalid');
-          const calendar=await get('/api/calendar-history?days=7');
-          if(!Array.isArray(calendar?.events))throw new Error('Seven-day release memory invalid');
-          const market=await get('/api/market-prices');
-          if(!Array.isArray(market?.assets)||market.assets.length===0)throw new Error('Cross-asset market snapshot invalid');
-          console.log(JSON.stringify({institutionalDataQuality:research.dataQuality.overall,macroEffectiveCoverage:coverage.effectiveCoveragePercent,macroUsableObservations:coverage.usableObservations,macroFailures:quality.macro.failures.total,features:research.features.length,forecasts:research.forecasts.length,regimes:research.regimes.length,riskCategories:research.risk.categories.length,scenarios:research.scenarios.length,releaseProfiles:research.releaseAnalytics?.profiles?.length||0,calendarHistory:calendar.events.length,marketAssets:market.assets.length}));
+          function validate({research,quality,scenarios,releases,calendar,market}){
+            const errors=[];
+            if(!research||Number(research.schemaVersion)!==1)errors.push('research schema');
+            if(typeof research?.dataQuality?.overall!=='number')errors.push('research data quality');
+            if(!Array.isArray(research?.features)||research.features.length===0)errors.push('features');
+            if(!Array.isArray(research?.forecasts)||research.forecasts.length===0)errors.push('forecasts');
+            if(!Array.isArray(research?.regimes)||research.regimes.length===0)errors.push('regimes');
+            if(!Array.isArray(research?.risk?.categories)||research.risk.categories.length<10)errors.push('risk categories');
+            if(!Array.isArray(research?.scenarios)||research.scenarios.length<10)errors.push('research scenarios');
+            if(Number(research?.capabilityCoverage?.total)!==40)errors.push('capability coverage');
+            if(!research?.provenance?.reproducibilityHash)errors.push('reproducibility hash');
+            if(!Array.isArray(research?.operatingStandards?.slos)||research.operatingStandards.slos.length<7)errors.push('operating SLOs');
+            const coverage=quality?.macro?.coverage;
+            if(!coverage||typeof coverage.effectiveCoveragePercent!=='number')errors.push('macro coverage');
+            if(Number(coverage?.usableObservations||0)<100)errors.push(`usable observations ${coverage?.usableObservations??'missing'}`);
+            if(Number(coverage?.effectiveCoveragePercent||0)<75)errors.push(`effective coverage ${coverage?.effectiveCoveragePercent??'missing'}%`);
+            if(!quality?.macro?.failures||typeof quality.macro.failures.total!=='number')errors.push('failure diagnostics');
+            if(!Array.isArray(scenarios?.scenarios)||scenarios.scenarios.length<10)errors.push('scenario endpoint');
+            if(!Array.isArray(releases?.profiles))errors.push('release analytics');
+            if(!Array.isArray(calendar?.events))errors.push('calendar history');
+            if(!Array.isArray(market?.assets)||market.assets.length===0)errors.push('market snapshot');
+            return errors;
+          }
+          let lastErrors=['not started'],snapshot=null;
+          for(let attempt=1;attempt<=45;attempt++){
+            try{
+              const [research,quality,scenarios,releases,calendar,market]=await Promise.all([
+                get('/api/research'),get('/api/data-quality'),get('/api/scenarios'),get('/api/release-analytics'),get('/api/calendar-history?days=7'),get('/api/market-prices')
+              ]);
+              const errors=validate({research,quality,scenarios,releases,calendar,market});
+              if(!errors.length){snapshot={research,quality,scenarios,releases,calendar,market};break;}
+              lastErrors=errors;
+              console.log(`Attempt ${attempt}/45 waiting for: ${errors.join(', ')}`);
+            }catch(error){
+              lastErrors=[String(error?.message||error)];
+              console.log(`Attempt ${attempt}/45: ${lastErrors[0]}`);
+            }
+            await sleep(4000);
+          }
+          if(!snapshot)throw new Error(`Institutional research contract did not converge: ${lastErrors.join('; ')}`);
+          const {research,quality,scenarios,releases,calendar,market}=snapshot,coverage=quality.macro.coverage;
+          console.log(JSON.stringify({institutionalDataQuality:research.dataQuality.overall,macroEffectiveCoverage:coverage.effectiveCoveragePercent,macroUsableObservations:coverage.usableObservations,macroFailures:quality.macro.failures.total,features:research.features.length,forecasts:research.forecasts.length,regimes:research.regimes.length,riskCategories:research.risk.categories.length,scenarios:scenarios.scenarios.length,releaseProfiles:releases.profiles.length,calendarHistory:calendar.events.length,marketAssets:market.assets.length},null,2));
           NODE
