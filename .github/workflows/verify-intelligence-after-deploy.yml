@@ -67,19 +67,29 @@ jobs:
         run: |
           set -euo pipefail
           req(){
-            local name="$1" method="$2" path="$3" body="${4:-{}}" status
+            local name="$1"
+            local method="$2"
+            local path="$3"
+            local body="${4:-}"
+            local status
+            if [ -z "$body" ]; then body='{}'; fi
             if [ "$method" = POST ]; then
-              status=$(curl --max-time 300 -sS -o "/tmp/${name}.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$body" "$SERVICE_URL$path")
+              status=$(curl --max-time 300 -sS -o "/tmp/${name}.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data "$body" "$SERVICE_URL$path")
             else
               status=$(curl --max-time 120 -sS -o "/tmp/${name}.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$SERVICE_URL$path")
             fi
             echo "$name HTTP $status"
-            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then cat "/tmp/${name}.json" | head -c 1800; exit 1; fi
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              cat "/tmp/${name}.json" | head -c 1800
+              exit 1
+            fi
           }
+
           req health GET /health
           req market POST /market-sync '{}'
           req intelligence POST /refresh-intelligence '{"forceNews":false}'
           req state GET /state
+
           node <<'NODE'
           const fs=require('fs');
           const health=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
@@ -88,9 +98,12 @@ jobs:
           const providers=health?.freeTierMarketData?.providers||{};
           const missing=requiredProviders.filter(id=>providers[id]?.configured!==true);
           if(missing.length)throw new Error(`Market-data secrets not mounted: ${missing.join(', ')}`);
+
           const state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8'));
           const intel=state?.intelligence?.payload;
-          const core=intel?.decisionGovernance,research=intel?.research,pairs=core?.pairDecisions||[];
+          const core=intel?.decisionGovernance;
+          const research=intel?.research;
+          const pairs=core?.pairDecisions||[];
           if(!intel||!core||!research)throw new Error('Intelligence state missing');
           if(pairs.length<8)throw new Error(`Decision governance coverage incomplete: ${pairs.length} pairs`);
           const required=['bayesian','refined','causalTransmission','counterfactual','temporalIntelligence','transitionRisk','evidenceIndependence','scenarioRobustness','modelHealth','historicalCalibration','uncertainty','premortem','thesis','final'];
