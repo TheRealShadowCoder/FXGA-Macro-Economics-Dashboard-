@@ -1,0 +1,66 @@
+name: Diagnose Runtime Version Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-diagnose-runtime-version.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply and diagnose runtime version patch
+        run: |
+          set +e
+          mkdir -p /tmp/runtime-version .github
+          python3 scripts/apply_runtime_version_contract.py > /tmp/runtime-version/patch.log 2>&1
+          PATCH_RC=$?
+          node --check cloud-run-collector/src/super-runtime.js > /tmp/runtime-version/check.log 2>&1
+          CHECK_RC=$?
+          grep -q "const SERVICE_VERSION=" cloud-run-collector/src/super-runtime.js; G1=$?
+          grep -q "version:SERVICE_VERSION" cloud-run-collector/src/super-runtime.js; G2=$?
+          grep -q "run-verify-v414-live.trigger" .github/workflows/verify-intelligence-v414-live.yml; G3=$?
+          grep -q "major===4&&minor<14" .github/workflows/verify-intelligence-v414-live.yml; G4=$?
+          CONTRACT_RC=$(( G1 || G2 || G3 || G4 ))
+          {
+            echo "generated_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "patch_exit=$PATCH_RC"
+            echo "syntax_exit=$CHECK_RC"
+            echo "contract_exit=$CONTRACT_RC"
+            echo '--- patch output ---'
+            cat /tmp/runtime-version/patch.log
+            echo '--- syntax output ---'
+            cat /tmp/runtime-version/check.log
+          } > .github/runtime-version-contract-diagnostic.txt
+          echo "$PATCH_RC" > /tmp/runtime-version/patch.rc
+          echo "$CHECK_RC" > /tmp/runtime-version/check.rc
+          echo "$CONTRACT_RC" > /tmp/runtime-version/contract.rc
+      - name: Persist source or diagnostic
+        run: |
+          PATCH_RC=$(cat /tmp/runtime-version/patch.rc)
+          CHECK_RC=$(cat /tmp/runtime-version/check.rc)
+          CONTRACT_RC=$(cat /tmp/runtime-version/contract.rc)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/runtime-version-contract-diagnostic.txt
+          if [ "$PATCH_RC" = 0 ] && [ "$CHECK_RC" = 0 ] && [ "$CONTRACT_RC" = 0 ]; then
+            git add cloud-run-collector/src/super-runtime.js .github/workflows/verify-intelligence-v414-live.yml
+            MSG='Synchronize runtime health with v4.14 release'
+          else
+            MSG='Record runtime version contract diagnostic'
+          fi
+          git commit -m "$MSG"
+          git pull --rebase origin main
+          git push origin HEAD:main
