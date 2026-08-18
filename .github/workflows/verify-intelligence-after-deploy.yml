@@ -57,12 +57,12 @@ jobs:
             local name="$1" method="$2" url="$3" body="${4:-{}}" out="/tmp/${name}.json"
             local status
             if [ "$method" = POST ]; then
-              status=$(curl --max-time 240 -sS -o "$out" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$body" "$url")
+              status=$(curl --max-time 300 -sS -o "$out" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$body" "$url")
             else
-              status=$(curl --max-time 90 -sS -o "$out" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$url")
+              status=$(curl --max-time 120 -sS -o "$out" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$url")
             fi
             echo "$name HTTP $status"
-            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then cat "$out" | head -c 1600; exit 1; fi
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then cat "$out" | head -c 1800; exit 1; fi
           }
           req market POST "$SERVICE_URL/market-sync" '{}'
           req intelligence POST "$SERVICE_URL/refresh-intelligence" '{"forceNews":false}'
@@ -77,16 +77,35 @@ jobs:
           for(const pair of core.pairDecisions){
             if(!pair?.bayesian?.posterior)throw new Error(`${pair?.symbol||'pair'} Bayesian posterior missing`);
             if(!pair?.refined||!Number.isFinite(Number(pair.refined.score)))throw new Error(`${pair.symbol} refined score missing`);
-            if(!Array.isArray(pair?.thesis?.invalidations))throw new Error(`${pair.symbol} invalidation rules missing`);
-            if(!pair?.scenarioRobustness||!pair?.uncertainty||!Array.isArray(pair?.premortem))throw new Error(`${pair.symbol} scenario/uncertainty governance missing`);
+            if(!Array.isArray(pair?.thesis?.invalidations)||!Array.isArray(pair?.premortem))throw new Error(`${pair.symbol} thesis governance missing`);
+            if(!pair?.scenarioRobustness||!pair?.uncertainty)throw new Error(`${pair.symbol} scenario/uncertainty governance missing`);
             if(!pair?.modelHealth||!pair?.historicalCalibration)throw new Error(`${pair.symbol} adaptive/historical controls missing`);
+            if(!pair?.causalTransmission||!pair?.counterfactual||!pair?.temporalIntelligence)throw new Error(`${pair.symbol} causal/counterfactual/temporal reasoning missing`);
+            if(!pair?.transitionRisk)throw new Error(`${pair.symbol} turning-point transition risk missing`);
+            if(!pair?.evidenceIndependence)throw new Error(`${pair.symbol} evidence-independence control missing`);
           }
+          if(!core?.crossPairConsistency||!Array.isArray(core.crossPairConsistency.checks)||core.crossPairConsistency.checks.length<3)throw new Error('Cross-pair triangular consistency missing');
+          if(!core?.portfolioInteraction||!core.portfolioInteraction.pairControls)throw new Error('Portfolio interaction governance missing');
           if(!research?.modelHealth)throw new Error('Research model health missing');
           if(!Array.isArray(research?.sourceReliability))throw new Error('Source reliability missing');
+          if(!research?.evidenceIndependence||!Number.isFinite(Number(research.evidenceIndependence.independenceRatio)))throw new Error('Research evidence independence missing');
+          if(!research?.turningPoints||!Array.isArray(research.turningPoints.rows))throw new Error('Turning-point research missing');
+          if(!research?.catalystSequence||!Array.isArray(research.catalystSequence.currencies))throw new Error('Catalyst sequencing missing');
+          if(!Array.isArray(research?.releaseAnalytics?.persistence))throw new Error('Surprise persistence missing');
           const calibrated=(research?.forecasts||[]).filter(f=>f?.modelWeights&&Number(f?.validationPoints||0)>0);
           if(calibrated.length<1)throw new Error('Walk-forward calibrated forecasts missing');
+          const distributed=calibrated.filter(f=>f?.distribution&&Number(f.distribution.residualCount||0)>0);
+          if(distributed.length<1)throw new Error('Forecast error distributions missing');
           if(!intel.decisionMemory||typeof intel.decisionMemory!=='object')throw new Error('Decision memory summary missing');
-          const report={verifiedAt:new Date().toISOString(),pairs:core.pairDecisions.length,evidenceQuality:core.evidenceQuality?.score,modelHealth:research.modelHealth,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,decisionMemory:{sampled:intel.decisionMemory.sampledDecisions||0,pending:intel.decisionMemory.pending||0}};
+          const report={
+            verifiedAt:new Date().toISOString(),pairs:core.pairDecisions.length,evidenceQuality:core.evidenceQuality?.score,
+            modelHealth:research.modelHealth,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,
+            distributedForecasts:distributed.length,independenceRatio:research.evidenceIndependence.independenceRatio,
+            turningFamilies:research.turningPoints.rows.length,catalystCurrencies:research.catalystSequence.currencies.length,
+            surprisePersistence:research.releaseAnalytics.persistence.length,triangleChecks:core.crossPairConsistency.checks.length,
+            triangleConflicts:core.crossPairConsistency.conflicts,portfolioVetoes:Number(core.portfolioInteraction.concentrationVetoes||0)+Number(core.portfolioInteraction.triangleVetoes||0),
+            decisionMemory:{sampled:intel.decisionMemory.sampledDecisions||0,pending:intel.decisionMemory.pending||0}
+          };
           fs.writeFileSync('/tmp/intelligence-verification.json',JSON.stringify(report,null,2));
           console.log(JSON.stringify(report,null,2));
           NODE
@@ -95,22 +114,24 @@ jobs:
           node <<'NODE'
           const fs=require('fs'),base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          async function read(){const r=await fetch(base+'/api/research',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),text=await r.text();if(!r.ok)throw new Error(`/api/research ${r.status}: ${text.slice(0,400)}`);return JSON.parse(text);}
+          async function read(){const r=await fetch(base+'/api/research',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),text=await r.text();if(!r.ok)throw new Error(`/api/research ${r.status}: ${text.slice(0,500)}`);return JSON.parse(text);}
           let last;
-          for(let attempt=0;attempt<30;attempt++){
+          for(let attempt=0;attempt<45;attempt++){
             try{
-              const research=await read(),core=research?.decisionCore;
+              const research=await read(),core=research?.decisionCore,pairs=core?.pairDecisions||[];
               const calibrated=(research?.forecasts||[]).filter(f=>f?.modelWeights&&Number(f?.validationPoints||0)>0);
-              if(core?.pairDecisions?.length>=8&&research?.modelHealth&&Array.isArray(research?.sourceReliability)&&calibrated.length>0&&research?.decisionMemory){
+              const distributed=calibrated.filter(f=>f?.distribution&&Number(f.distribution.residualCount||0)>0);
+              const pairContract=pairs.length>=8&&pairs.every(p=>p?.causalTransmission&&p?.counterfactual&&p?.temporalIntelligence&&p?.transitionRisk&&p?.evidenceIndependence&&p?.historicalCalibration);
+              if(pairContract&&core?.crossPairConsistency?.checks?.length>=3&&core?.portfolioInteraction?.pairControls&&research?.modelHealth&&Array.isArray(research?.sourceReliability)&&research?.evidenceIndependence&&research?.turningPoints&&research?.catalystSequence&&Array.isArray(research?.releaseAnalytics?.persistence)&&calibrated.length>0&&distributed.length>0&&research?.decisionMemory){
                 const report=JSON.parse(fs.readFileSync('/tmp/intelligence-verification.json','utf8'));
-                report.publicContract={pairs:core.pairDecisions.length,modelHealth:research.modelHealth.status,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,decisionMemorySamples:research.decisionMemory.sampledDecisions||0};
+                report.publicContract={pairs:pairs.length,modelHealth:research.modelHealth.status,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,distributedForecasts:distributed.length,decisionMemorySamples:research.decisionMemory.sampledDecisions||0,independenceRatio:research.evidenceIndependence.independenceRatio,triangleChecks:core.crossPairConsistency.checks.length};
                 fs.writeFileSync('/tmp/intelligence-verification.json',JSON.stringify(report,null,2));
                 console.log('PUBLIC INTELLIGENCE VERIFIED',JSON.stringify(report.publicContract));
                 process.exit(0);
               }
-              last=new Error('Waiting for current research intelligence contract');
+              last=new Error('Waiting for consolidated v4.13 research intelligence contract');
             }catch(error){last=error;}
-            await sleep(3000);
+            await sleep(4000);
           }
           throw last||new Error('Public research contract did not update');
           NODE
@@ -122,11 +143,20 @@ jobs:
           const report=JSON.parse(fs.readFileSync('/tmp/intelligence-verification.json','utf8'));
           const lines=[
             `verified_at=${report.verifiedAt}`,
+            `contract=v4.13`,
             `pairs=${report.pairs}`,
             `evidence_quality=${report.evidenceQuality ?? 'n/a'}`,
             `model_health=${report.publicContract?.modelHealth ?? report.modelHealth?.status ?? 'n/a'}`,
             `source_reliability=${report.sourceReliability}`,
             `calibrated_forecasts=${report.calibratedForecasts}`,
+            `distributed_forecasts=${report.distributedForecasts}`,
+            `evidence_independence=${report.independenceRatio}`,
+            `turning_families=${report.turningFamilies}`,
+            `catalyst_currencies=${report.catalystCurrencies}`,
+            `surprise_persistence=${report.surprisePersistence}`,
+            `triangle_checks=${report.triangleChecks}`,
+            `triangle_conflicts=${report.triangleConflicts}`,
+            `portfolio_vetoes=${report.portfolioVetoes}`,
             `decision_memory_samples=${report.publicContract?.decisionMemorySamples ?? report.decisionMemory?.sampled ?? 0}`,
             `public_contract=passed`,
           ];
@@ -136,6 +166,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add .github/intelligence-verification.status
           if git diff --cached --quiet; then echo 'Verification marker unchanged.'; exit 0; fi
-          git commit -m 'Verify live decision intelligence contract'
+          git commit -m 'Verify live v4.13 decision intelligence contract'
           git pull --rebase origin main
           git push origin HEAD:main
