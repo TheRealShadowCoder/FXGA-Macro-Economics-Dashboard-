@@ -1,2 +1,2 @@
-run=2026-08-18T20:07:00+02:00
-reason=Integrate a bounded 75-day policy-only catalyst horizon with provenance, deduplication and no far-future release task scheduling.
+run=2026-08-18T20:14:00+02:00
+reason=Rerun the fully validated v4.18 policy horizon integration after removing the workflow-file push from the source commit.
