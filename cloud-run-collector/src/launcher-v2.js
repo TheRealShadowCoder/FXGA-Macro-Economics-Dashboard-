@@ -3,7 +3,7 @@ import http from 'node:http';
 import { Firestore } from '@google-cloud/firestore';
 import { refreshSuperEconomist, syncFullMacroFromUniverse, superHealth, fullState, intelligenceState, registrySearch } from './super-runtime.js';
 import { backfillEventStudies } from './event-study-backfill.js';
-import { collectFreeTierMarketData } from './free-market-data.js';
+import { collectFreeTierMarketData } from './free-market-data-v2.js';
 import { freeTierBudgetStatus } from './market-data-budget.js';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -144,9 +144,10 @@ async function augmentMarketState(){
       slowFxCrossChecks:delegated.slowFxCrossChecks,
       nasdaqDataLink:delegated.nasdaqDataLink,
       budget:delegated.budget,
+      publicMicrostructurePolicies:delegated.publicMicrostructurePolicies,
       durationMs:delegated.durationMs,
     },
-    collectionArchitecture:'CNBC last-known-good + metered free-tier delegation + public derivatives microstructure',
+    collectionArchitecture:'CNBC last-known-good + metered free-tier delegation + public derivatives and spot microstructure',
   };
   const nextHash=stableHash(payload),changed=stored?.hash!==nextHash,updatedAt=new Date().toISOString();
   if(changed)await ref.set({hash:nextHash,updatedAt,payload},{merge:false});
