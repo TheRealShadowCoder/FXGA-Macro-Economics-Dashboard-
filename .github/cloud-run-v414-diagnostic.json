@@ -1,0 +1,54 @@
+{
+  "generatedAt": "2026-08-18T04:42:52.766Z",
+  "service": {
+    "url": "https://fxga-macro-collector-kbjj66blka-uc.a.run.app",
+    "latestCreatedRevisionName": "fxga-macro-collector-00083-nmp",
+    "latestReadyRevisionName": "fxga-macro-collector-00083-nmp",
+    "traffic": [
+      {
+        "latestRevision": true,
+        "percent": 100,
+        "revisionName": "fxga-macro-collector-00083-nmp"
+      }
+    ]
+  },
+  "revision": {
+    "name": "fxga-macro-collector-00083-nmp",
+    "createdAt": "2026-08-18T04:32:55.237572Z",
+    "image": "us-central1-docker.pkg.dev/fxglobalavengerstradingacademy/fxga-containers/fxga-macro-collector@sha256:2f3c409003e63cca146e4736783c6d06ed75c9d9dd18c47ae11c5c12373f21d4",
+    "userImage": null,
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-08-18T04:33:05.237425Z",
+        "message": "Deploying revision succeeded in 10s.",
+        "status": "True",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-08-18T04:33:03.443884Z",
+        "severity": "Info",
+        "status": "True",
+        "type": "Active"
+      },
+      {
+        "lastTransitionTime": "2026-08-18T04:33:01.012115Z",
+        "message": "Containers became healthy in 4.13s.",
+        "status": "True",
+        "type": "ContainerHealthy"
+      },
+      {
+        "lastTransitionTime": "2026-08-18T04:32:55.992132Z",
+        "message": "Container image import completed.",
+        "status": "True",
+        "type": "ContainerReady"
+      },
+      {
+        "lastTransitionTime": "2026-08-18T04:32:57.450364Z",
+        "message": "Provisioning imported containers completed in 1.46s. Checking container health. This will wait for up to 4m for the configured startup probe, including an initial delay of 0s.",
+        "status": "True",
+        "type": "ResourcesAvailable"
+      }
+    ]
+  },
+  "recentErrors": []
+}
