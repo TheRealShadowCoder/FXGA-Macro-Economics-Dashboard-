@@ -1,0 +1,51 @@
+name: Promote V4.17 Policy Calibration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-promote-v417-policy-calibration.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Require integrated policy calibration source
+        run: |
+          set -euo pipefail
+          grep -q "freezePolicyForecasts" cloud-run-collector/src/super-runtime.js
+          grep -q "scorePolicyForecasts" cloud-run-collector/src/super-runtime.js
+          grep -q "frozen-policy-probability-audit" cloud-run-collector/src/super-economist.js
+          grep -q "PolicyCalibrationPanel" src/components/ResearchView.tsx
+          grep -q "policyCalibrationMath" cloud-run-collector/src/policy-calibration.js
+      - name: Promote collector and validate security
+        run: |
+          cd cloud-run-collector
+          npm version 4.17.0 --no-git-tag-version --ignore-scripts
+          npm ci --ignore-scripts
+          npm run check
+          npm audit --audit-level=moderate
+      - name: Revalidate frontend
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          npm install --progress=false
+          npm run build
+      - name: Commit v4.17 package metadata
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/package.json cloud-run-collector/package-lock.json
+          if git diff --cached --quiet; then echo 'Collector already at 4.17.0.'; exit 0; fi
+          git commit -m 'Promote FXGA policy calibration v4.17.0'
+          git pull --rebase origin main
+          git push origin HEAD:main
