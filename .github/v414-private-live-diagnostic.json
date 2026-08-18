@@ -1,31 +1,34 @@
 {
-  "generatedAt": "2026-08-18T04:41:14.234Z",
+  "generatedAt": "2026-08-18T12:37:26.343Z",
   "serviceUrl": "https://fxga-macro-collector-kbjj66blka-uc.a.run.app",
   "http": {
     "health": 200,
-    "refresh": 500,
+    "refresh": 200,
     "state": 200
   },
   "health": {
     "ok": true,
-    "version": 4,
-    "intelligenceUpdatedAt": "2026-08-18T00:23:16.504Z"
+    "version": "4.14.1",
+    "intelligenceUpdatedAt": "2026-08-18T12:30:17.779Z"
   },
   "refresh": {
-    "changed": null,
-    "observations": null,
-    "economies": null
+    "changed": true,
+    "observations": 180,
+    "economies": 5
   },
-  "pairCount": 0,
-  "decisionCoreVersion": null,
+  "pairCount": 8,
+  "decisionCoreVersion": "1.4.0",
   "missingPairFields": [],
   "researchKeys": [
     "capabilityCoverage",
+    "catalystSequence",
     "dataQuality",
+    "evidenceIndependence",
     "features",
     "forecasts",
     "generatedAt",
     "marketAnalytics",
+    "modelHealth",
     "notes",
     "operatingStandards",
     "provenance",
@@ -33,14 +36,19 @@
     "releaseAnalytics",
     "risk",
     "scenarios",
-    "schemaVersion"
+    "schemaVersion",
+    "sourceReliability",
+    "structuralBreaks",
+    "turningPoints"
   ],
   "intelligenceKeys": [
     "audit",
     "caution",
     "confidenceFormula",
     "coverage",
+    "decisionGovernance",
     "decisionIntelligence",
+    "decisionMemory",
     "economyAnalysis",
     "edgeFormula",
     "engine",
@@ -64,13 +72,13 @@
     "specialEventModels",
     "topFamilies"
   ],
-  "hasStructuralBreaks": false,
-  "hasEvidenceIndependence": false,
-  "hasTurningPoints": false,
-  "hasCatalystSequence": false,
-  "hasDecisionChanges": false,
-  "hasAnalogueLibrary": false,
-  "hasCrossPairConsistency": false,
-  "hasPortfolioInteraction": false,
-  "privateContractReady": false
+  "hasStructuralBreaks": true,
+  "hasEvidenceIndependence": true,
+  "hasTurningPoints": true,
+  "hasCatalystSequence": true,
+  "hasDecisionChanges": true,
+  "hasAnalogueLibrary": true,
+  "hasCrossPairConsistency": true,
+  "hasPortfolioInteraction": true,
+  "privateContractReady": true
 }
