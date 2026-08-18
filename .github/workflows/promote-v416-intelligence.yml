@@ -1,0 +1,52 @@
+name: Promote V4.16 Intelligence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-promote-v416-intelligence.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Require integrated v4.16 source contract
+        run: |
+          set -euo pipefail
+          grep -q "eventReactionCalibrationForPair" cloud-run-collector/src/decision-intelligence-core.js
+          grep -q "version:'1.5.0'" cloud-run-collector/src/decision-intelligence-core.js
+          grep -q "decisionQualityAttribution" cloud-run-collector/src/super-economist.js
+          grep -q "sequenceTree" cloud-run-collector/src/policy-path-research.js
+          grep -q "DecisionAttributionPanel" src/components/ResearchView.tsx
+          grep -q "eventReactionCalibration" src/components/AdvancedGovernancePanel.tsx
+      - name: Promote collector version and validate security
+        run: |
+          cd cloud-run-collector
+          npm version 4.16.0 --no-git-tag-version --ignore-scripts
+          npm ci --ignore-scripts
+          npm run check
+          npm audit --audit-level=moderate
+      - name: Revalidate production frontend
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          npm install --progress=false
+          npm run build
+      - name: Commit v4.16 package metadata
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/package.json cloud-run-collector/package-lock.json
+          if git diff --cached --quiet; then echo 'Collector already at 4.16.0.'; exit 0; fi
+          git commit -m 'Promote FXGA intelligence v4.16.0'
+          git pull --rebase origin main
+          git push origin HEAD:main
