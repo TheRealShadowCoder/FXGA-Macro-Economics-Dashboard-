@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { genericExplanation, resolveExplanation, type Explanation } from '../lib/explainability';
+import { resolveMacroExplanation } from '../lib/macro-explainability';
 import './ExplainabilityLayer.css';
 
 type PopoverState = {
@@ -41,7 +42,7 @@ export function ExplainabilityLayer() {
 
       const context = contextText(target);
       const key = context.node?.dataset.explainKey || explicitNode?.dataset.explainKey || null;
-      const explanation = resolveExplanation(key, context.text) ?? genericExplanation(context.text);
+      const explanation = resolveExplanation(key, context.text) ?? resolveMacroExplanation(context.text) ?? genericExplanation(context.text);
       const x = Math.min(window.innerWidth - 18, Math.max(18, event.clientX));
       const y = Math.min(window.innerHeight - 18, Math.max(18, event.clientY));
       setPopover({ explanation, x, y, context: context.text.slice(0, 180) });
