@@ -1,0 +1,124 @@
+{
+  "generatedAt": "2026-08-18T14:52:21.328229+00:00",
+  "runs": [
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-08-18T14:50:27Z",
+      "databaseId": 32150797581,
+      "headSha": "63ecf1d44022c7ef07ddce2c6462f3deada5890e",
+      "status": "completed",
+      "updatedAt": "2026-08-18T14:50:42Z",
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32150797581",
+      "workflowName": "Integrate V4.16 Intelligence"
+    }
+  ],
+  "latestJobs": [
+    {
+      "completedAt": "2026-08-18T14:50:41Z",
+      "conclusion": "failure",
+      "databaseId": 95755880286,
+      "name": "integrate",
+      "startedAt": "2026-08-18T14:50:30Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-08-18T14:50:31Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-08-18T14:50:30Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:33Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v6",
+          "number": 2,
+          "startedAt": "2026-08-18T14:50:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:38Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v6",
+          "number": 3,
+          "startedAt": "2026-08-18T14:50:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:39Z",
+          "conclusion": "failure",
+          "name": "Apply v4.16 integration",
+          "number": 4,
+          "startedAt": "2026-08-18T14:50:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:39Z",
+          "conclusion": "skipped",
+          "name": "Validate collector syntax and dependencies",
+          "number": 5,
+          "startedAt": "2026-08-18T14:50:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:39Z",
+          "conclusion": "skipped",
+          "name": "Verify v4.16 model invariants",
+          "number": 6,
+          "startedAt": "2026-08-18T14:50:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:39Z",
+          "conclusion": "skipped",
+          "name": "Verify confidence-only integration",
+          "number": 7,
+          "startedAt": "2026-08-18T14:50:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:39Z",
+          "conclusion": "skipped",
+          "name": "Verify production frontend build",
+          "number": 8,
+          "startedAt": "2026-08-18T14:50:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:39Z",
+          "conclusion": "skipped",
+          "name": "Commit integrated v4.16 source",
+          "number": 9,
+          "startedAt": "2026-08-18T14:50:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:39Z",
+          "conclusion": "skipped",
+          "name": "Post Run actions/setup-node@v6",
+          "number": 17,
+          "startedAt": "2026-08-18T14:50:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:39Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v6",
+          "number": 18,
+          "startedAt": "2026-08-18T14:50:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-08-18T14:50:39Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 19,
+          "startedAt": "2026-08-18T14:50:39Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32150797581/job/95755880286"
+    }
+  ]
+}
