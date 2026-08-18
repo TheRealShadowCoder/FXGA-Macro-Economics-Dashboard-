@@ -191,8 +191,11 @@ function walkForwardCalibration(values,maxPoints=12){
   const rawWeights=Object.fromEntries(names.map(name=>[name,finite.includes(name)?1/(scale*scale+rmse[name]*rmse[name]):0]));
   const total=Object.values(rawWeights).reduce((s,x)=>s+x,0)||1;
   const weights=Object.fromEntries(names.map(name=>[name,rawWeights[name]/total]));
-  const validationPoints=Math.max(...names.map(name=>errors[name].length),0);
-  return {validationPoints,rmse,bias,recentRmse,earlierRmse,driftRatio,weights};
+  const validationPoints=Math.max(...names.map(name=>errors[name].length),0),alignedPoints=Math.min(...names.map(name=>errors[name].length));
+  const ensembleResiduals=[];for(let i=0;i<alignedPoints;i++)ensembleResiduals.push(names.reduce((s,name)=>s+Number(weights[name]||0)*Number(errors[name][i]||0),0));
+  const sorted=[...ensembleResiduals].sort((a,b)=>a-b),quantile=q=>{if(!sorted.length)return null;const pos=(sorted.length-1)*q,lo=Math.floor(pos),hi=Math.ceil(pos);return lo===hi?sorted[lo]:sorted[lo]+(sorted[hi]-sorted[lo])*(pos-lo);},residualMean=mean(ensembleResiduals),residualSd=stdev(ensembleResiduals),third=ensembleResiduals.length?mean(ensembleResiduals.map(e=>(e-residualMean)**3)):0,residualSkew=residualSd>1e-12?third/(residualSd**3):0;
+  const residualQuantiles={q025:quantile(.025),q05:quantile(.05),q10:quantile(.10),q25:quantile(.25),q50:quantile(.50),q75:quantile(.75),q90:quantile(.90),q95:quantile(.95),q975:quantile(.975)};
+  return {validationPoints,rmse,bias,recentRmse,earlierRmse,driftRatio,weights,ensembleResiduals,residualQuantiles,residualMean,residualSd,residualSkew};
 }
 function buildForecasts(observations=[]){
   const forecasts=[];
@@ -211,19 +214,19 @@ function buildForecasts(observations=[]){
     const driftScore=Math.round(100*clamp(weightedDrift/1.25,0,1)),driftStatus=driftScore>=65?'drifting':driftScore>=35?'watch':'stable';
     const weightedBias=Object.entries(calibration.weights).reduce((s,[name,w])=>s+Number(w||0)*Number(calibration.bias[name]||0),0);
     const driftPenalty=clamp(1-driftScore/180,.55,1),effectiveCalibrationConfidence=calibrationConfidence*driftPenalty;
-    const uncertainty=Math.sqrt(residualScale*residualScale+modelDispersion*modelDispersion+(weightedBias*weightedBias));
-    const last=values.at(-1),delta=ensemble-last;
-    const probabilityUp=sigmoid(delta/Math.max(uncertainty,1e-9)*(1+.75*effectiveCalibrationConfidence));
+    const empiricalResidualSd=Number(calibration.residualSd||0),uncertainty=Math.sqrt(Math.max(residualScale,empiricalResidualSd)**2+modelDispersion*modelDispersion+(weightedBias*weightedBias));
+    const last=values.at(-1),delta=ensemble-last,normalProbability=sigmoid(delta/Math.max(uncertainty,1e-9)*(1+.75*effectiveCalibrationConfidence)),residuals=calibration.ensembleResiduals||[],empiricalProbability=residuals.length?residuals.filter(error=>error<delta).length/residuals.length:normalProbability,empiricalBlend=clamp((residuals.length-4)/12,0,.75),probabilityUp=clamp((1-empiricalBlend)*normalProbability+empiricalBlend*empiricalProbability,.01,.99);
+    const q=calibration.residualQuantiles||{},useEmpirical=residuals.length>=8&&Number.isFinite(q.q10)&&Number.isFinite(q.q90),interval80=useEmpirical?[ensemble-q.q90,ensemble-q.q10]:[ensemble-1.2816*uncertainty,ensemble+1.2816*uncertainty],interval95=useEmpirical&&Number.isFinite(q.q025)&&Number.isFinite(q.q975)?[ensemble-q.q975,ensemble-q.q025]:[ensemble-1.96*uncertainty,ensemble+1.96*uncertainty],upperTail=Number.isFinite(q.q95)&&Number.isFinite(q.q50)?q.q95-q.q50:null,lowerTail=Number.isFinite(q.q50)&&Number.isFinite(q.q05)?q.q50-q.q05:null,tailAsymmetry=Number.isFinite(upperTail)&&Number.isFinite(lowerTail)&&Math.abs(lowerTail)>1e-12?upperTail/lowerTail:null;
     forecasts.push({
       seriesId:item.seriesId,title:item.title,economy:item.economy||item.economies?.[0]||'GLOBAL',family:macroFamily(item),
       latest:last,forecast:ensemble,delta,models:Object.fromEntries(models),
       modelWeights:calibration.weights,walkForwardRmse:calibration.rmse,walkForwardBias:calibration.bias,recentRmse:calibration.recentRmse,earlierRmse:calibration.earlierRmse,driftRatio:calibration.driftRatio,validationPoints:calibration.validationPoints,
       modelAgreement:Number(agreement.toFixed(4)),calibrationConfidence:Number(effectiveCalibrationConfidence.toFixed(4)),rawCalibrationConfidence:Number(calibrationConfidence.toFixed(4)),driftScore,driftStatus,forecastBias:weightedBias,
-      interval80:[ensemble-1.2816*uncertainty,ensemble+1.2816*uncertainty],
-      interval95:[ensemble-1.96*uncertainty,ensemble+1.96*uncertainty],
-      probabilities:{up:probabilityUp,down:1-probabilityUp},
+      interval80,interval95,
+      probabilities:{up:probabilityUp,down:1-probabilityUp,normalReference:normalProbability,empiricalReference:empiricalProbability},
+      distribution:{method:useEmpirical?'walk-forward-empirical-residuals':'hybrid-parametric',residualCount:residuals.length,residualMean:Number(calibration.residualMean||0),residualSd:empiricalResidualSd,residualSkew:Number(calibration.residualSkew||0),tailAsymmetry,residualQuantiles:q,empiricalBlend:Number(empiricalBlend.toFixed(3))},
       uncertainty,innovationScale:residualScale,modelDispersion,sampleSize:values.length,
-      methodology:'Walk-forward inverse-error weighting across AR1, exponential smoothing and state-space forecasts; uncertainty combines historical innovation scale and model disagreement.',
+      methodology:'Walk-forward inverse-error model weighting with drift control. Probability and uncertainty bands use the empirical ensemble residual distribution when sample depth is sufficient; otherwise a conservative hybrid fallback is used.',
     });
   }
   return forecasts.slice(0,180);
@@ -368,7 +371,7 @@ function buildProvenance({observations,events,market,news,features,forecasts,rel
     macro:hash(observations),calendar:hash(events),market:hash(market),news:hash(news),features:hash(features),
     forecasts:hash(forecasts),releaseAnalytics:hash(releaseAnalytics),risk:hash(risk),scenarios:hash(scenarios),
   };
-  return {generatedAt,modelVersion:'institutional-research-1.0',retrievalTimestamp:generatedAt,hashes:records,reproducibilityHash:hash(records),transformations:['schema-validation','freshness-check','robust-outlier-screen','feature-engineering','walk-forward-model-calibration','adaptive-forecast-ensemble','model-disagreement-uncertainty','forecast-error-attribution','model-drift-detection','drift-adjusted-confidence','uncertainty-calibration','release-surprise-normalization','surprise-persistence','catalyst-sequencing','turning-point-detection','regime-transition-risk','regime-classification','risk-haircut','scenario-shock']};
+  return {generatedAt,modelVersion:'institutional-research-1.0',retrievalTimestamp:generatedAt,hashes:records,reproducibilityHash:hash(records),transformations:['schema-validation','freshness-check','robust-outlier-screen','feature-engineering','walk-forward-model-calibration','adaptive-forecast-ensemble','model-disagreement-uncertainty','empirical-residual-distribution','quantile-forecast-bands','tail-asymmetry','forecast-error-attribution','model-drift-detection','drift-adjusted-confidence','uncertainty-calibration','release-surprise-normalization','surprise-persistence','catalyst-sequencing','turning-point-detection','regime-transition-risk','regime-classification','risk-haircut','scenario-shock']};
 }
 
 function buildOperatingStandards(dataQuality){
