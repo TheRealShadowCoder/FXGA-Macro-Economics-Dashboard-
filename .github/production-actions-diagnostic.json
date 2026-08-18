@@ -1,6 +1,28 @@
 {
-  "generatedAt": "2026-08-18T04:43:40.636Z",
+  "generatedAt": "2026-08-18T04:55:35.642Z",
   "googleDeploys": [
+    {
+      "conclusion": "",
+      "createdAt": "2026-08-18T04:54:16Z",
+      "databaseId": 32100842661,
+      "event": "workflow_dispatch",
+      "headSha": "1dea8dddbcb1f9e64efde67bc9c96da14506a62a",
+      "status": "in_progress",
+      "updatedAt": "2026-08-18T04:54:50Z",
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32100842661",
+      "workflowName": "Deploy FXGA Google Cloud Collector"
+    },
+    {
+      "conclusion": "cancelled",
+      "createdAt": "2026-08-18T04:53:11Z",
+      "databaseId": 32100774304,
+      "event": "workflow_dispatch",
+      "headSha": "00cb67130c918aa146cbd15a489b3bea6e4c041d",
+      "status": "completed",
+      "updatedAt": "2026-08-18T04:54:34Z",
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32100774304",
+      "workflowName": "Deploy FXGA Google Cloud Collector"
+    },
     {
       "conclusion": "success",
       "createdAt": "2026-08-18T04:29:45Z",
@@ -110,31 +132,31 @@
       "updatedAt": "2026-08-18T02:39:55Z",
       "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32092451406",
       "workflowName": "Deploy FXGA Google Cloud Collector"
-    },
-    {
-      "conclusion": "success",
-      "createdAt": "2026-08-18T02:31:36Z",
-      "databaseId": 32092156518,
-      "event": "push",
-      "headSha": "b32ef128039b75c8e904c038841e958ba7f21084",
-      "status": "completed",
-      "updatedAt": "2026-08-18T02:35:09Z",
-      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32092156518",
-      "workflowName": "Deploy FXGA Google Cloud Collector"
-    },
-    {
-      "conclusion": "cancelled",
-      "createdAt": "2026-08-18T02:27:55Z",
-      "databaseId": 32091926737,
-      "event": "push",
-      "headSha": "bff6d3d4502aba6c9c22361e472d0b7774396e52",
-      "status": "completed",
-      "updatedAt": "2026-08-18T02:31:45Z",
-      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32091926737",
-      "workflowName": "Deploy FXGA Google Cloud Collector"
     }
   ],
   "cloudflareDeploys": [
+    {
+      "conclusion": "success",
+      "createdAt": "2026-08-18T04:54:17Z",
+      "databaseId": 32100844497,
+      "event": "workflow_dispatch",
+      "headSha": "1dea8dddbcb1f9e64efde67bc9c96da14506a62a",
+      "status": "completed",
+      "updatedAt": "2026-08-18T04:55:10Z",
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32100844497",
+      "workflowName": "Deploy FXGA Production Application"
+    },
+    {
+      "conclusion": "success",
+      "createdAt": "2026-08-18T04:53:12Z",
+      "databaseId": 32100775444,
+      "event": "workflow_dispatch",
+      "headSha": "00cb67130c918aa146cbd15a489b3bea6e4c041d",
+      "status": "completed",
+      "updatedAt": "2026-08-18T04:53:55Z",
+      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32100775444",
+      "workflowName": "Deploy FXGA Production Application"
+    },
     {
       "conclusion": "success",
       "createdAt": "2026-08-18T04:40:19Z",
@@ -243,28 +265,6 @@
       "status": "completed",
       "updatedAt": "2026-08-18T03:04:16Z",
       "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32094068387",
-      "workflowName": "Deploy FXGA Production Application"
-    },
-    {
-      "conclusion": "cancelled",
-      "createdAt": "2026-08-18T03:03:08Z",
-      "databaseId": 32094055143,
-      "event": "push",
-      "headSha": "276516037ed089de5c6a1fc6ec6069b90ddc944e",
-      "status": "completed",
-      "updatedAt": "2026-08-18T03:03:36Z",
-      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32094055143",
-      "workflowName": "Deploy FXGA Production Application"
-    },
-    {
-      "conclusion": "success",
-      "createdAt": "2026-08-18T02:54:35Z",
-      "databaseId": 32093533733,
-      "event": "push",
-      "headSha": "76d8c1ce48505096c4d9419503b8fec7dd73ed5c",
-      "status": "completed",
-      "updatedAt": "2026-08-18T02:55:23Z",
-      "url": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32093533733",
       "workflowName": "Deploy FXGA Production Application"
     }
   ],
