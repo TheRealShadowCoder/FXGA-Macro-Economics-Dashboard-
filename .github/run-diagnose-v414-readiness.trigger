@@ -1,2 +1,2 @@
-run=2026-08-18T06:04:00+02:00
-reason=Run the registered diagnostic workflow and persist the exact blockers preventing v4.14 promotion.
+run=2026-08-18T07:02:00+02:00
+reason=Recalculate v4.14 readiness after cross-asset confirmation, evidence completeness and historical analogue source integrations landed.
