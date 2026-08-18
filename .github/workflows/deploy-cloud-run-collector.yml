@@ -96,17 +96,61 @@ jobs:
         env:
           COLLECTOR_WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          MARKETSTACK_API_KEY: ${{ secrets.MARKETSTACK_API_KEY }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          NASDAQ_DATA_LINK_API_KEY: ${{ secrets.NASDAQ_DATA_LINK_API_KEY }}
         run: |
-          gcloud secrets describe fxga-collector-webhook-secret >/dev/null 2>&1 || gcloud secrets create fxga-collector-webhook-secret --replication-policy=automatic
-          printf '%s' "$COLLECTOR_WEBHOOK_SECRET" | gcloud secrets versions add fxga-collector-webhook-secret --data-file=-
-          if [ -z "$FRED_API_KEY" ]; then echo '::error::FRED_API_KEY repository secret is not configured.'; exit 1; fi
-          gcloud secrets describe fxga-fred-api-key >/dev/null 2>&1 || gcloud secrets create fxga-fred-api-key --replication-policy=automatic
-          printf '%s' "$FRED_API_KEY" | gcloud secrets versions add fxga-fred-api-key --data-file=-
+          ensure_secret() {
+            SECRET_NAME="$1"; SECRET_VALUE="$2"; REQUIRED="$3"
+            if [ -z "$SECRET_VALUE" ]; then
+              if [ "$REQUIRED" = 'required' ]; then
+                echo "::error::Required repository secret for $SECRET_NAME is not configured."
+                exit 1
+              fi
+              echo "Optional market-data secret $SECRET_NAME not configured; provider will remain disabled."
+              return 1
+            fi
+            gcloud secrets describe "$SECRET_NAME" >/dev/null 2>&1 || gcloud secrets create "$SECRET_NAME" --replication-policy=automatic
+            printf '%s' "$SECRET_VALUE" | gcloud secrets versions add "$SECRET_NAME" --data-file=- >/dev/null
+            return 0
+          }
+
+          ensure_secret fxga-collector-webhook-secret "$COLLECTOR_WEBHOOK_SECRET" required
+          ensure_secret fxga-fred-api-key "$FRED_API_KEY" required
+
+          SECRET_BINDINGS='COLLECTOR_WEBHOOK_SECRET=fxga-collector-webhook-secret:latest,FRED_API_KEY=fxga-fred-api-key:latest'
+          OPTIONAL_SECRET_NAMES=''
+
+          add_optional() {
+            ENV_NAME="$1"; SECRET_NAME="$2"; SECRET_VALUE="$3"
+            if ensure_secret "$SECRET_NAME" "$SECRET_VALUE" optional; then
+              SECRET_BINDINGS="$SECRET_BINDINGS,$ENV_NAME=$SECRET_NAME:latest"
+              OPTIONAL_SECRET_NAMES="$OPTIONAL_SECRET_NAMES $SECRET_NAME"
+            fi
+          }
+
+          add_optional ALPHA_VANTAGE_API_KEY fxga-alpha-vantage-api-key "$ALPHA_VANTAGE_API_KEY"
+          add_optional TWELVE_DATA_API_KEY fxga-twelve-data-api-key "$TWELVE_DATA_API_KEY"
+          add_optional FINNHUB_API_KEY fxga-finnhub-api-key "$FINNHUB_API_KEY"
+          add_optional MARKETSTACK_API_KEY fxga-marketstack-api-key "$MARKETSTACK_API_KEY"
+          add_optional FMP_API_KEY fxga-fmp-api-key "$FMP_API_KEY"
+          add_optional NASDAQ_DATA_LINK_API_KEY fxga-nasdaq-data-link-api-key "$NASDAQ_DATA_LINK_API_KEY"
+
+          echo "COLLECTOR_SECRET_BINDINGS=$SECRET_BINDINGS" >> "$GITHUB_ENV"
+          echo "OPTIONAL_SECRET_NAMES=$OPTIONAL_SECRET_NAMES" >> "$GITHUB_ENV"
 
       - name: Grant runtime secret access before deploy
         run: |
-          gcloud secrets add-iam-policy-binding fxga-collector-webhook-secret --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/secretmanager.secretAccessor >/dev/null
-          gcloud secrets add-iam-policy-binding fxga-fred-api-key --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/secretmanager.secretAccessor >/dev/null
+          grant_secret() {
+            SECRET_NAME="$1"
+            gcloud secrets add-iam-policy-binding "$SECRET_NAME" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/secretmanager.secretAccessor >/dev/null
+          }
+          grant_secret fxga-collector-webhook-secret
+          grant_secret fxga-fred-api-key
+          for SECRET_NAME in $OPTIONAL_SECRET_NAMES; do grant_secret "$SECRET_NAME"; done
 
       - name: Build and push container
         run: |
@@ -131,7 +175,7 @@ jobs:
             --max 2 \
             --timeout 900 \
             --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,CLOUD_TASKS_QUEUE=$TASK_QUEUE,CLOUD_TASKS_INVOKER_SA=$RUNTIME_SERVICE_ACCOUNT,CALENDAR_DAYS=14,MAX_BROWSER_SECONDS=25,GLOBAL_FRED_TARGET=180,CLOUDFLARE_WEBHOOK_URL=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook" \
-            --set-secrets "COLLECTOR_WEBHOOK_SECRET=fxga-collector-webhook-secret:latest,FRED_API_KEY=fxga-fred-api-key:latest"
+            --set-secrets "$COLLECTOR_SECRET_BINDINGS"
           SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           gcloud run services update "$SERVICE" --region "$GCP_REGION" --update-env-vars "CLOUD_RUN_SERVICE_URL=$SERVICE_URL"
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
@@ -164,3 +208,5 @@ jobs:
           echo "Fast macro/rates/FX/risk sync: hourly"
           echo "Full cached-universe USA/Europe/UK/South Africa/Japan FRED sync: daily at 00:20 UTC with 900-second Scheduler deadline"
           echo "Release checks: exact event-time Cloud Tasks with awaited pre-release market baselines"
+          echo "Free-tier market router: persistent Firestore budgets, provider delegation and hard quota reserves enabled"
+          echo "Bybit and Deribit: public market-data endpoints only; no private trading credentials are mounted"
