@@ -1,2 +1,2 @@
-run=2026-08-18T06:07:00+02:00
-reason=Cluster highly correlated macro histories and use effective independent signal coverage in decision confidence.
+run=2026-08-18T06:08:00+02:00
+reason=Run registered guarded correlated-evidence clustering and effective independent coverage workflow.
