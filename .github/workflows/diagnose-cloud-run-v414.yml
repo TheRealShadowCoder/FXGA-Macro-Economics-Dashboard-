@@ -1,0 +1,69 @@
+name: Diagnose Cloud Run V4.14 Revision
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-diagnose-cloud-run-v414.trigger'
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  SERVICE: fxga-macro-collector
+  GCP_REGION: us-central1
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: config
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Inspect service, revision and recent errors
+        run: |
+          set +e
+          gcloud config set project "$GCP_PROJECT_ID" >/dev/null
+          gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format=json > /tmp/service.json
+          LATEST=$(node -e "const x=require('/tmp/service.json');process.stdout.write(String(x?.status?.latestReadyRevisionName||x?.status?.latestCreatedRevisionName||''))")
+          if [ -n "$LATEST" ]; then
+            gcloud run revisions describe "$LATEST" --region "$GCP_REGION" --format=json > /tmp/revision.json
+          else
+            echo '{}' > /tmp/revision.json
+          fi
+          SINCE=$(date -u -d '45 minutes ago' +'%Y-%m-%dT%H:%M:%SZ')
+          gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=$SERVICE AND timestamp>=\"$SINCE\" AND severity>=ERROR" --limit=20 --order=desc --format=json > /tmp/errors.json 2>/tmp/logging.err
+          node <<'NODE'
+          const fs=require('fs'),read=p=>{try{return JSON.parse(fs.readFileSync(p,'utf8'))}catch{return {}}},service=read('/tmp/service.json'),revision=read('/tmp/revision.json'),errors=read('/tmp/errors.json');
+          const annotations=revision?.metadata?.annotations||{},userImage=Object.entries(annotations).find(([k])=>k.includes('user-image'))?.[1]||null;
+          const sanitize=v=>String(v??'').replace(/AIza[0-9A-Za-z_-]{20,}/g,'[REDACTED_API_KEY]').replace(/sk-[A-Za-z0-9_-]{12,}/g,'[REDACTED_SECRET]').replace(/Bearer\s+[A-Za-z0-9._-]+/gi,'Bearer [REDACTED]');
+          const messages=(Array.isArray(errors)?errors:[]).map(entry=>{const message=entry?.textPayload||entry?.jsonPayload?.message||entry?.jsonPayload?.error||entry?.protoPayload?.status?.message||entry?.httpRequest?.status||'Cloud Run error';return {timestamp:entry?.timestamp||null,severity:entry?.severity||null,revision:entry?.resource?.labels?.revision_name||null,message:sanitize(message).slice(0,700),httpStatus:entry?.httpRequest?.status??null,requestUrl:entry?.httpRequest?.requestUrl?sanitize(entry.httpRequest.requestUrl).replace(/\?.*$/,''):null};}).slice(0,12);
+          const report={generatedAt:new Date().toISOString(),service:{url:service?.status?.url||null,latestCreatedRevisionName:service?.status?.latestCreatedRevisionName||null,latestReadyRevisionName:service?.status?.latestReadyRevisionName||null,traffic:service?.status?.traffic||[]},revision:{name:revision?.metadata?.name||null,createdAt:revision?.metadata?.creationTimestamp||null,image:revision?.spec?.containers?.[0]?.image||null,userImage,conditions:revision?.status?.conditions||[]},recentErrors:messages};
+          fs.writeFileSync('.github/cloud-run-v414-diagnostic.json',JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
+          NODE
+      - name: Persist Cloud Run diagnostic
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/cloud-run-v414-diagnostic.json
+          git commit -m 'Record Cloud Run v4.14 revision diagnostic'
+          git pull --rebase origin main
+          git push origin HEAD:main
