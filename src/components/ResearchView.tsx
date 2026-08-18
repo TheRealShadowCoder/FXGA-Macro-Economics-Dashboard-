@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import './ResearchView.css';
 import { DecisionCorePanel, type DecisionCorePayload } from './DecisionCorePanel';
+import { AdvancedGovernancePanel } from './AdvancedGovernancePanel';
 import { AdaptiveResearchPanel } from './AdaptiveResearchPanel';
 import { DecisionMemoryPanel } from './DecisionMemoryPanel';
 import { TransitionResearchPanel } from './TransitionResearchPanel';
@@ -80,6 +81,7 @@ export function ResearchView(){
     </section>
 
     <DecisionCorePanel data={data.decisionCore}/>
+    <AdvancedGovernancePanel data={data.decisionCore}/>
     <DecisionMemoryPanel data={data.decisionMemory}/>
     <AdaptiveResearchPanel sources={data.sourceReliability} forecasts={data.forecasts}/>
     <TransitionResearchPanel turningPoints={data.turningPoints} catalystSequence={data.catalystSequence} persistence={data.releaseAnalytics.persistence}/>
