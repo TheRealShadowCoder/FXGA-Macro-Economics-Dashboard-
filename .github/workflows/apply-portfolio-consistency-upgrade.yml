@@ -21,7 +21,9 @@ jobs:
         with:
           node-version: '24'
       - name: Apply portfolio consistency patch
-        run: python3 scripts/apply_portfolio_consistency_upgrade.py
+        run: |
+          python3 scripts/apply_portfolio_consistency_upgrade.py
+          python3 scripts/apply_portfolio_consistency_upgrade_v2.py
       - name: Validate triangular and concentration governance
         run: |
           cd cloud-run-collector
@@ -29,19 +31,23 @@ jobs:
           npm run check
           node --input-type=module <<'NODE'
           import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
-          const pair=(symbol,score,confidence=75)=>({symbol,direction:score>0?'BUY':'SELL',score,confidence,conviction:70,risk:'normal',components:{structuralDivergence:score,policyDivergence:score*.8,releaseDivergence:score*.5,narrativeDivergence:score*.3},probabilities:score>0?{buy:.64,sell:.15,wait:.21}:{buy:.15,sell:.64,wait:.21}});
-          const primary={rankedOpportunities:[pair('EURUSD',45,82),pair('GBPUSD',35,78),pair('EURGBP',-40,55),pair('USDZAR',-32,74),pair('EURZAR',42,70),pair('GBPZAR',38,68),pair('USDJPY',28,66),pair('XAUUSD',22,61)],sessions:[],decisionSummary:{actionableCount:8}};
-          const history=Array.from({length:16},(_,i)=>({date:new Date(Date.now()-(16-i)*86400000).toISOString(),value:100+i*.2}));
-          const observations=[{seriesId:'P',title:'Portfolio test',value:103,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',history}];
-          const research={dataQuality:{overall:90},risk:{aggregate:15},modelHealth:{score:90,status:'healthy',calibratedForecasts:20},scenarios:[{label:'Base',pairs:primary.rankedOpportunities.map(p=>({symbol:p.symbol,direction:p.direction,score:p.score}))}]};
+          const pair=(symbol,score,confidence=88)=>({symbol,direction:score>0?'BUY':'SELL',score,confidence,conviction:78,risk:'normal',components:{structuralDivergence:score,policyDivergence:score*.8,releaseDivergence:score*.5,narrativeDivergence:score*.3},probabilities:score>0?{buy:.68,sell:.12,wait:.20}:{buy:.12,sell:.68,wait:.20}});
+          const primary={rankedOpportunities:[pair('EURUSD',55,94),pair('GBPUSD',30,92),pair('EURGBP',-35,88),pair('USDZAR',-35,90),pair('EURZAR',45,86),pair('GBPZAR',38,84),pair('USDJPY',30,82),pair('XAUUSD',25,80)],sessions:[],decisionSummary:{actionableCount:8}};
+          const history=Array.from({length:20},(_,i)=>({date:new Date(Date.now()-(20-i)*86400000).toISOString(),value:100+i*.25}));
+          const observations=[{seriesId:'P1',title:'Portfolio test one',value:105,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary A',history},{seriesId:'P2',title:'Portfolio test two',value:104,lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary B',history:history.map((x,i)=>({...x,value:90+i*.18}))}];
+          const research={dataQuality:{overall:96},risk:{aggregate:5},modelHealth:{score:96,status:'healthy',calibratedForecasts:20},evidenceIndependence:{independenceRatio:1,economies:[]},turningPoints:{economies:[]},catalystSequence:{currencies:[]},scenarios:[{label:'Base',pairs:primary.rankedOpportunities.map(p=>({symbol:p.symbol,direction:p.direction,score:p.score}))}]};
           const core=buildDecisionIntelligenceCore({decision:primary,observations,events:[],news:[],marketData:[],research});
           if(!core.crossPairConsistency||core.crossPairConsistency.checks.length<3)throw new Error('Triangle consistency checks missing');
           if(!core.portfolioInteraction||!core.portfolioInteraction.pairControls)throw new Error('Portfolio interaction missing');
           const governed=governDecisionMatrix(primary,core);
           const triangle=core.crossPairConsistency.checks.find(x=>x.target==='EURGBP');
-          if(!triangle?.signConflict)throw new Error('Synthetic EURGBP inconsistency was not detected');
+          if(!triangle?.signConflict)throw new Error(`Synthetic EURGBP inconsistency was not detected: ${JSON.stringify(triangle)}`);
           const weakest=governed.rankedOpportunities.find(x=>x.symbol===triangle.weakestSymbol);
-          if(weakest?.direction!=='WAIT'||weakest?.executionGate!=='CROSS_PAIR_CONSISTENCY_WAIT')throw new Error('Weaker triangular leg was not vetoed');
+          if(!weakest||weakest.direction!=='WAIT')throw new Error('Weaker triangular leg was not held at WAIT');
+          const rawControl=core.portfolioInteraction.pairControls[triangle.weakestSymbol];
+          if(rawControl?.originalDirection!=='WAIT'&&weakest.executionGate!=='CROSS_PAIR_CONSISTENCY_WAIT')throw new Error('Directional weaker leg did not receive cross-pair consistency gate');
+          const anyAdvanced=governed.rankedOpportunities.find(x=>x.decisionCore?.evidenceIndependence!==undefined);
+          if(!anyAdvanced)throw new Error('Portfolio annotation dropped advanced governance fields');
           console.log(JSON.stringify({triangles:core.crossPairConsistency,portfolio:core.portfolioInteraction,summary:governed.decisionSummary},null,2));
           NODE
       - name: Validate frontend build
