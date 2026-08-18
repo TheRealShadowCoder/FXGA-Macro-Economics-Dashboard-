@@ -1,0 +1,56 @@
+name: Apply Decision Intelligence Core Upgrade
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-decision-core-upgrade.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Apply guarded integration
+        run: python3 scripts/apply_decision_core_integration.py
+      - name: Validate collector syntax and decision core runtime
+        run: |
+          cd cloud-run-collector
+          npm install --ignore-scripts
+          npm run check
+          node --input-type=module <<'NODE'
+          import { buildDecisionIntelligenceCore, governDecisionMatrix } from './src/decision-intelligence-core.js';
+          const observations=[{seriesId:'TEST',title:'Growth Test',value:101,date:new Date().toISOString(),lastUpdated:new Date().toISOString(),frequency:'Monthly',source:'Primary',history:Array.from({length:12},(_,i)=>({date:new Date(Date.now()-(12-i)*86400000).toISOString(),value:90+i}))}];
+          const primary={rankedOpportunities:[{symbol:'EURUSD',direction:'BUY',score:38,confidence:72,conviction:60,risk:'normal',components:{structuralDivergence:42,policyDivergence:35,releaseDivergence:15,narrativeDivergence:12},probabilities:{buy:.58,sell:.20,wait:.22}}],sessions:[],decisionSummary:{actionableCount:1}};
+          const core=buildDecisionIntelligenceCore({decision:primary,observations,events:[],news:[],marketData:[]});
+          if(core.pairDecisions.length!==1)throw new Error('Decision core pair coverage failed');
+          if(!core.pairDecisions[0].bayesian?.posterior)throw new Error('Bayesian posterior missing');
+          const governed=governDecisionMatrix(primary,core);
+          if(!governed.rankedOpportunities[0].decisionCore)throw new Error('Governance attachment missing');
+          console.log(JSON.stringify({audit:core.audit,posterior:core.pairDecisions[0].bayesian.posterior,final:core.pairDecisions[0].final}));
+          NODE
+      - name: Validate production frontend build
+        run: |
+          npm install
+          npm run build
+      - name: Commit integrated upgrade
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/super-economist.js cloud-run-collector/package.json src/components/ResearchView.tsx
+          if git diff --cached --quiet; then
+            echo 'No integration changes to commit.'
+            exit 0
+          fi
+          git commit -m 'Integrate Bayesian decision governance core'
+          git pull --rebase origin main
+          git push origin HEAD:main
