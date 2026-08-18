@@ -1,0 +1,86 @@
+name: Verify Live Decision Intelligence V4.12
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-v412-live-verification.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify current public intelligence contract
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          let lastError=null, report=null;
+          for(let attempt=0;attempt<50;attempt++){
+            try{
+              const response=await fetch(base+'/api/research',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+              const text=await response.text();
+              if(!response.ok)throw new Error(`/api/research ${response.status}: ${text.slice(0,500)}`);
+              const research=JSON.parse(text),core=research?.decisionCore,pairs=core?.pairDecisions||[];
+              if(pairs.length<8)throw new Error(`Expected 8 governed pairs, found ${pairs.length}`);
+              for(const pair of pairs){
+                if(!pair?.bayesian?.posterior)throw new Error(`${pair.symbol}: Bayesian posterior missing`);
+                if(!pair?.causalTransmission||!Array.isArray(pair.causalTransmission.nodes))throw new Error(`${pair.symbol}: causal transmission missing`);
+                if(!pair?.counterfactual||!Array.isArray(pair.counterfactual.tests))throw new Error(`${pair.symbol}: counterfactual sensitivity missing`);
+                if(!pair?.temporalIntelligence||!Array.isArray(pair.temporalIntelligence.conflicts))throw new Error(`${pair.symbol}: temporal intelligence missing`);
+                if(!pair?.scenarioRobustness||!pair?.uncertainty)throw new Error(`${pair.symbol}: scenario or uncertainty governance missing`);
+                if(!pair?.modelHealth||!pair?.historicalCalibration)throw new Error(`${pair.symbol}: adaptive/historical governance missing`);
+                if(!Array.isArray(pair?.premortem)||!Array.isArray(pair?.thesis?.invalidations))throw new Error(`${pair.symbol}: pre-mortem/invalidation missing`);
+              }
+              const calibrated=(research?.forecasts||[]).filter(f=>f?.modelWeights&&Number(f?.validationPoints||0)>0);
+              if(!research?.modelHealth)throw new Error('Model health missing');
+              if(!Array.isArray(research?.sourceReliability))throw new Error('Source reliability missing');
+              if(calibrated.length<1)throw new Error('Walk-forward calibrated forecasts missing');
+              if(!research?.decisionMemory)throw new Error('Decision memory missing');
+              report={verifiedAt:new Date().toISOString(),pairs:pairs.length,evidenceQuality:core.evidenceQuality?.score??null,governanceVetoes:core.audit?.governanceVetoes??0,contradictions:core.contradictionSummary?.total??0,modelHealth:research.modelHealth.status,modelHealthScore:research.modelHealth.score,sourceReliability:research.sourceReliability.length,calibratedForecasts:calibrated.length,decisionMemorySamples:research.decisionMemory.sampledDecisions||0,causalPairs:pairs.filter(x=>x.causalTransmission).length,counterfactualPairs:pairs.filter(x=>x.counterfactual).length,temporalPairs:pairs.filter(x=>x.temporalIntelligence).length};
+              break;
+            }catch(error){lastError=error;await sleep(5000);}
+          }
+          if(!report)throw lastError||new Error('Live v4.12 intelligence contract never became ready');
+          fs.writeFileSync('/tmp/v412-verification.json',JSON.stringify(report,null,2));
+          console.log(JSON.stringify(report,null,2));
+          NODE
+      - name: Persist v4.12 live verification
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),x=JSON.parse(fs.readFileSync('/tmp/v412-verification.json','utf8'));
+          const lines=[
+            `verified_at=${x.verifiedAt}`,
+            `pairs=${x.pairs}`,
+            `evidence_quality=${x.evidenceQuality}`,
+            `governance_vetoes=${x.governanceVetoes}`,
+            `contradictions=${x.contradictions}`,
+            `model_health=${x.modelHealth}`,
+            `model_health_score=${x.modelHealthScore}`,
+            `source_reliability=${x.sourceReliability}`,
+            `calibrated_forecasts=${x.calibratedForecasts}`,
+            `decision_memory_samples=${x.decisionMemorySamples}`,
+            `causal_pairs=${x.causalPairs}`,
+            `counterfactual_pairs=${x.counterfactualPairs}`,
+            `temporal_pairs=${x.temporalPairs}`,
+            `public_contract=passed`,
+          ];
+          fs.writeFileSync('.github/intelligence-v412-verification.status',lines.join('\n')+'\n');
+          NODE
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/intelligence-v412-verification.status
+          git commit -m 'Verify live v4.12 decision intelligence contract'
+          git pull --rebase origin main
+          git push origin HEAD:main
