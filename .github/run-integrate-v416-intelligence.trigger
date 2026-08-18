@@ -1,2 +1,2 @@
-run=2026-08-18T16:40:00+02:00
-reason=Integrate regime-conditioned release-reaction confidence calibration, three-decision central-bank policy trees, realized decision-quality attribution, and auditable research UI controls.
+run=2026-08-18T16:54:00+02:00
+reason=Rerun the guarded v4.16 integration with the current v4.15 pipeline anchor, confidence-only release-reaction calibration, multi-decision policy trees, and realized attribution.
