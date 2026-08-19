@@ -213,8 +213,8 @@ jobs:
             fi
           }
           upsert_job fxga-calendar-bootstrap '5 0 * * *' "$SERVICE_URL/bootstrap" '{}' '180s'
-          upsert_job fxga-cross-asset-market-history '*/5 * * * *' "$SERVICE_URL/market-sync" '{}' '240s'
-          upsert_job fxga-technical-history-bootstrap '37 */6 * * *' "$SERVICE_URL/technical-history-bootstrap" '{}' '900s'
+          upsert_job fxga-cross-asset-market-history '2-57/5 * * * *' "$SERVICE_URL/market-sync" '{}' '240s'
+          upsert_job fxga-technical-history-bootstrap '44 */6 * * *' "$SERVICE_URL/technical-history-bootstrap" '{}' '900s'
           upsert_job fxga-fast-global-macro '0 * * * *' "$SERVICE_URL/macro-sync?mode=fast" '{"mode":"fast"}' '180s'
           upsert_job fxga-full-global-macro '20 0 * * *' "$SERVICE_URL/macro-sync?mode=full" '{"mode":"full"}' '900s'
 
@@ -238,7 +238,7 @@ jobs:
           echo "Private collector: $SERVICE_URL"
           echo "Compute and acquisition: Google Cloud Run"
           echo "State and technical history: Google Cloud Firestore"
-          echo "Market history sampling: every 5 minutes in Google Cloud"
+          echo "Market history sampling: every 5 minutes, offset from macro jobs to avoid overlap"
           echo "Verified OHLC bootstrap: Twelve Data through the quota governor, refreshed at most once per day per symbol/timeframe"
           echo "Scheduling: Google Cloud Scheduler + Cloud Tasks"
           echo "Secrets: Google Secret Manager"
