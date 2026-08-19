@@ -38,6 +38,7 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm run check
+          node --check price-cache.js
 
       - id: config
         name: Resolve Google authentication
@@ -83,19 +84,23 @@ jobs:
             --concurrency 40 \
             --min 0 \
             --max 2 \
-            --timeout 15 \
+            --timeout 30 \
             --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_MT5_TOKEN_SHA256=$FXGA_MT5_TOKEN_SHA256,FXGA_ARCHITECTURE=google-cloud-direct"
           MT5_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           test -n "$MT5_URL" || { echo '::error::MT5 Cloud Run URL missing'; exit 1; }
           echo "MT5_URL=$MT5_URL" >> "$GITHUB_ENV"
           echo "url=$MT5_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Verify MT5 ingress contract
+      - name: Verify MT5 ingress and bounded price-cache contract
         run: |
           curl --fail --silent --show-error "$MT5_URL/health" -o /tmp/health.json
-          node -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8')); if(!h.ok||h.source!=='MetaTrader5'||h.schema!=='fxga.smc.signal.v3'||h.cloudflareProcessing!==false) process.exit(1); console.log(h)"
+          node -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8')); if(!h.ok||h.source!=='MetaTrader5'||h.schema!=='fxga.smc.signal.v3'||h.cloudflareProcessing!==false) process.exit(1); if(h.priceCache?.schema!=='fxga.mt5.price-cache.v1'||h.priceCache?.cacheEnvelopeBytes!==200000000||h.priceCache?.payloadHardBytes!==190000000||!h.priceCache?.allowedSymbols?.includes('USDZAR')) process.exit(1); console.log(h)"
+          curl --fail --silent --show-error "$MT5_URL/api/mt5/price-cache/status" -o /tmp/cache.json
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('/tmp/cache.json','utf8')); if(c.cacheEnvelopeBytes!==200000000||c.payloadHardBytes!==190000000||c.evictTargetBytes!==175000000) process.exit(1); console.log(c)"
           code=$(curl -sS -o /tmp/reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/webhook")
           test "$code" -eq 403 || { cat /tmp/reject.json; exit 1; }
+          code=$(curl -sS -o /tmp/cache-reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/price-cache")
+          test "$code" -eq 403 || { cat /tmp/cache-reject.json; exit 1; }
 
       - name: Publish resolved MT5 endpoint
         run: |
@@ -111,6 +116,18 @@ jobs:
             baseUrl: base,
             webhookUrl: `${base}/api/mt5/webhook`,
             healthUrl: `${base}/health`,
+            priceCacheIngestUrl: `${base}/api/mt5/price-cache`,
+            priceCacheStatusUrl: `${base}/api/mt5/price-cache/status`,
+            priceQueryUrl: `${base}/api/mt5/prices`,
+            priceCache: {
+              source: 'MetaTrader5',
+              symbols: ['EURUSD','GBPUSD','USDJPY','USDZAR'],
+              sourceTimeframe: 'M1',
+              envelopeBytes: 200000000,
+              payloadHardBytes: 190000000,
+              evictionTargetBytes: 175000000,
+              policy: 'gzip + timestamp dedupe + global FIFO oldest-first'
+            },
             updatedAt: new Date().toISOString(),
             cloudflareProcessing: false
           };
@@ -130,6 +147,9 @@ jobs:
       - name: Production summary
         run: |
           echo "MT5 Google Cloud service: $MT5_URL"
-          echo "MT5 webhook: $MT5_URL/api/mt5/webhook"
-          echo "Storage: Google Cloud Firestore shared FXGA signal ledger"
+          echo "MT5 signal webhook: $MT5_URL/api/mt5/webhook"
+          echo "MT5 price ingest: $MT5_URL/api/mt5/price-cache"
+          echo "MT5 price query: $MT5_URL/api/mt5/prices"
+          echo "MT5 price cache: 200 MB envelope / 190 MB payload hard ceiling / 175 MB FIFO target"
+          echo "Storage: Google Cloud Firestore shared FXGA ledger + bounded price cache"
           echo "Cloudflare processing: NONE"
