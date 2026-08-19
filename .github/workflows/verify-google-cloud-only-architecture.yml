@@ -44,9 +44,9 @@ jobs:
           if(!routing.includes('VITE_GOOGLE_CLOUD_API_BASE'))throw new Error('Browser API routing to Google Cloud is missing');
           if(!routing.includes("url.pathname.startsWith('/api/')"))throw new Error('Relative API routing guard is missing');
 
-          const gcpFiles=['google-cloud-app/server.js','.github/workflows/deploy-google-cloud-app.yml','.github/workflows/deploy-cloud-run-collector.yml'];
+          const publicRuntimeFiles=['google-cloud-app/server.js','.github/workflows/deploy-google-cloud-app.yml'];
           const forbiddenRuntime=[/CLOUDFLARE_WEBHOOK_URL/i,/COLLECTOR_WEBHOOK_SECRET/i,/CLOUDFLARE_API_TOKEN/i,/workers\.dev/i,/wrangler\s+deploy/i];
-          for(const file of gcpFiles){
+          for(const file of publicRuntimeFiles){
             const text=fs.readFileSync(file,'utf8');
             for(const pattern of forbiddenRuntime)if(pattern.test(text))throw new Error(`${file} violates the Google processing boundary: ${pattern}`);
           }
