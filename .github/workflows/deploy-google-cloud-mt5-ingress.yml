@@ -91,12 +91,24 @@ jobs:
           echo "MT5_URL=$MT5_URL" >> "$GITHUB_ENV"
           echo "url=$MT5_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Verify MT5 ingress and bounded price-cache contract
+      - name: Verify MT5 ingress and advanced bounded price-cache contract
         run: |
           curl --fail --silent --show-error "$MT5_URL/health" -o /tmp/health.json
           node -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8')); if(!h.ok||h.source!=='MetaTrader5'||h.schema!=='fxga.smc.signal.v3'||h.cloudflareProcessing!==false) process.exit(1); if(h.priceCache?.schema!=='fxga.mt5.price-cache.v1'||h.priceCache?.cacheEnvelopeBytes!==200000000||h.priceCache?.payloadHardBytes!==190000000||!h.priceCache?.allowedSymbols?.includes('USDZAR')) process.exit(1); console.log(h)"
           curl --fail --silent --show-error "$MT5_URL/api/mt5/price-cache/status" -o /tmp/cache.json
-          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('/tmp/cache.json','utf8')); if(c.cacheEnvelopeBytes!==200000000||c.payloadHardBytes!==190000000||c.evictTargetBytes!==175000000) process.exit(1); console.log(c)"
+          node <<'NODE'
+          const fs=require('fs');
+          const c=JSON.parse(fs.readFileSync('/tmp/cache.json','utf8'));
+          if(c.cacheEnvelopeBytes!==200000000||c.payloadHardBytes!==190000000||c.evictTargetBytes!==175000000) process.exit(1);
+          if(!c.databaseHealth||typeof c.databaseHealth.pairsOnline!=='number'||c.databaseHealth.pairsExpected!==4) process.exit(1);
+          if(!c.management?.evictionArmed||!c.management?.compressionActive||!c.management?.deduplicationActive||!c.management?.integrityMonitoring) process.exit(1);
+          if(!Array.isArray(c.derivedTimeframes)||!c.derivedTimeframes.includes('H4')||!c.derivedTimeframes.includes('D1')) process.exit(1);
+          for(const pair of ['EURUSD','GBPUSD','USDJPY','USDZAR']){
+            const row=c.series?.[`${pair}_M1`];
+            if(!row||typeof row.integrityScore!=='number'||!Array.isArray(row.alerts)) process.exit(1);
+          }
+          console.log('Advanced MT5 cache contract verified',c.databaseHealth,c.management);
+          NODE
           code=$(curl -sS -o /tmp/reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/webhook")
           test "$code" -eq 403 || { cat /tmp/reject.json; exit 1; }
           code=$(curl -sS -o /tmp/cache-reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/price-cache")
@@ -126,7 +138,7 @@ jobs:
               envelopeBytes: 200000000,
               payloadHardBytes: 190000000,
               evictionTargetBytes: 175000000,
-              policy: 'gzip + timestamp dedupe + global FIFO oldest-first'
+              policy: 'gzip + timestamp dedupe + global FIFO oldest-first + automatic integrity diagnostics'
             },
             updatedAt: new Date().toISOString(),
             cloudflareProcessing: false
@@ -151,5 +163,6 @@ jobs:
           echo "MT5 price ingest: $MT5_URL/api/mt5/price-cache"
           echo "MT5 price query: $MT5_URL/api/mt5/prices"
           echo "MT5 price cache: 200 MB envelope / 190 MB payload hard ceiling / 175 MB FIFO target"
+          echo "Integrity: OHLC validation + dedupe + ordering + gaps + freshness + broker-symbol tracking"
           echo "Storage: Google Cloud Firestore shared FXGA ledger + bounded price cache"
           echo "Cloudflare processing: NONE"
