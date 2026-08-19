@@ -1,0 +1,11 @@
+{
+  "name": "fxga-google-cloud-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "dependencies": {
+    "@google-cloud/firestore": "9.0.0",
+    "ws": "8.18.3"
+  }
+}
