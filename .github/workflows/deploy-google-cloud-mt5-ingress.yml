@@ -1,0 +1,105 @@
+name: Deploy FXGA Google Cloud MT5 Signal Ingress
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'google-cloud-mt5-ingress/**'
+      - '.github/workflows/deploy-google-cloud-mt5-ingress.yml'
+
+concurrency:
+  group: fxga-google-cloud-mt5-ingress
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  SERVICE: fxga-mt5-signal-ingress
+  GAR_REPOSITORY: fxga-containers
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  FXGA_MT5_TOKEN_SHA256: 649e0eee73a3441f9d869991dd2295eb9544725b86936a227e6fcc1c2631630d
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Validate MT5 ingress
+        working-directory: google-cloud-mt5-ingress
+        run: |
+          npm install --no-audit --no-fund
+          npm run check
+
+      - id: config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push MT5 ingress
+        run: |
+          gcloud config set project "$GCP_PROJECT_ID"
+          gcloud services enable run.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com
+          gcloud artifacts repositories describe "$GAR_REPOSITORY" --location "$GCP_REGION" >/dev/null 2>&1 || \
+            gcloud artifacts repositories create "$GAR_REPOSITORY" --repository-format=docker --location "$GCP_REGION"
+          IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/$SERVICE:${GITHUB_SHA}"
+          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+          docker build -f google-cloud-mt5-ingress/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - id: deploy
+        name: Deploy public authenticated MT5 ingress
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --cpu 1 \
+            --memory 256Mi \
+            --concurrency 40 \
+            --min 0 \
+            --max 2 \
+            --timeout 15 \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_MT5_TOKEN_SHA256=$FXGA_MT5_TOKEN_SHA256,FXGA_ARCHITECTURE=google-cloud-direct"
+          MT5_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          test -n "$MT5_URL" || { echo '::error::MT5 Cloud Run URL missing'; exit 1; }
+          echo "MT5_URL=$MT5_URL" >> "$GITHUB_ENV"
+          echo "url=$MT5_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Verify MT5 ingress contract
+        run: |
+          curl --fail --silent --show-error "$MT5_URL/health" -o /tmp/health.json
+          node -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8')); if(!h.ok||h.source!=='MetaTrader5'||h.schema!=='fxga.smc.signal.v3'||h.cloudflareProcessing!==false) process.exit(1); console.log(h)"
+          code=$(curl -sS -o /tmp/reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/webhook")
+          test "$code" -eq 403 || { cat /tmp/reject.json; exit 1; }
+
+      - name: Production summary
+        run: |
+          echo "MT5 Google Cloud service: $MT5_URL"
+          echo "MT5 webhook: $MT5_URL/api/mt5/webhook"
+          echo "Storage: Google Cloud Firestore shared FXGA signal ledger"
+          echo "Cloudflare processing: NONE"
