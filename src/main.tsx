@@ -5,6 +5,7 @@ import App from './App';
 import { ExplainabilityLayer } from './components/ExplainabilityLayer';
 import { QualityFrameworkDock } from './components/QualityFrameworkDock';
 import { FirestoreCapacityDock } from './components/FirestoreCapacityDock';
+import { MT5PriceCacheDock } from './components/MT5PriceCacheDock';
 import './google-live-refresh';
 import './public-finish';
 import './styles.css';
@@ -20,6 +21,7 @@ createRoot(document.getElementById('root')!).render(
     <App />
     <QualityFrameworkDock />
     <FirestoreCapacityDock />
+    <MT5PriceCacheDock />
     <ExplainabilityLayer />
   </StrictMode>,
 );
