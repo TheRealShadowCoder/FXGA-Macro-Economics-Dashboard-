@@ -5,6 +5,7 @@ import { refreshSuperEconomist, syncFullMacroFromUniverse, superHealth, fullStat
 import { backfillEventStudies } from './event-study-backfill.js';
 import { collectFreeTierMarketData } from './free-market-data-v2.js';
 import { freeTierBudgetStatus } from './market-data-budget.js';
+import { bootstrapVerifiedTechnicalHistory, persistAuthoritativeMarketSample } from './technical-history-bootstrap.js';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const db=new Firestore({ignoreUndefinedProperties:true});
@@ -97,9 +98,9 @@ function mergeCanonical(base,preferred){
 }
 
 async function signedMarketWebhook(payload){
-  const webhookUrl=process.env.CLOUDFLARE_WEBHOOK_URL||'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook';
-  const secret=process.env.COLLECTOR_WEBHOOK_SECRET||'';
-  if(!secret||!webhookUrl)return {sent:false,reason:'not-configured'};
+  const webhookUrl=String(process.env.CLOUDFLARE_WEBHOOK_URL||'').trim();
+  const secret=String(process.env.COLLECTOR_WEBHOOK_SECRET||'').trim();
+  if(!secret||!webhookUrl)return {sent:false,reason:'not-configured-passive-cloudflare-host'};
   const body=JSON.stringify({version:1,type:'market-snapshot',generatedAt:new Date().toISOString(),payload});
   const timestamp=String(Date.now()),requestId=crypto.randomUUID();
   const signature=crypto.createHmac('sha256',secret).update(`${timestamp}.${requestId}.${body}`).digest('hex');
@@ -151,8 +152,9 @@ async function augmentMarketState(){
   };
   const nextHash=stableHash(payload),changed=stored?.hash!==nextHash,updatedAt=new Date().toISOString();
   if(changed)await ref.set({hash:nextHash,updatedAt,payload},{merge:false});
+  const technicalHistory=await persistAuthoritativeMarketSample(payload).catch(error=>({changed:false,error:String(error?.message||error).slice(0,300)}));
   const webhook=changed?await signedMarketWebhook(payload):{sent:false,reason:'unchanged'};
-  return {changed,webhook,assets:merged.length,canonicalFx:delegated.canonicalFx.length,contextAssets:delegated.contextAssets.length,microstructureAssets:delegated.microstructureAssets.length,providersHealthy:delegated.counts.providersHealthy,budget:delegated.budget};
+  return {changed,webhook,technicalHistory,assets:merged.length,canonicalFx:delegated.canonicalFx.length,contextAssets:delegated.contextAssets.length,microstructureAssets:delegated.microstructureAssets.length,providersHealthy:delegated.counts.providersHealthy,budget:delegated.budget};
 }
 
 async function mergedState(){
@@ -179,7 +181,7 @@ async function handleMarketAffectingProxy(req,res,url){
   if(delegation&&contentType.includes('application/json')){
     try{
       const original=JSON.parse(captured.bytes.toString('utf8'));
-      return sendJson(res,captured.status,{...original,freeTierDelegation:{changed:delegation.changed,assets:delegation.assets,canonicalFx:delegation.canonicalFx,contextAssets:delegation.contextAssets,microstructureAssets:delegation.microstructureAssets,providersHealthy:delegation.providersHealthy}});
+      return sendJson(res,captured.status,{...original,freeTierDelegation:{changed:delegation.changed,assets:delegation.assets,canonicalFx:delegation.canonicalFx,contextAssets:delegation.contextAssets,microstructureAssets:delegation.microstructureAssets,providersHealthy:delegation.providersHealthy,historyBuild:delegation.technicalHistory?.historyBuild??null}});
     }catch{}
   }
   relay(res,captured);
@@ -191,7 +193,8 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET'&&url.pathname==='/health'){
       const health=await superHealth();
       const budget=await freeTierBudgetStatus().catch(error=>({error:String(error?.message||error).slice(0,220)}));
-      return sendJson(res,200,{...health,freeTierMarketData:budget});
+      const technical=await collectorState.doc('technical').get().catch(()=>null);
+      return sendJson(res,200,{...health,freeTierMarketData:budget,technicalHistoryBuild:technical?.exists?technical.data()?.payload?.historyBuild??null:null});
     }
     if(req.method==='GET'&&url.pathname==='/market-data-budgets')return sendJson(res,200,await freeTierBudgetStatus());
     if(req.method==='GET'&&url.pathname==='/state')return sendJson(res,200,await mergedState());
@@ -207,6 +210,10 @@ const server=http.createServer(async(req,res)=>{
       const raw=await bodyOf(req);let input={};try{input=raw.length?JSON.parse(raw.toString('utf8')):{}}catch{}
       return sendJson(res,200,await backfillEventStudies({days:input.days,maxEvents:input.maxEvents}));
     }
+    if(req.method==='POST'&&url.pathname==='/technical-history-bootstrap'){
+      await bodyOf(req);
+      return sendJson(res,200,await bootstrapVerifiedTechnicalHistory());
+    }
     if(req.method==='POST'&&url.pathname==='/macro-sync'&&String(url.searchParams.get('mode')||'').toLowerCase()==='full'){
       await bodyOf(req);
       const macro=await syncFullMacroFromUniverse();
@@ -214,7 +221,7 @@ const server=http.createServer(async(req,res)=>{
       if(!marketResponse.ok)console.warn('Full macro companion market sync returned',marketResponse.status);
       const delegation=await augmentMarketState();
       const intelligence=await refreshSuperEconomist({forceNews:true});
-      return sendJson(res,200,{...macro,freeTierDelegation:{changed:delegation.changed,assets:delegation.assets,providersHealthy:delegation.providersHealthy},intelligence:{observations:intelligence.observations,coverage:intelligence.coverage,audit:intelligence.audit}});
+      return sendJson(res,200,{...macro,freeTierDelegation:{changed:delegation.changed,assets:delegation.assets,providersHealthy:delegation.providersHealthy,historyBuild:delegation.technicalHistory?.historyBuild??null},intelligence:{observations:intelligence.observations,coverage:intelligence.coverage,audit:intelligence.audit}});
     }
     if(req.method==='POST'&&['/market-sync','/release-check'].includes(url.pathname)){
       await handleMarketAffectingProxy(req,res,url);
@@ -236,4 +243,4 @@ const server=http.createServer(async(req,res)=>{
     else res.end();
   }
 });
-server.listen(publicPort,()=>console.log(`Macro research gateway v2 on :${publicPort}; collector internal :${internalPort}; free-tier market delegation enabled`));
+server.listen(publicPort,()=>console.log(`Macro research gateway v2 on :${publicPort}; collector internal :${internalPort}; free-tier market delegation and persistent technical history enabled`));
