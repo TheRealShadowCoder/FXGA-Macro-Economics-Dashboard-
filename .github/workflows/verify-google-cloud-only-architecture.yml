@@ -1,8 +1,8 @@
-name: Verify Google Cloud Only Architecture
+name: Verify Google Processing Boundary
 
 on:
   workflow_run:
-    workflows: ['Deploy FXGA Google Cloud Application']
+    workflows: ['Deploy FXGA Cloudflare Static Website']
     types: [completed]
   workflow_dispatch:
 
@@ -16,6 +16,7 @@ env:
   APP_SERVICE: fxga-macro-dashboard
   COLLECTOR_SERVICE: fxga-macro-collector
   DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  CLOUDFLARE_SITE_URL: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
 
 jobs:
   verify:
@@ -24,29 +25,32 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Enforce repository production boundary
+      - name: Enforce passive Cloudflare hosting boundary
         run: |
           set -euo pipefail
-          test ! -e .github/workflows/deploy.yml || { echo '::error::Legacy Cloudflare deployment workflow must not exist'; exit 1; }
-          test ! -e wrangler.jsonc || { echo '::error::Wrangler production configuration must not exist'; exit 1; }
-          test ! -d worker || { echo '::error::Legacy Cloudflare worker source directory must not exist'; exit 1; }
-
-          LEGACY_WORKFLOWS=$(grep -RIlE 'workers\.dev|npx[[:space:]]+wrangler|cloudflare/wrangler-action|@cloudflare/vite-plugin' .github/workflows --include='*.yml' --include='*.yaml' 2>/dev/null | grep -v '/decommission-cloudflare-worker.yml$' || true)
-          if [ -n "$LEGACY_WORKFLOWS" ]; then
-            echo '::error::Active workflows still contain Cloudflare application/runtime paths:'
-            echo "$LEGACY_WORKFLOWS"
-            exit 1
-          fi
+          test -f wrangler.jsonc || { echo '::error::Cloudflare static hosting configuration is missing'; exit 1; }
+          test ! -d worker || { echo '::error::Cloudflare application Worker source must not exist'; exit 1; }
+          test ! -e .github/workflows/decommission-cloudflare-worker.yml || { echo '::error::Cloudflare website host must not be decommissioned'; exit 1; }
 
           node <<'NODE'
           const fs=require('fs');
-          const productionFiles=['package.json','vite.config.ts','google-cloud-app/server.js','google-cloud-app/Dockerfile','.github/workflows/deploy-google-cloud-app.yml','.github/workflows/deploy-cloud-run-collector.yml'];
-          const forbidden=[/@cloudflare\/vite-plugin/i,/wrangler\s+deploy/i,/workers\.dev/i,/CLOUDFLARE_API_TOKEN/i,/COLLECTOR_WEBHOOK_SECRET/i,/CLOUDFLARE_WEBHOOK_URL/i];
-          for(const file of productionFiles){
+          const config=JSON.parse(fs.readFileSync('wrangler.jsonc','utf8'));
+          if(config.main)throw new Error('Cloudflare must not execute a Worker script');
+          if(config.assets?.directory!=='./dist'||config.assets?.not_found_handling!=='single-page-application')throw new Error('Cloudflare must host the compiled SPA only');
+          const forbidden=['durable_objects','kv_namespaces','r2_buckets','d1_databases','services','queues','triggers','browser','ai','vectorize','workflows','vars'];
+          for(const key of forbidden)if(config[key]!==undefined)throw new Error(`Cloudflare static host must not configure ${key}`);
+
+          const routing=fs.readFileSync('src/google-cloud-routing.ts','utf8');
+          if(!routing.includes('VITE_GOOGLE_CLOUD_API_BASE'))throw new Error('Browser API routing to Google Cloud is missing');
+          if(!routing.includes("url.pathname.startsWith('/api/')"))throw new Error('Relative API routing guard is missing');
+
+          const gcpFiles=['google-cloud-app/server.js','.github/workflows/deploy-google-cloud-app.yml','.github/workflows/deploy-cloud-run-collector.yml'];
+          const forbiddenRuntime=[/CLOUDFLARE_WEBHOOK_URL/i,/COLLECTOR_WEBHOOK_SECRET/i,/CLOUDFLARE_API_TOKEN/i,/workers\.dev/i,/wrangler\s+deploy/i];
+          for(const file of gcpFiles){
             const text=fs.readFileSync(file,'utf8');
-            for(const pattern of forbidden)if(pattern.test(text))throw new Error(`${file} violates Google Cloud only production boundary: ${pattern}`);
+            for(const pattern of forbiddenRuntime)if(pattern.test(text))throw new Error(`${file} violates the Google processing boundary: ${pattern}`);
           }
-          console.log('Repository production boundary is Google Cloud only.');
+          console.log('Repository boundary verified: Cloudflare static hosting only; Google Cloud owns processing and state.');
           NODE
 
       - id: config
@@ -67,7 +71,7 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Verify deployed Google Cloud services contain no Cloudflare runtime bindings
+      - name: Verify Google Cloud services contain no Cloudflare processing bindings
         run: |
           gcloud config set project "$GCP_PROJECT_ID"
           gcloud run services describe "$APP_SERVICE" --region "$GCP_REGION" --format=json > /tmp/app.json
@@ -82,21 +86,29 @@ jobs:
             const containers=service?.spec?.template?.spec?.containers||service?.template?.containers||[];
             const env=(containers[0]?.env||[]).map(x=>String(x.name||''));
             const found=forbidden.filter(name=>env.includes(name));
-            if(found.length)throw new Error(`${file} contains forbidden Cloudflare runtime bindings: ${found.join(', ')}`);
+            if(found.length)throw new Error(`${file} contains forbidden Cloudflare processing bindings: ${found.join(', ')}`);
           }
-          console.log('Both Cloud Run services contain zero Cloudflare runtime bindings.');
+          console.log('Google Cloud services contain zero Cloudflare processing bindings.');
           NODE
 
-      - name: Verify live public application is Google Cloud only
+      - name: Verify live hosting and processing split
         run: |
           node <<'NODE'
-          const r=await fetch(process.env.APP_URL+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+          const site=process.env.CLOUDFLARE_SITE_URL,api=process.env.APP_URL;
+          const root=await fetch(site+'/',{headers:{'Cache-Control':'no-cache'}});
+          if(!root.ok)throw new Error(`Cloudflare website ${root.status}`);
+          const html=await root.text();
+          if(!/<div[^>]+id=["']root["']/i.test(html))throw new Error('Cloudflare is not serving the FXGA website');
+
+          const edgeApi=await fetch(site+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+          if(String(edgeApi.headers.get('content-type')||'').toLowerCase().includes('application/json'))throw new Error('Cloudflare is serving an application API instead of static assets only');
+
+          const r=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
           const text=await r.text();
           if(!r.ok)throw new Error(`/api/health ${r.status}: ${text.slice(0,500)}`);
           const h=JSON.parse(text);
-          if(h.architecture!=='google-cloud-only')throw new Error(`Unexpected architecture: ${h.architecture}`);
-          if(h.compute!=='Google Cloud Run')throw new Error(`Unexpected compute: ${h.compute}`);
-          if(h.state!=='Google Cloud Firestore')throw new Error(`Unexpected state: ${h.state}`);
-          if(h.cloudflareProcessing!==false)throw new Error('Cloudflare processing must be false');
-          console.log(JSON.stringify({architecture:h.architecture,compute:h.compute,state:h.state,cloudflareProcessing:h.cloudflareProcessing},null,2));
+          if(h.architecture!=='google-cloud-processing-cloudflare-static-hosting')throw new Error(`Unexpected architecture: ${h.architecture}`);
+          if(h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')throw new Error('Google Cloud compute/state contract failed');
+          if(h.websiteHost!=='Cloudflare Static Assets'||h.cloudflareRole!=='static-host-only'||h.cloudflareProcessing!==false||Number(h.cloudflareUpstreamRequests)!==0)throw new Error('Passive Cloudflare hosting contract failed');
+          console.log(JSON.stringify({websiteHost:h.websiteHost,cloudflareRole:h.cloudflareRole,cloudflareUpstreamRequests:h.cloudflareUpstreamRequests,compute:h.compute,state:h.state},null,2));
           NODE
