@@ -26,11 +26,21 @@ jobs:
 
       - name: Enforce repository production boundary
         run: |
+          set -euo pipefail
           test ! -e .github/workflows/deploy.yml || { echo '::error::Legacy Cloudflare deployment workflow must not exist'; exit 1; }
           test ! -e wrangler.jsonc || { echo '::error::Wrangler production configuration must not exist'; exit 1; }
+          test ! -d worker || { echo '::error::Legacy Cloudflare worker source directory must not exist'; exit 1; }
+
+          LEGACY_WORKFLOWS=$(grep -RIlE 'workers\.dev|npx[[:space:]]+wrangler|cloudflare/wrangler-action|@cloudflare/vite-plugin' .github/workflows --include='*.yml' --include='*.yaml' 2>/dev/null | grep -v '/decommission-cloudflare-worker.yml$' || true)
+          if [ -n "$LEGACY_WORKFLOWS" ]; then
+            echo '::error::Active workflows still contain Cloudflare application/runtime paths:'
+            echo "$LEGACY_WORKFLOWS"
+            exit 1
+          fi
+
           node <<'NODE'
           const fs=require('fs');
-          const productionFiles=['package.json','vite.config.ts','google-cloud-app/server.js','google-cloud-app/Dockerfile','.github/workflows/deploy-google-cloud-app.yml'];
+          const productionFiles=['package.json','vite.config.ts','google-cloud-app/server.js','google-cloud-app/Dockerfile','.github/workflows/deploy-google-cloud-app.yml','.github/workflows/deploy-cloud-run-collector.yml'];
           const forbidden=[/@cloudflare\/vite-plugin/i,/wrangler\s+deploy/i,/workers\.dev/i,/CLOUDFLARE_API_TOKEN/i,/COLLECTOR_WEBHOOK_SECRET/i,/CLOUDFLARE_WEBHOOK_URL/i];
           for(const file of productionFiles){
             const text=fs.readFileSync(file,'utf8');
