@@ -71,7 +71,7 @@ jobs:
           const base=process.env.APP_URL;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
           let last;
-          for(let i=0;i<36;i++){
+          for(let i=0;i<120;i++){
             try{
               const r=await fetch(base+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
               const text=await r.text();
