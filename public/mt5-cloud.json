@@ -5,6 +5,6 @@
   "baseUrl": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app",
   "webhookUrl": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app/api/mt5/webhook",
   "healthUrl": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app/health",
-  "updatedAt": "2026-08-19T17:20:54.620Z",
+  "updatedAt": "2026-08-19T23:02:58.561Z",
   "cloudflareProcessing": false
 }
