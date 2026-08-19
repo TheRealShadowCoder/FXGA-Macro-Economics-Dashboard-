@@ -1,7 +1,7 @@
 {
   "name": "fxga-google-cloud-app",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "fxgaArchitecture": "google-cloud-only",
   "engines": { "node": ">=24" },
