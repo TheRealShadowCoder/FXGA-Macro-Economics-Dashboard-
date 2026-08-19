@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import './FirestoreCapacityDock.css';
 
 type UsageMetric={used:number;limit:number;remaining:number;percent:number};
@@ -39,7 +39,7 @@ export function FirestoreCapacityDock(){
     {open&&<div className="fs-cap-panel"><div className="fs-cap-head"><div><span>GOOGLE CLOUD · DEFAULT DATABASE</span><h3>Free-Tier Capacity</h3></div><button onClick={()=>void load()}>REFRESH</button></div>
       {error&&<div className="fs-cap-error">{error}</div>}
       {!usage?<div className="fs-cap-loading">Reading Google Cloud Monitoring…</div>:<>
-        <div className="fs-cap-storage"><div><span>Data + index storage</span><strong>{usage.storage.usedGiB.toFixed(3)} <small>/ {usage.storage.limitGiB} GiB</small></strong></div><div className={`fs-cap-ring ${tone(usage.storage.percent)}`} style={{'--p':`${Math.min(100,usage.storage.percent)}%`} as React.CSSProperties}><b>{pct(usage.storage.percent)}</b></div></div>
+        <div className="fs-cap-storage"><div><span>Data + index storage</span><strong>{usage.storage.usedGiB.toFixed(3)} <small>/ {usage.storage.limitGiB} GiB</small></strong></div><div className={`fs-cap-ring ${tone(usage.storage.percent)}`} style={{'--p':`${Math.min(100,usage.storage.percent)}%`} as CSSProperties}><b>{pct(usage.storage.percent)}</b></div></div>
         <div className="fs-cap-storage-foot"><span>{usage.storage.remainingGiB.toFixed(3)} GiB free</span><span>{usage.storage.projectedDaysRemaining==null?'No positive 7-day storage trend':`≈ ${fmt(usage.storage.projectedDaysRemaining)} days at recent growth`}</span></div>
         <div className="fs-cap-grid">
           <Gauge label="Reads today" metric={usage.reads} detail="50,000/day free quota"/>
