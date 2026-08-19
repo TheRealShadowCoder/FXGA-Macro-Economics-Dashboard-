@@ -34,7 +34,9 @@ if (typeof window !== 'undefined' && rawBase) {
   const routeSocket = (value: string | URL) => {
     try {
       const url = new URL(String(value), window.location.origin);
-      if (url.origin === window.location.origin && url.pathname === '/api/live') {
+      const sameWebsiteHost = url.host === window.location.host;
+      const websocketProtocol = url.protocol === 'ws:' || url.protocol === 'wss:';
+      if (sameWebsiteHost && websocketProtocol && url.pathname === '/api/live') {
         const target = new URL(rawBase);
         target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
         target.pathname = '/api/live';
