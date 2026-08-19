@@ -1,5 +1,6 @@
 import type { MarketQuote } from '../lib/types';
 import { TechnicalStructureView } from './TechnicalStructureView';
+import { CrossAssetHistoryProgress } from './CrossAssetHistoryProgress';
 
 function number(value: number | null | undefined, digits = 2) {
   if (value == null || !Number.isFinite(value)) return '—';
@@ -31,6 +32,8 @@ export function MarketsView({ assets }: { assets: MarketQuote[] }) {
           <strong>{assets.filter((item) => item.stale).length}</strong><span>last verified</span>
         </div>
       </section>
+
+      <CrossAssetHistoryProgress />
 
       <section className="market-grid">
         {assets.map((asset) => {
