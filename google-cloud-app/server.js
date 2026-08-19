@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Firestore } from '@google-cloud/firestore';
 import { WebSocketServer, WebSocket } from 'ws';
+import { createTradingViewSignalService } from './tradingview-signals.js';
 
 const PORT = Number(process.env.PORT || 8080);
 const PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || undefined;
@@ -14,9 +15,12 @@ const db = new Firestore({ projectId:PROJECT_ID, ignoreUndefinedProperties:true 
 const state = db.collection('fxga_collector_state');
 const chunks = db.collection('fxga_collector_state_chunks');
 const releaseSnapshots = db.collection('fxga_release_snapshots');
+const tradingViewLive = db.collection('fxga_tradingview_live');
 const cache = new Map();
 const CACHE_MS = 2500;
 const INTELLIGENCE_CACHE_MS = 5000;
+let broadcastLiveEvent=()=>{};
+const tradingViewSignalService=createTradingViewSignalService({db,broadcast:event=>broadcastLiveEvent(event)});
 
 const SOURCE_VIEW = [
   {id:'macro-primary',name:'FRED Economic Data',category:'Macro Data API',region:'Global',status:'live',note:'Primary macroeconomic series persisted by the Google Cloud collector.'},
@@ -24,6 +28,7 @@ const SOURCE_VIEW = [
   {id:'calendar-primary',name:'Global Economic Calendar',category:'Economic Calendar',region:'Global',status:'live',note:'Persisted release calendar and release-history state.'},
   {id:'official-publications',name:'Official Central Bank & Statistics Feeds',category:'Official Publications',region:'Global',status:'live',note:'Primary-source policy and statistical publications.'},
   {id:'decision-research',name:'Decision Research Engine',category:'Research & Risk',region:'Global',status:'live',note:'Institutional research, calibration, risk and decision intelligence computed in Google Cloud.'},
+  {id:'tradingview-signals',name:'FXGA TradingView Signal Intelligence',category:'Live Indicator Signals',region:'Global',status:'live',note:'FXGA SMC2000 lifecycle alerts received, validated, scored and persisted in Google Cloud.'},
 ];
 
 const SECURITY_HEADERS = {
@@ -32,8 +37,8 @@ const SECURITY_HEADERS = {
   'Permissions-Policy':'camera=(), microphone=(), geolocation=()',
   'Cross-Origin-Opener-Policy':'same-origin',
   'Access-Control-Allow-Origin':'*',
-  'Access-Control-Allow-Methods':'GET, OPTIONS',
-  'Access-Control-Allow-Headers':'Accept, Cache-Control, Content-Type',
+  'Access-Control-Allow-Methods':'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers':'Accept, Cache-Control, Content-Type, X-FXGA-Webhook-Secret',
   'Access-Control-Max-Age':'86400',
 };
 
@@ -136,10 +141,11 @@ function macroCoverage(macro,observations){
 
 async function api(req,res,url){
   if(req.method==='OPTIONS')return send(res,204,'',{'Cache-Control':'public, max-age=86400'});
+  const signalHandled=await tradingViewSignalService.handle(req,res,url,sendJson,apiError);if(signalHandled)return;
   if(req.method!=='GET')return apiError(res,405,'Method not allowed');
   if(url.pathname==='/api/health'){
     const [calendar,macro,intelligence,market,technical]=await Promise.all(['calendar','macro','intelligence','market','technical'].map(readStateMeta));
-    return sendJson(res,200,{ok:true,app:'FXGA Macro Intelligence',architecture:'google-cloud-processing-cloudflare-static-hosting',compute:'Google Cloud Run',state:'Google Cloud Firestore',websiteHost:'Cloudflare Static Assets',cloudflareRole:'static-host-only',cloudflareProcessing:false,cloudflareUpstreamRequests:0,timestamp:new Date().toISOString(),updatedAt:{calendar:calendar?.updatedAt??null,macro:macro?.updatedAt??null,intelligence:intelligence?.updatedAt??null,market:market?.updatedAt??null,technical:technical?.updatedAt??null}});
+    return sendJson(res,200,{ok:true,app:'FXGA Macro Intelligence',architecture:'google-cloud-processing-cloudflare-static-hosting',compute:'Google Cloud Run',state:'Google Cloud Firestore',websiteHost:'Cloudflare Static Assets',cloudflareRole:'static-host-only',cloudflareProcessing:false,cloudflareUpstreamRequests:0,tradingViewSignals:tradingViewSignalService.health(),timestamp:new Date().toISOString(),updatedAt:{calendar:calendar?.updatedAt??null,macro:macro?.updatedAt??null,intelligence:intelligence?.updatedAt??null,market:market?.updatedAt??null,technical:technical?.updatedAt??null}});
   }
   if(url.pathname==='/api/sources')return sendJson(res,200,{sources:SOURCE_VIEW},'public, max-age=30');
   if(url.pathname==='/api/research'){
@@ -239,12 +245,21 @@ async function serveStatic(req,res,url){
 }
 
 const wss=new WebSocketServer({noServer:true});
-let watchTimer=null,lastIntelVersion='';
+let watchTimer=null,lastIntelVersion='',lastTradingViewVersion='';
+broadcastLiveEvent=payload=>{const message=JSON.stringify(payload);for(const client of wss.clients)if(client.readyState===WebSocket.OPEN)client.send(message);};
 async function pollUpdates(){
   if(!wss.clients.size)return;
-  try{const meta=await readStateMeta('intelligence'),version=`${meta?.updatedAt||''}:${meta?.hash||''}`;if(lastIntelVersion&&version&&version!==lastIntelVersion){const message=JSON.stringify({type:'google-cloud-update',updateType:'intelligence-snapshot',timestamp:meta?.updatedAt??new Date().toISOString()});for(const client of wss.clients)if(client.readyState===WebSocket.OPEN)client.send(message);}if(version)lastIntelVersion=version;}catch{}
+  try{
+    const [meta,tvSnap]=await Promise.all([readStateMeta('intelligence'),tradingViewLive.doc('meta').get()]);
+    const version=`${meta?.updatedAt||''}:${meta?.hash||''}`;
+    if(lastIntelVersion&&version&&version!==lastIntelVersion)broadcastLiveEvent({type:'google-cloud-update',updateType:'intelligence-snapshot',timestamp:meta?.updatedAt??new Date().toISOString()});
+    if(version)lastIntelVersion=version;
+    const tv=tvSnap.exists?tvSnap.data():null,tvVersion=String(tv?.updatedAt||'');
+    if(lastTradingViewVersion&&tvVersion&&tvVersion!==lastTradingViewVersion)broadcastLiveEvent({type:'tradingview-signal',updateType:'tradingview-signal',timestamp:tvVersion,event:tv?.lastEvent??null,signalId:tv?.lastSignalId??null,symbol:tv?.symbol??null,side:tv?.side??null});
+    if(tvVersion)lastTradingViewVersion=tvVersion;
+  }catch{}
 }
-function ensureWatcher(){if(watchTimer||!wss.clients.size)return;watchTimer=setInterval(pollUpdates,10000);pollUpdates();}
+function ensureWatcher(){if(watchTimer||!wss.clients.size)return;watchTimer=setInterval(pollUpdates,3000);pollUpdates();}
 function stopWatcher(){if(wss.clients.size||!watchTimer)return;clearInterval(watchTimer);watchTimer=null;}
 wss.on('connection',socket=>{socket.send(JSON.stringify({type:'connected',channel:'google-cloud-live',timestamp:new Date().toISOString()}));ensureWatcher();socket.on('close',stopWatcher);});
 
