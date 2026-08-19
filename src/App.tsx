@@ -30,7 +30,7 @@ const NAV: Array<{ id: View; label: string }> = [
   { id: 'analysis', label: 'Macro Analysis' },
   { id: 'research', label: 'Research & Risk' },
   { id: 'signals', label: 'Currency Outlook' },
-  { id: 'tradingview', label: 'TradingView Signals' },
+  { id: 'tradingview', label: 'Live Signal Intelligence' },
   { id: 'calendar', label: 'Economic Calendar' },
   { id: 'indicators', label: 'Core Indicators' },
   { id: 'universe', label: 'Macro Data Library' },
