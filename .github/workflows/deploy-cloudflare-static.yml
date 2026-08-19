@@ -59,7 +59,7 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Resolve Google Cloud API and wait for passive-host contract
+      - name: Resolve Google Cloud API and wait for passive-host + TradingView contract
         run: |
           set -euo pipefail
           gcloud config set project "$GCP_PROJECT_ID"
@@ -77,15 +77,15 @@ jobs:
               const text=await r.text();
               if(!r.ok)throw new Error(`${r.status}: ${text.slice(0,400)}`);
               const h=JSON.parse(text);
-              if(h.architecture==='google-cloud-processing-cloudflare-static-hosting'&&h.cloudflareRole==='static-host-only'&&h.cloudflareProcessing===false){
-                console.log('Google Cloud processing boundary ready:',base);
+              if(h.architecture==='google-cloud-processing-cloudflare-static-hosting'&&h.cloudflareRole==='static-host-only'&&h.cloudflareProcessing===false&&h.tradingViewSignals?.schema==='fxga.smc.signal.v3'&&h.tradingViewSignals?.engine==='FXGA_SMC2000'){
+                console.log('Google Cloud processing + TradingView boundary ready:',base);
                 process.exit(0);
               }
-              last=new Error(`Waiting for current Google/Cloudflare boundary contract; got ${h.architecture||'unknown'}`);
+              last=new Error(`Waiting for TradingView-ready Google backend; schema=${h.tradingViewSignals?.schema||'missing'}`);
             }catch(error){last=error;}
             await sleep(5000);
           }
-          throw last||new Error('Google Cloud API did not become ready');
+          throw last||new Error('Google Cloud API did not become TradingView-ready');
           NODE
 
       - name: Build Cloudflare hosted frontend
@@ -137,6 +137,6 @@ jobs:
           if(edgeType.includes('application/json'))throw new Error('Cloudflare unexpectedly served an application API response');
           const cloud=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
           const h=await cloud.json();
-          if(!cloud.ok||h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore'||h.cloudflareProcessing!==false)throw new Error('Google Cloud processing contract failed');
-          console.log('VERIFIED: Cloudflare serves static website; browser data path targets Google Cloud directly.');
+          if(!cloud.ok||h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore'||h.cloudflareProcessing!==false||h.tradingViewSignals?.schema!=='fxga.smc.signal.v3')throw new Error('Google Cloud processing/TradingView contract failed');
+          console.log('VERIFIED: Cloudflare serves static website; browser data and TradingView signal paths target Google Cloud directly.');
           NODE
