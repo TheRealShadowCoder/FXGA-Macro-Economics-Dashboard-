@@ -47,7 +47,8 @@ jobs:
           npm run build
           node --check google-cloud-app/server.js
           node --check google-cloud-app/tradingview-signals.js
-          node -e "const p=require('./google-cloud-app/package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies.ws) process.exit(1)"
+          node --check google-cloud-app/firestore-usage-monitor.js
+          node -e "const p=require('./google-cloud-app/package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies['@google-cloud/monitoring']||!p.dependencies.ws) process.exit(1)"
 
       - id: config
         name: Resolve Google Cloud authentication
@@ -70,7 +71,12 @@ jobs:
       - name: Configure Google Cloud
         run: |
           gcloud config set project "$GCP_PROJECT_ID"
-          gcloud services enable run.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com
+          gcloud services enable run.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com monitoring.googleapis.com
+          gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role="roles/monitoring.viewer" \
+            --condition=None \
+            --quiet
           gcloud artifacts repositories describe "$GAR_REPOSITORY" --location "$GCP_REGION" >/dev/null 2>&1 || \
             gcloud artifacts repositories create "$GAR_REPOSITORY" --repository-format=docker --location "$GCP_REGION"
 
@@ -103,7 +109,7 @@ jobs:
           echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Google processing, TradingView signal service and passive Cloudflare hosting contract
+      - name: Verify Google processing, signal service, Firestore capacity monitor and passive Cloudflare hosting contract
         run: |
           node <<'NODE'
           const base=process.env.APP_URL;
@@ -116,14 +122,20 @@ jobs:
               if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}: ${text.slice(0,500)}`);
               const health=JSON.parse(text);
               if(health.architecture!=='google-cloud-processing-cloudflare-static-hosting'||health.compute!=='Google Cloud Run'||health.state!=='Google Cloud Firestore'||health.websiteHost!=='Cloudflare Static Assets'||health.cloudflareRole!=='static-host-only'||health.cloudflareProcessing!==false||Number(health.cloudflareUpstreamRequests)!==0)throw new Error('Google processing / passive Cloudflare hosting health contract not active');
-              if(health.tradingViewSignals?.schema!=='fxga.smc.signal.v3'||health.tradingViewSignals?.engine!=='FXGA_SMC2000'||health.tradingViewSignals?.officialIpAllowlist!==true||health.tradingViewSignals?.cloudflareProcessing!==false)throw new Error('TradingView signal health contract not active');
+              if(health.tradingViewSignals?.schema!=='fxga.smc.signal.v3'||health.tradingViewSignals?.engine!=='FXGA_SMC2000'||health.tradingViewSignals?.officialIpAllowlist!==true||health.tradingViewSignals?.cloudflareProcessing!==false||health.tradingViewSignals?.capacityMonitoring!=='Google Cloud Monitoring')throw new Error('Signal / capacity monitoring health contract not active');
               for(const endpoint of ['/api/market-prices','/api/data-quality','/api/tradingview/config','/api/tradingview/signals/live?limit=5','/api/tradingview/signals/metrics']){
                 const r=await fetch(base+endpoint,{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
                 if(!r.ok)throw new Error(`${endpoint} ${r.status}: ${(await r.text()).slice(0,400)}`);
               }
+              const usageResponse=await fetch(base+'/api/tradingview/firestore-usage',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+              const usageText=await usageResponse.text();
+              if(!usageResponse.ok)throw new Error(`Firestore usage ${usageResponse.status}: ${usageText.slice(0,500)}`);
+              const usage=JSON.parse(usageText);
+              if(usage.storage?.limitGiB!==1||usage.reads?.limit!==50000||usage.writes?.limit!==20000||usage.deletes?.limit!==20000)throw new Error('Firestore free-tier quota contract is incorrect');
+              if(usage.monitoringAvailable!==true)throw new Error(`Cloud Monitoring unavailable: ${usage.monitoringError||'unknown'}`);
               const unauthorized=await fetch(base+'/api/tradingview/webhook',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
               if(unauthorized.status!==403)throw new Error(`Unauthorized TradingView webhook was not rejected; got ${unauthorized.status}`);
-              console.log('Google processing + TradingView signal contract verified:',base);
+              console.log('Google processing + signal + Firestore capacity monitoring verified:',base);
               process.exit(0);
             }catch(error){last=error;await sleep(3000);}
           }
@@ -136,6 +148,8 @@ jobs:
           echo "Application API: $APP_URL"
           echo "TradingView webhook: $APP_URL/api/tradingview/webhook"
           echo "TradingView live feed: $APP_URL/api/tradingview/signals/live"
+          echo "Firestore capacity API: $APP_URL/api/tradingview/firestore-usage"
           echo "Processing: Google Cloud Run"
           echo "Persistent state: Google Cloud Firestore"
+          echo "Usage telemetry: Google Cloud Monitoring"
           echo "Cloudflare upstream acquisition/API processing: NONE"
