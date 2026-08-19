@@ -31,6 +31,10 @@ const SECURITY_HEADERS = {
   'Referrer-Policy':'strict-origin-when-cross-origin',
   'Permissions-Policy':'camera=(), microphone=(), geolocation=()',
   'Cross-Origin-Opener-Policy':'same-origin',
+  'Access-Control-Allow-Origin':'*',
+  'Access-Control-Allow-Methods':'GET, OPTIONS',
+  'Access-Control-Allow-Headers':'Accept, Cache-Control, Content-Type',
+  'Access-Control-Max-Age':'86400',
 };
 
 function chunkDocId(name,generation,index){return `${name}__${generation}__${String(index).padStart(4,'0')}`;}
@@ -131,10 +135,11 @@ function macroCoverage(macro,observations){
 }
 
 async function api(req,res,url){
+  if(req.method==='OPTIONS')return send(res,204,'',{'Cache-Control':'public, max-age=86400'});
   if(req.method!=='GET')return apiError(res,405,'Method not allowed');
   if(url.pathname==='/api/health'){
     const [calendar,macro,intelligence,market,technical]=await Promise.all(['calendar','macro','intelligence','market','technical'].map(readStateMeta));
-    return sendJson(res,200,{ok:true,app:'FXGA Macro Intelligence',architecture:'google-cloud-only',compute:'Google Cloud Run',state:'Google Cloud Firestore',cloudflareProcessing:false,timestamp:new Date().toISOString(),updatedAt:{calendar:calendar?.updatedAt??null,macro:macro?.updatedAt??null,intelligence:intelligence?.updatedAt??null,market:market?.updatedAt??null,technical:technical?.updatedAt??null}});
+    return sendJson(res,200,{ok:true,app:'FXGA Macro Intelligence',architecture:'google-cloud-processing-cloudflare-static-hosting',compute:'Google Cloud Run',state:'Google Cloud Firestore',websiteHost:'Cloudflare Static Assets',cloudflareRole:'static-host-only',cloudflareProcessing:false,cloudflareUpstreamRequests:0,timestamp:new Date().toISOString(),updatedAt:{calendar:calendar?.updatedAt??null,macro:macro?.updatedAt??null,intelligence:intelligence?.updatedAt??null,market:market?.updatedAt??null,technical:technical?.updatedAt??null}});
   }
   if(url.pathname==='/api/sources')return sendJson(res,200,{sources:SOURCE_VIEW},'public, max-age=30');
   if(url.pathname==='/api/research'){
@@ -248,4 +253,4 @@ const server=http.createServer(async(req,res)=>{
   try{if(url.pathname.startsWith('/api/'))return await api(req,res,url);return await serveStatic(req,res,url);}catch(error){console.error(error);return apiError(res,500,String(error?.message||error).slice(0,1000));}
 });
 server.on('upgrade',(req,socket,head)=>{const url=new URL(req.url||'/','http://localhost');if(url.pathname!=='/api/live'){socket.destroy();return;}wss.handleUpgrade(req,socket,head,ws=>wss.emit('connection',ws,req));});
-server.listen(PORT,()=>console.log(`FXGA Google Cloud application listening on :${PORT}; all application processing is in Google Cloud`));
+server.listen(PORT,()=>console.log(`FXGA Google Cloud application listening on :${PORT}; Cloudflare hosts static files only and all application processing remains in Google Cloud`));
