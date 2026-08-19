@@ -83,8 +83,7 @@ jobs:
           echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
           echo 'Google Cloud deployment configuration and all market-data credentials are present.'
 
-      - id: auth
-        uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
@@ -154,7 +153,7 @@ jobs:
             --no-allow-unauthenticated \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" \
             --command node \
-            --args src/launcher-v2.js \
+            --args src/launcher-google-cloud.js \
             --cpu 1 \
             --memory 1Gi \
             --concurrency 20 \
@@ -225,4 +224,5 @@ jobs:
           echo "Scheduling: Google Cloud Scheduler + Cloud Tasks"
           echo "Secrets: Google Secret Manager"
           echo "Cloudflare processing: DISABLED"
+          echo "Direct Cloudflare egress: BLOCKED by launcher-google-cloud.js"
           echo "Free-tier market router: persistent Firestore budgets and hard quota reserves enabled"
