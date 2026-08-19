@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 env:
@@ -96,6 +96,36 @@ jobs:
           node -e "const fs=require('fs');const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8')); if(!h.ok||h.source!=='MetaTrader5'||h.schema!=='fxga.smc.signal.v3'||h.cloudflareProcessing!==false) process.exit(1); console.log(h)"
           code=$(curl -sS -o /tmp/reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/webhook")
           test "$code" -eq 403 || { cat /tmp/reject.json; exit 1; }
+
+      - name: Publish resolved MT5 endpoint
+        run: |
+          mkdir -p runtime public
+          printf '%s\n' "$MT5_URL/api/mt5/webhook" > runtime/mt5-cloud-url.txt
+          node - <<'NODE'
+          const fs = require('fs');
+          const base = process.env.MT5_URL;
+          const payload = {
+            service: 'fxga-mt5-signal-ingress',
+            project: process.env.GCP_PROJECT_ID,
+            region: process.env.GCP_REGION,
+            baseUrl: base,
+            webhookUrl: `${base}/api/mt5/webhook`,
+            healthUrl: `${base}/health`,
+            updatedAt: new Date().toISOString(),
+            cloudflareProcessing: false
+          };
+          fs.writeFileSync('runtime/mt5-cloud.json', JSON.stringify(payload, null, 2) + '\n');
+          fs.writeFileSync('public/mt5-cloud.json', JSON.stringify(payload, null, 2) + '\n');
+          NODE
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runtime/mt5-cloud-url.txt runtime/mt5-cloud.json public/mt5-cloud.json
+          if git diff --cached --quiet; then
+            echo "Resolved MT5 endpoint is unchanged."
+          else
+            git commit -m "Record current MT5 Cloud Run endpoint [skip ci]"
+            git push origin HEAD:main
+          fi
 
       - name: Production summary
         run: |
