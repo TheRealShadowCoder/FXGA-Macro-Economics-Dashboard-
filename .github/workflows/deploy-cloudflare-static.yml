@@ -1,0 +1,142 @@
+name: Deploy FXGA Cloudflare Static Website
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'vite.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+      - 'wrangler.jsonc'
+      - '.github/workflows/deploy-cloudflare-static.yml'
+
+concurrency:
+  group: fxga-cloudflare-static-website
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  GCP_APP_SERVICE: fxga-macro-dashboard
+  GCP_DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  CLOUDFLARE_ACCOUNT_ID: 4f260a0775a3df407e08512610c9898b
+  CLOUDFLARE_SITE_URL: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
+
+jobs:
+  deploy-static-site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - id: config
+        name: Resolve Google Cloud authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve Google Cloud API and wait for passive-host contract
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          APP_URL=$(gcloud run services describe "$GCP_APP_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          test -n "$APP_URL" || { echo '::error::Google Cloud application service is missing'; exit 1; }
+          echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
+          echo "VITE_GOOGLE_CLOUD_API_BASE=$APP_URL" >> "$GITHUB_ENV"
+          node <<'NODE'
+          const base=process.env.APP_URL;
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          let last;
+          for(let i=0;i<36;i++){
+            try{
+              const r=await fetch(base+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+              const text=await r.text();
+              if(!r.ok)throw new Error(`${r.status}: ${text.slice(0,400)}`);
+              const h=JSON.parse(text);
+              if(h.architecture==='google-cloud-processing-cloudflare-static-hosting'&&h.cloudflareRole==='static-host-only'&&h.cloudflareProcessing===false){
+                console.log('Google Cloud processing boundary ready:',base);
+                process.exit(0);
+              }
+              last=new Error(`Waiting for current Google/Cloudflare boundary contract; got ${h.architecture||'unknown'}`);
+            }catch(error){last=error;}
+            await sleep(5000);
+          }
+          throw last||new Error('Google Cloud API did not become ready');
+          NODE
+
+      - name: Build Cloudflare hosted frontend
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          grep -R -F "$APP_URL" dist >/dev/null || { echo '::error::Frontend build is not pinned to the Google Cloud API'; exit 1; }
+
+      - name: Enforce static-only Cloudflare configuration
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo '::error::CLOUDFLARE_API_TOKEN is missing'; exit 1; }
+          node <<'NODE'
+          const fs=require('fs');
+          const config=JSON.parse(fs.readFileSync('wrangler.jsonc','utf8'));
+          if(config.main)throw new Error('Cloudflare must not have a Worker script');
+          if(config.assets?.directory!=='./dist')throw new Error('Cloudflare must serve only the compiled static frontend');
+          if(config.assets?.not_found_handling!=='single-page-application')throw new Error('SPA static fallback is required');
+          const forbidden=['durable_objects','kv_namespaces','r2_buckets','d1_databases','services','queues','triggers','browser','ai','vectorize','workflows','vars'];
+          for(const key of forbidden)if(config[key]!==undefined)throw new Error(`Cloudflare static host must not configure ${key}`);
+          if(fs.existsSync('worker'))throw new Error('Cloudflare application Worker source must not exist');
+          console.log('Cloudflare contract verified: static asset hosting only; zero application processing.');
+          NODE
+
+      - name: Deploy static website to Cloudflare
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.123.0'
+          command: deploy
+
+      - name: Verify Cloudflare is serving only the website
+        run: |
+          node <<'NODE'
+          const site=process.env.CLOUDFLARE_SITE_URL,api=process.env.APP_URL;
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          let root;
+          for(let i=0;i<20;i++){
+            try{root=await fetch(site+'/',{headers:{'Cache-Control':'no-cache'}});if(root.ok)break;}catch{}
+            await sleep(2000);
+          }
+          if(!root?.ok)throw new Error('Cloudflare static website did not become ready');
+          const html=await root.text();
+          if(!/<div[^>]+id=["']root["']/i.test(html))throw new Error('Cloudflare root is not the FXGA frontend');
+          const edgeApi=await fetch(site+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+          const edgeType=String(edgeApi.headers.get('content-type')||'').toLowerCase();
+          if(edgeType.includes('application/json'))throw new Error('Cloudflare unexpectedly served an application API response');
+          const cloud=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+          const h=await cloud.json();
+          if(!cloud.ok||h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore'||h.cloudflareProcessing!==false)throw new Error('Google Cloud processing contract failed');
+          console.log('VERIFIED: Cloudflare serves static website; browser data path targets Google Cloud directly.');
+          NODE
