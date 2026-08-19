@@ -5,6 +5,23 @@
   "baseUrl": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app",
   "webhookUrl": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app/api/mt5/webhook",
   "healthUrl": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app/health",
-  "updatedAt": "2026-08-19T23:02:58.561Z",
+  "priceCacheIngestUrl": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app/api/mt5/price-cache",
+  "priceCacheStatusUrl": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app/api/mt5/price-cache/status",
+  "priceQueryUrl": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app/api/mt5/prices",
+  "priceCache": {
+    "source": "MetaTrader5",
+    "symbols": [
+      "EURUSD",
+      "GBPUSD",
+      "USDJPY",
+      "USDZAR"
+    ],
+    "sourceTimeframe": "M1",
+    "envelopeBytes": 200000000,
+    "payloadHardBytes": 190000000,
+    "evictionTargetBytes": 175000000,
+    "policy": "gzip + timestamp dedupe + global FIFO oldest-first"
+  },
+  "updatedAt": "2026-08-19T23:11:21.603Z",
   "cloudflareProcessing": false
 }
