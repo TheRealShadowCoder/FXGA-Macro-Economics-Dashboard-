@@ -73,7 +73,7 @@ jobs:
           gcloud artifacts repositories describe "$GAR_REPOSITORY" --location "$GCP_REGION" >/dev/null 2>&1 || \
             gcloud artifacts repositories create "$GAR_REPOSITORY" --repository-format=docker --location "$GCP_REGION"
 
-      - name: Build and push dashboard container
+      - name: Build and push dashboard API container
         run: |
           IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/$SERVICE:${GITHUB_SHA}"
           gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
@@ -82,7 +82,7 @@ jobs:
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
       - id: deploy
-        name: Deploy public Google Cloud application
+        name: Deploy public Google Cloud API application
         run: |
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
@@ -96,13 +96,13 @@ jobs:
             --min 0 \
             --max 3 \
             --timeout 3600 \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-only"
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting"
           APP_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           test -n "$APP_URL" || { echo '::error::Google Cloud application URL missing'; exit 1; }
           echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Google Cloud only production contract
+      - name: Verify Google processing and passive Cloudflare hosting contract
         run: |
           node <<'NODE'
           const base=process.env.APP_URL;
@@ -114,12 +114,12 @@ jobs:
               const text=await healthResponse.text();
               if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}: ${text.slice(0,500)}`);
               const health=JSON.parse(text);
-              if(health.architecture!=='google-cloud-only'||health.compute!=='Google Cloud Run'||health.state!=='Google Cloud Firestore'||health.cloudflareProcessing!==false)throw new Error('Google Cloud only health contract not active');
+              if(health.architecture!=='google-cloud-processing-cloudflare-static-hosting'||health.compute!=='Google Cloud Run'||health.state!=='Google Cloud Firestore'||health.websiteHost!=='Cloudflare Static Assets'||health.cloudflareRole!=='static-host-only'||health.cloudflareProcessing!==false||Number(health.cloudflareUpstreamRequests)!==0)throw new Error('Google processing / passive Cloudflare hosting health contract not active');
               for(const endpoint of ['/api/market-prices','/api/data-quality']){
                 const r=await fetch(base+endpoint,{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
                 if(!r.ok)throw new Error(`${endpoint} ${r.status}: ${(await r.text()).slice(0,400)}`);
               }
-              console.log('Google Cloud only application verified:',base);
+              console.log('Google processing contract verified:',base);
               process.exit(0);
             }catch(error){last=error;await sleep(3000);}
           }
@@ -128,8 +128,8 @@ jobs:
 
       - name: Production summary
         run: |
-          echo "FXGA application: $APP_URL"
-          echo "Frontend: Google Cloud Run"
-          echo "API: Google Cloud Run"
+          echo "Website host: Cloudflare Static Assets"
+          echo "Application API: $APP_URL"
+          echo "Processing: Google Cloud Run"
           echo "Persistent state: Google Cloud Firestore"
-          echo "Cloudflare Worker processing: NONE"
+          echo "Cloudflare upstream acquisition/API processing: NONE"
