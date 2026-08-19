@@ -36,7 +36,7 @@ jobs:
       - name: Install collector dependencies
         working-directory: cloud-run-collector
         run: npm install --ignore-scripts --no-fund --no-audit
-      - name: Validate collector syntax
+      - name: Validate collector syntax and quota safeguards
         working-directory: cloud-run-collector
         run: npm run check
       - name: Enforce production dependency security
@@ -54,7 +54,6 @@ jobs:
         env:
           WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
           WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
-          WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
@@ -73,7 +72,6 @@ jobs:
             fi
           }
           require_value GCP_WIF_PROVIDER "$WIF_PROVIDER"
-          require_value COLLECTOR_WEBHOOK_SECRET "$WEBHOOK_SECRET"
           require_value FRED_API_KEY "$FRED_API_KEY"
           require_value ALPHA_VANTAGE_API_KEY "$ALPHA_VANTAGE_API_KEY"
           require_value TWELVE_DATA_API_KEY "$TWELVE_DATA_API_KEY"
@@ -82,7 +80,6 @@ jobs:
           require_value FMP_API_KEY "$FMP_API_KEY"
           require_value NASDAQ_DATA_LINK_API_KEY "$NASDAQ_DATA_LINK_API_KEY"
           if [ "$missing" -ne 0 ]; then exit 1; fi
-          echo 'ready=true' >> "$GITHUB_OUTPUT"
           echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
           echo 'Google Cloud deployment configuration and all market-data credentials are present.'
 
@@ -95,7 +92,7 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure project and APIs
+      - name: Configure Google Cloud services
         run: |
           gcloud config set project "$GCP_PROJECT_ID"
           gcloud services enable run.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com cloudtasks.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
@@ -107,9 +104,8 @@ jobs:
           gcloud tasks queues describe "$TASK_QUEUE" --location "$GCP_REGION" >/dev/null 2>&1 || \
             gcloud tasks queues create "$TASK_QUEUE" --location "$GCP_REGION" --max-concurrent-dispatches=2 --max-dispatches-per-second=4
 
-      - name: Ensure collector secrets in Secret Manager
+      - name: Ensure Google Secret Manager provider credentials
         env:
-          COLLECTOR_WEBHOOK_SECRET: ${{ secrets.COLLECTOR_WEBHOOK_SECRET }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
@@ -124,8 +120,6 @@ jobs:
             gcloud secrets describe "$secret_name" >/dev/null 2>&1 || gcloud secrets create "$secret_name" --replication-policy=automatic
             printf '%s' "$secret_value" | gcloud secrets versions add "$secret_name" --data-file=- >/dev/null
           }
-
-          ensure_secret fxga-collector-webhook-secret "$COLLECTOR_WEBHOOK_SECRET"
           ensure_secret fxga-fred-api-key "$FRED_API_KEY"
           ensure_secret fxga-alpha-vantage-api-key "$ALPHA_VANTAGE_API_KEY"
           ensure_secret fxga-twelve-data-api-key "$TWELVE_DATA_API_KEY"
@@ -133,17 +127,16 @@ jobs:
           ensure_secret fxga-marketstack-api-key "$MARKETSTACK_API_KEY"
           ensure_secret fxga-fmp-api-key "$FMP_API_KEY"
           ensure_secret fxga-nasdaq-data-link-api-key "$NASDAQ_DATA_LINK_API_KEY"
+          echo 'COLLECTOR_SECRET_BINDINGS=FRED_API_KEY=fxga-fred-api-key:latest,ALPHA_VANTAGE_API_KEY=fxga-alpha-vantage-api-key:latest,TWELVE_DATA_API_KEY=fxga-twelve-data-api-key:latest,FINNHUB_API_KEY=fxga-finnhub-api-key:latest,MARKETSTACK_API_KEY=fxga-marketstack-api-key:latest,FMP_API_KEY=fxga-fmp-api-key:latest,NASDAQ_DATA_LINK_API_KEY=fxga-nasdaq-data-link-api-key:latest' >> "$GITHUB_ENV"
+          echo 'ALL_SECRET_NAMES=fxga-fred-api-key fxga-alpha-vantage-api-key fxga-twelve-data-api-key fxga-finnhub-api-key fxga-marketstack-api-key fxga-fmp-api-key fxga-nasdaq-data-link-api-key' >> "$GITHUB_ENV"
 
-          echo 'COLLECTOR_SECRET_BINDINGS=COLLECTOR_WEBHOOK_SECRET=fxga-collector-webhook-secret:latest,FRED_API_KEY=fxga-fred-api-key:latest,ALPHA_VANTAGE_API_KEY=fxga-alpha-vantage-api-key:latest,TWELVE_DATA_API_KEY=fxga-twelve-data-api-key:latest,FINNHUB_API_KEY=fxga-finnhub-api-key:latest,MARKETSTACK_API_KEY=fxga-marketstack-api-key:latest,FMP_API_KEY=fxga-fmp-api-key:latest,NASDAQ_DATA_LINK_API_KEY=fxga-nasdaq-data-link-api-key:latest' >> "$GITHUB_ENV"
-          echo 'ALL_SECRET_NAMES=fxga-collector-webhook-secret fxga-fred-api-key fxga-alpha-vantage-api-key fxga-twelve-data-api-key fxga-finnhub-api-key fxga-marketstack-api-key fxga-fmp-api-key fxga-nasdaq-data-link-api-key' >> "$GITHUB_ENV"
-
-      - name: Grant runtime secret access before deploy
+      - name: Grant collector runtime secret access
         run: |
           for SECRET_NAME in $ALL_SECRET_NAMES; do
             gcloud secrets add-iam-policy-binding "$SECRET_NAME" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/secretmanager.secretAccessor >/dev/null
           done
 
-      - name: Build and push container
+      - name: Build and push private collector
         run: |
           IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/$SERVICE:${GITHUB_SHA}"
           gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
@@ -152,7 +145,7 @@ jobs:
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
       - id: service
-        name: Deploy private Cloud Run service
+        name: Deploy private Google Cloud collector
         run: |
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
@@ -160,20 +153,22 @@ jobs:
             --platform managed \
             --no-allow-unauthenticated \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --command node \
+            --args src/launcher-v2.js \
             --cpu 1 \
             --memory 1Gi \
             --concurrency 20 \
             --min 0 \
             --max 2 \
             --timeout 900 \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,CLOUD_TASKS_QUEUE=$TASK_QUEUE,CLOUD_TASKS_INVOKER_SA=$RUNTIME_SERVICE_ACCOUNT,CALENDAR_DAYS=14,MAX_BROWSER_SECONDS=25,GLOBAL_FRED_TARGET=180,CLOUDFLARE_WEBHOOK_URL=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev/api/collector-webhook" \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,CLOUD_TASKS_QUEUE=$TASK_QUEUE,CLOUD_TASKS_INVOKER_SA=$RUNTIME_SERVICE_ACCOUNT,CALENDAR_DAYS=14,MAX_BROWSER_SECONDS=25,GLOBAL_FRED_TARGET=180,FXGA_ARCHITECTURE=google-cloud-only" \
             --set-secrets "$COLLECTOR_SECRET_BINDINGS"
           SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           gcloud run services update "$SERVICE" --region "$GCP_REGION" --update-env-vars "CLOUD_RUN_SERVICE_URL=$SERVICE_URL"
           echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
           echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Configure Cloud Run invocation IAM
+      - name: Configure private invocation IAM
         run: |
           gcloud run services add-iam-policy-binding "$SERVICE" --region "$GCP_REGION" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role=roles/run.invoker >/dev/null
 
@@ -187,12 +182,13 @@ jobs:
           id_token_audience: ${{ steps.service.outputs.url }}
           id_token_include_email: true
 
-      - name: Verify mounted provider credentials in running revision
+      - name: Verify provider credentials and zero Cloudflare runtime bindings
         env:
           TOKEN: ${{ steps.invoke.outputs.id_token }}
         run: |
           code=$(curl --max-time 120 -sS -o /tmp/health.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/health")
           test "$code" -eq 200 || { cat /tmp/health.json; exit 1; }
+          gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format=json > /tmp/service.json
           node <<'NODE'
           const fs=require('fs');
           const health=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
@@ -200,10 +196,14 @@ jobs:
           const providers=health?.freeTierMarketData?.providers||{};
           const missing=required.filter(id=>providers[id]?.configured!==true);
           if(missing.length)throw new Error(`Running Cloud Run revision is missing provider credentials: ${missing.join(', ')}`);
-          console.log('Mounted market-data providers:',required.join(', '));
+          const service=JSON.parse(fs.readFileSync('/tmp/service.json','utf8'));
+          const env=service?.spec?.template?.spec?.containers?.[0]?.env||service?.template?.containers?.[0]?.env||[];
+          const names=env.map(x=>String(x.name||''));
+          for(const forbidden of ['CLOUDFLARE_WEBHOOK_URL','COLLECTOR_WEBHOOK_SECRET'])if(names.includes(forbidden))throw new Error(`Forbidden Cloudflare runtime binding remains: ${forbidden}`);
+          console.log('Google Cloud only collector verified. Providers:',required.join(', '));
           NODE
 
-      - name: Configure three free-tier scheduler jobs
+      - name: Configure Google Cloud Scheduler jobs
         run: |
           upsert_job() {
             NAME="$1"; SCHEDULE="$2"; URI="$3"; BODY="$4"; DEADLINE="$5"
@@ -219,14 +219,10 @@ jobs:
 
       - name: Deployment summary
         run: |
-          echo "Cloud Run collector: $SERVICE_URL"
-          echo "Google project: $GCP_PROJECT_ID"
-          echo "Runtime identity: $RUNTIME_SERVICE_ACCOUNT"
-          echo "Cloud Run request timeout: 900 seconds"
-          echo "Calendar bootstrap: daily at 00:05 UTC"
-          echo "Fast macro/rates/FX/risk sync: hourly"
-          echo "Full cached-universe USA/Europe/UK/South Africa/Japan FRED sync: daily at 00:20 UTC with 900-second Scheduler deadline"
-          echo "Release checks: exact event-time Cloud Tasks with awaited pre-release market baselines"
-          echo "Free-tier market router: persistent Firestore budgets, provider delegation and hard quota reserves enabled"
-          echo "Provider credentials: all six metered market-data secrets required and runtime verified"
-          echo "Bybit and Deribit: public market-data endpoints only; no private trading credentials are mounted"
+          echo "Private collector: $SERVICE_URL"
+          echo "Compute: Google Cloud Run only"
+          echo "State: Google Cloud Firestore"
+          echo "Scheduling: Google Cloud Scheduler + Cloud Tasks"
+          echo "Secrets: Google Secret Manager"
+          echo "Cloudflare processing: DISABLED"
+          echo "Free-tier market router: persistent Firestore budgets and hard quota reserves enabled"
