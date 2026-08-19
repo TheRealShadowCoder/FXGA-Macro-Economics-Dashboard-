@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { genericExplanation, resolveExplanation, type Explanation } from '../lib/explainability';
 import { resolveMacroExplanation } from '../lib/macro-explainability';
 import { resolveDecisionExplanation } from '../lib/decision-explainability';
+import { resolveTradingViewExplanation } from '../lib/tradingview-explainability';
 import './ExplainabilityLayer.css';
 
 type PopoverState = {
@@ -45,7 +46,7 @@ function contextCandidates(target: HTMLElement): ContextCandidate[] {
 function chooseExplanation(target: HTMLElement) {
   const candidates = contextCandidates(target);
   for (const candidate of candidates) {
-    const explanation = resolveExplanation(candidate.key, candidate.text) ?? resolveMacroExplanation(candidate.text) ?? resolveDecisionExplanation(candidate.text);
+    const explanation = resolveExplanation(candidate.key, candidate.text) ?? resolveTradingViewExplanation(candidate.text) ?? resolveMacroExplanation(candidate.text) ?? resolveDecisionExplanation(candidate.text);
     if (explanation) return { explanation, context: candidate.text };
   }
   const fallback = candidates.find((candidate) => /[a-zA-Z]{3}/.test(candidate.text) && candidate.text.length >= 6) ?? candidates[0];
