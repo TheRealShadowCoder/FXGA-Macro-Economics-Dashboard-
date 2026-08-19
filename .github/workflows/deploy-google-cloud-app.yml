@@ -46,7 +46,8 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
           node --check google-cloud-app/server.js
-          node -e "const p=require('./google-cloud-app/package.json'); if(!p.dependencies['@google-cloud/firestore']) process.exit(1)"
+          node --check google-cloud-app/tradingview-signals.js
+          node -e "const p=require('./google-cloud-app/package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies.ws) process.exit(1)"
 
       - id: config
         name: Resolve Google Cloud authentication
@@ -102,7 +103,7 @@ jobs:
           echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Google processing and passive Cloudflare hosting contract
+      - name: Verify Google processing, TradingView signal service and passive Cloudflare hosting contract
         run: |
           node <<'NODE'
           const base=process.env.APP_URL;
@@ -115,11 +116,14 @@ jobs:
               if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}: ${text.slice(0,500)}`);
               const health=JSON.parse(text);
               if(health.architecture!=='google-cloud-processing-cloudflare-static-hosting'||health.compute!=='Google Cloud Run'||health.state!=='Google Cloud Firestore'||health.websiteHost!=='Cloudflare Static Assets'||health.cloudflareRole!=='static-host-only'||health.cloudflareProcessing!==false||Number(health.cloudflareUpstreamRequests)!==0)throw new Error('Google processing / passive Cloudflare hosting health contract not active');
-              for(const endpoint of ['/api/market-prices','/api/data-quality']){
+              if(health.tradingViewSignals?.schema!=='fxga.smc.signal.v3'||health.tradingViewSignals?.engine!=='FXGA_SMC2000'||health.tradingViewSignals?.officialIpAllowlist!==true||health.tradingViewSignals?.cloudflareProcessing!==false)throw new Error('TradingView signal health contract not active');
+              for(const endpoint of ['/api/market-prices','/api/data-quality','/api/tradingview/config','/api/tradingview/signals/live?limit=5','/api/tradingview/signals/metrics']){
                 const r=await fetch(base+endpoint,{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
                 if(!r.ok)throw new Error(`${endpoint} ${r.status}: ${(await r.text()).slice(0,400)}`);
               }
-              console.log('Google processing contract verified:',base);
+              const unauthorized=await fetch(base+'/api/tradingview/webhook',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+              if(unauthorized.status!==403)throw new Error(`Unauthorized TradingView webhook was not rejected; got ${unauthorized.status}`);
+              console.log('Google processing + TradingView signal contract verified:',base);
               process.exit(0);
             }catch(error){last=error;await sleep(3000);}
           }
@@ -130,6 +134,8 @@ jobs:
         run: |
           echo "Website host: Cloudflare Static Assets"
           echo "Application API: $APP_URL"
+          echo "TradingView webhook: $APP_URL/api/tradingview/webhook"
+          echo "TradingView live feed: $APP_URL/api/tradingview/signals/live"
           echo "Processing: Google Cloud Run"
           echo "Persistent state: Google Cloud Firestore"
           echo "Cloudflare upstream acquisition/API processing: NONE"
