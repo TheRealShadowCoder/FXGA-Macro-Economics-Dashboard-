@@ -160,7 +160,7 @@ jobs:
             --min 0 \
             --max 2 \
             --timeout 900 \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,CLOUD_TASKS_QUEUE=$TASK_QUEUE,CLOUD_TASKS_INVOKER_SA=$RUNTIME_SERVICE_ACCOUNT,CALENDAR_DAYS=14,MAX_BROWSER_SECONDS=25,GLOBAL_FRED_TARGET=180,FXGA_ARCHITECTURE=google-cloud-only" \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,CLOUD_TASKS_QUEUE=$TASK_QUEUE,CLOUD_TASKS_INVOKER_SA=$RUNTIME_SERVICE_ACCOUNT,CALENDAR_DAYS=14,MAX_BROWSER_SECONDS=25,GLOBAL_FRED_TARGET=180,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting" \
             --set-secrets "$COLLECTOR_SECRET_BINDINGS"
           SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           gcloud run services update "$SERVICE" --region "$GCP_REGION" --update-env-vars "CLOUD_RUN_SERVICE_URL=$SERVICE_URL"
@@ -199,7 +199,7 @@ jobs:
           const env=service?.spec?.template?.spec?.containers?.[0]?.env||service?.template?.containers?.[0]?.env||[];
           const names=env.map(x=>String(x.name||''));
           for(const forbidden of ['CLOUDFLARE_WEBHOOK_URL','COLLECTOR_WEBHOOK_SECRET'])if(names.includes(forbidden))throw new Error(`Forbidden Cloudflare runtime binding remains: ${forbidden}`);
-          console.log('Google Cloud only collector verified. Providers:',required.join(', '));
+          console.log('Google Cloud collector verified. Providers:',required.join(', '));
           NODE
 
       - name: Configure Google Cloud Scheduler jobs
@@ -213,16 +213,34 @@ jobs:
             fi
           }
           upsert_job fxga-calendar-bootstrap '5 0 * * *' "$SERVICE_URL/bootstrap" '{}' '180s'
+          upsert_job fxga-cross-asset-market-history '*/5 * * * *' "$SERVICE_URL/market-sync" '{}' '240s'
+          upsert_job fxga-technical-history-bootstrap '37 */6 * * *' "$SERVICE_URL/technical-history-bootstrap" '{}' '900s'
           upsert_job fxga-fast-global-macro '0 * * * *' "$SERVICE_URL/macro-sync?mode=fast" '{"mode":"fast"}' '180s'
           upsert_job fxga-full-global-macro '20 0 * * *' "$SERVICE_URL/macro-sync?mode=full" '{"mode":"full"}' '900s'
+
+      - name: Start verified cross asset history bootstrap
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          code=$(curl --max-time 900 -sS -o /tmp/history.json -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data '{}' "$SERVICE_URL/technical-history-bootstrap")
+          test "$code" -eq 200 || { cat /tmp/history.json; exit 1; }
+          node <<'NODE'
+          const fs=require('fs');
+          const result=JSON.parse(fs.readFileSync('/tmp/history.json','utf8'));
+          const before=Number(result?.before?.overallPercent||0),after=Number(result?.after?.overallPercent||0);
+          console.log(`Cross asset technical history: ${before}% -> ${after}%`);
+          if(after<=0)console.warn('Bootstrap returned zero usable history; the 5-minute Google Cloud sampler will continue building verified history forward.');
+          NODE
 
       - name: Deployment summary
         run: |
           echo "Private collector: $SERVICE_URL"
-          echo "Compute: Google Cloud Run only"
-          echo "State: Google Cloud Firestore"
+          echo "Compute and acquisition: Google Cloud Run"
+          echo "State and technical history: Google Cloud Firestore"
+          echo "Market history sampling: every 5 minutes in Google Cloud"
+          echo "Verified OHLC bootstrap: Twelve Data through the quota governor, refreshed at most once per day per symbol/timeframe"
           echo "Scheduling: Google Cloud Scheduler + Cloud Tasks"
           echo "Secrets: Google Secret Manager"
-          echo "Cloudflare processing: DISABLED"
-          echo "Direct Cloudflare egress: BLOCKED by launcher-google-cloud.js"
+          echo "Cloudflare: static website host only; zero collector processing"
           echo "Free-tier market router: persistent Firestore budgets and hard quota reserves enabled"
