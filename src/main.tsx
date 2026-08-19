@@ -4,6 +4,7 @@ import './google-cloud-routing';
 import App from './App';
 import { ExplainabilityLayer } from './components/ExplainabilityLayer';
 import { QualityFrameworkDock } from './components/QualityFrameworkDock';
+import { FirestoreCapacityDock } from './components/FirestoreCapacityDock';
 import './google-live-refresh';
 import './public-finish';
 import './styles.css';
@@ -18,6 +19,7 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
     <QualityFrameworkDock />
+    <FirestoreCapacityDock />
     <ExplainabilityLayer />
   </StrictMode>,
 );
