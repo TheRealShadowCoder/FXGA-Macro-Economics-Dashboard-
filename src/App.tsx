@@ -5,6 +5,7 @@ import { MarketsView } from './components/MarketsView';
 import { ResearchView } from './components/ResearchView';
 import { MetricCard } from './components/MetricCard';
 import { SignalsView } from './components/SignalsView';
+import { TradingViewSignalIntelligence } from './components/TradingViewSignalIntelligence';
 import { EventStudyPanel } from './components/EventStudyPanel';
 import { SourceNetworkView } from './components/SourceNetworkView';
 import { fetchAcquisitionCatalog, fetchDashboard, fetchFredCatalog, fetchFredCategory, fetchMacroAnalysis, fetchSessionSignals } from './lib/api';
@@ -20,7 +21,7 @@ import type {
   SessionSignalsPayload,
 } from './lib/types';
 
-type View = 'overview' | 'markets' | 'analysis' | 'research' | 'signals' | 'calendar' | 'indicators' | 'universe' | 'acquisition' | 'news' | 'sources';
+type View = 'overview' | 'markets' | 'analysis' | 'research' | 'signals' | 'tradingview' | 'calendar' | 'indicators' | 'universe' | 'acquisition' | 'news' | 'sources';
 type LiveStatus = 'connecting' | 'connected' | 'offline';
 
 const NAV: Array<{ id: View; label: string }> = [
@@ -29,6 +30,7 @@ const NAV: Array<{ id: View; label: string }> = [
   { id: 'analysis', label: 'Macro Analysis' },
   { id: 'research', label: 'Research & Risk' },
   { id: 'signals', label: 'Currency Outlook' },
+  { id: 'tradingview', label: 'TradingView Signals' },
   { id: 'calendar', label: 'Economic Calendar' },
   { id: 'indicators', label: 'Core Indicators' },
   { id: 'universe', label: 'Macro Data Library' },
@@ -320,6 +322,7 @@ export default function App() {
         {view === 'analysis' && <AnalysisView data={analysis} loading={analysisLoading} error={analysisError} />}
         {view === 'research' && <ResearchView />}
         {view === 'signals' && <SignalsView data={signals} loading={signalsLoading} error={signalsError} />}
+        {view === 'tradingview' && <TradingViewSignalIntelligence />}
 
         {data && view === 'calendar' && (
           <>
