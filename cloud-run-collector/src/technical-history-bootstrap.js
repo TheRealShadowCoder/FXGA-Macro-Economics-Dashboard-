@@ -23,6 +23,7 @@ const HISTORY_SYMBOLS=Object.freeze([
   {id:'EURGBP',symbol:'EUR/GBP',label:'EUR / GBP'},
   {id:'XAUUSD',symbol:'XAU/USD',label:'Gold / U.S. Dollar'},
 ]);
+const HISTORY_ASSET_IDS=HISTORY_SYMBOLS.map(item=>item.id);
 
 const finite=value=>{const n=typeof value==='number'?value:Number(String(value??'').replace(/,/g,'').trim());return Number.isFinite(n)?n:null;};
 const stableHash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -63,7 +64,7 @@ function mergeBars(existing,incoming,cap){
   for(const bar of Array.isArray(existing)?existing:[])if(bar?.start)rows.set(bar.start,{...bar});
   for(const bar of Array.isArray(incoming)?incoming:[])if(bar?.start){
     const previous=rows.get(bar.start);
-    // Verified provider OHLC is authoritative for the same bucket; never replace it with sampled-close data.
+    // Verified provider OHLC is authoritative for the same bucket; sampled-close data cannot overwrite it.
     if(!previous||bar.providerOhlc||!previous.providerOhlc)rows.set(bar.start,{...previous,...bar});
   }
   return [...rows.values()].sort((a,b)=>Date.parse(a.start)-Date.parse(b.start)).slice(-cap);
@@ -74,18 +75,9 @@ async function loadStates(){
   return Object.fromEntries(entries.map(([id,value])=>[id,value&&typeof value==='object'?value:{id,label:HISTORY_SYMBOLS.find(x=>x.id===id)?.label||id,symbol:id,synthetic:false,legs:null,updatedAt:null,lastPrice:null,bars:{}}]));
 }
 
-async function persistStates(states,generatedAt,reason){
-  const batchWrite=db.batch();
-  for(const id of TECHNICAL_ASSET_IDS)batchWrite.set(marketBars.doc(id),states[id],{merge:false});
-  await batchWrite.commit();
-  const technical={...buildTechnicalSnapshot(states,generatedAt),historyBuild:historyProgress(states),historySource:reason};
-  await state.doc('technical').set({hash:stableHash(technical),updatedAt:generatedAt,payload:technical},{merge:false});
-  return technical;
-}
-
 function historyProgress(states){
   const perAsset={};let earned=0,total=0;
-  for(const id of TECHNICAL_ASSET_IDS){
+  for(const id of HISTORY_ASSET_IDS){
     const frames={};
     for(const [timeframe,required] of Object.entries(REQUIRED)){
       const bars=Array.isArray(states?.[id]?.bars?.[timeframe])?states[id].bars[timeframe].length:0;
@@ -94,7 +86,16 @@ function historyProgress(states){
     }
     perAsset[id]=frames;
   }
-  return {overallPercent:total?Math.round((earned/total)*100):0,perAsset,measuredBars:earned,requiredBars:total,updatedAt:new Date().toISOString()};
+  return {overallPercent:total?Math.round((earned/total)*100):0,perAsset,measuredBars:earned,requiredBars:total,trackedAssets:HISTORY_ASSET_IDS.length,updatedAt:new Date().toISOString()};
+}
+
+async function persistStates(states,generatedAt,reason){
+  const batchWrite=db.batch();
+  for(const id of TECHNICAL_ASSET_IDS)batchWrite.set(marketBars.doc(id),states[id],{merge:false});
+  await batchWrite.commit();
+  const technical={...buildTechnicalSnapshot(states,generatedAt),historyBuild:historyProgress(states),historySource:reason};
+  await state.doc('technical').set({hash:stableHash(technical),updatedAt:generatedAt,payload:technical},{merge:false});
+  return technical;
 }
 
 async function waitForMinuteBudget(){
@@ -108,7 +109,7 @@ async function fetchTwelveSeries(item,interval,outputsize){
   const url=new URL('https://api.twelvedata.com/time_series');
   url.searchParams.set('symbol',item.symbol);url.searchParams.set('interval',interval);url.searchParams.set('outputsize',String(outputsize));url.searchParams.set('timezone','UTC');url.searchParams.set('order','ASC');url.searchParams.set('apikey',key);
   const options={cost:1,taskKey:`technical-history:${interval}:${item.id}`,ttlMs:24*HOUR,timeoutMs:15_000,maxResponseBytes:1_500_000};
-  for(let attempt=0;attempt<3;attempt++){
+  for(let attempt=0;attempt<4;attempt++){
     const result=await budgetedJson('twelve_data',url,options);
     if(result?.reason==='minute-budget-exhausted'){await waitForMinuteBudget();continue;}
     return result;
@@ -129,34 +130,42 @@ async function fetchInterval(interval,outputsize){
 export async function bootstrapVerifiedTechnicalHistory(){
   const before=await loadStates();
   const beforeProgress=historyProgress(before);
-  // Skip expensive historical calls once every core timeframe has already matured.
   if(beforeProgress.overallPercent>=95)return {changed:false,reason:'history-already-mature',before:beforeProgress,after:beforeProgress};
 
-  const hourly=await fetchInterval('1h',900);
-  const fiveMinute=await fetchInterval('5min',800);
+  // Each source timeframe is genuine provider OHLC. Lower bars are aggregated rather than invented.
+  // 1m -> M5, 5m -> M15/H1, 1h -> H4, 1day -> D1.
+  const oneMinute=await fetchInterval('1min',400);
+  const fiveMinute=await fetchInterval('5min',500);
+  const hourly=await fetchInterval('1h',150);
+  const daily=await fetchInterval('1day',35);
   const states=await loadStates();
   const diagnostics={};
 
   for(const item of HISTORY_SYMBOLS){
-    const h1=directBars(hourly[item.id]?.values,HOUR,'twelve-data-verified-1h-ohlc');
-    const m5=directBars(fiveMinute[item.id]?.values,5*MINUTE,'twelve-data-verified-5m-ohlc');
+    const m1=directBars(oneMinute[item.id]?.values,MINUTE,'twelve-data-verified-1m-ohlc');
+    const m5Source=directBars(fiveMinute[item.id]?.values,5*MINUTE,'twelve-data-verified-5m-ohlc');
+    const h1Source=directBars(hourly[item.id]?.values,HOUR,'twelve-data-verified-1h-ohlc');
+    const d1=directBars(daily[item.id]?.values,DAY,'twelve-data-verified-1d-ohlc');
     const incoming={
-      M5:m5,
-      M15:aggregateBars(m5,15*MINUTE,'twelve-data-verified-5m-to-15m-ohlc'),
-      H1:h1,
-      H4:aggregateBars(h1,4*HOUR,'twelve-data-verified-1h-to-4h-ohlc'),
-      D1:aggregateBars(h1,DAY,'twelve-data-verified-1h-to-1d-ohlc'),
+      M5:aggregateBars(m1,5*MINUTE,'twelve-data-verified-1m-to-5m-ohlc'),
+      M15:aggregateBars(m5Source,15*MINUTE,'twelve-data-verified-5m-to-15m-ohlc'),
+      H1:aggregateBars(m5Source,HOUR,'twelve-data-verified-5m-to-1h-ohlc'),
+      H4:aggregateBars(h1Source,4*HOUR,'twelve-data-verified-1h-to-4h-ohlc'),
+      D1:d1,
     };
     const previous=states[item.id]||{id:item.id,bars:{}};
     const bars={...(previous.bars||{})};
     for(const timeframe of Object.keys(REQUIRED))bars[timeframe]=mergeBars(bars[timeframe],incoming[timeframe],BAR_CAPS[timeframe]);
-    const latest=[...h1,...m5].sort((a,b)=>Date.parse(a.start)-Date.parse(b.start)).at(-1);
+    const latest=[...m1,...m5Source,...h1Source,...d1].sort((a,b)=>Date.parse(a.start)-Date.parse(b.start)).at(-1);
     states[item.id]={...previous,id:item.id,label:item.label,symbol:item.id,synthetic:false,updatedAt:new Date().toISOString(),lastPrice:latest?.close??previous.lastPrice??null,bars};
-    diagnostics[item.id]={hourly:hourly[item.id]?.response,fiveMinute:fiveMinute[item.id]?.response,imported:{M5:m5.length,M15:incoming.M15.length,H1:h1.length,H4:incoming.H4.length,D1:incoming.D1.length}};
+    diagnostics[item.id]={
+      oneMinute:oneMinute[item.id]?.response,fiveMinute:fiveMinute[item.id]?.response,hourly:hourly[item.id]?.response,daily:daily[item.id]?.response,
+      imported:{M5:incoming.M5.length,M15:incoming.M15.length,H1:incoming.H1.length,H4:incoming.H4.length,D1:incoming.D1.length},
+    };
   }
 
   const generatedAt=new Date().toISOString();
-  const technical=await persistStates(states,generatedAt,'verified Twelve Data historical OHLC + ongoing Google Cloud market sampling');
+  const technical=await persistStates(states,generatedAt,'verified Twelve Data OHLC bootstrap + ongoing Google Cloud authoritative market sampling');
   const after=technical.historyBuild;
   return {changed:after.overallPercent!==beforeProgress.overallPercent,before:beforeProgress,after,diagnostics,generatedAt};
 }
