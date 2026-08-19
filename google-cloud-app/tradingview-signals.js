@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { FieldValue } from '@google-cloud/firestore';
+import { createFirestoreUsageMonitor } from './firestore-usage-monitor.js';
 
 const SCHEMA='fxga.smc.signal.v3';
 const ENGINE='FXGA_SMC2000';
@@ -149,6 +150,18 @@ export function createTradingViewSignalService({db,broadcast=()=>{}}){
   const live=db.collection('fxga_tradingview_live');
   const metricsRef=live.doc('metrics');
   const metaRef=live.doc('meta');
+  const usageMonitor=createFirestoreUsageMonitor({metricsRef});
+  let metaCache={at:0,data:null,promise:null};
+  let rowsCache={version:null,rows:[]};
+  let metricsCache={version:null,value:null};
+
+  async function cachedMeta(force=false){
+    if(!force&&metaCache.data&&Date.now()-metaCache.at<10_000)return metaCache.data;
+    if(metaCache.promise)return metaCache.promise;
+    metaCache.promise=metaRef.get().then(snap=>snap.exists?snap.data():{}).catch(()=>({})).then(data=>{metaCache={at:Date.now(),data,promise:null};return data;});
+    return metaCache.promise;
+  }
+  function invalidateReadCaches(){metaCache={at:0,data:null,promise:null};rowsCache={version:null,rows:[]};metricsCache={version:null,value:null};}
 
   async function ingest(req,res,sendJson,apiError){
     const auth=authorized(req);
@@ -168,14 +181,20 @@ export function createTradingViewSignalService({db,broadcast=()=>{}}){
       tx.set(metricsRef,{...eventIncrement(String(payload.event),String(payload.side)),updatedAt:receivedAt,lastSignalId:id},{merge:true});
       tx.set(metaRef,{updatedAt:receivedAt,lastSignalId:id,lastEvent:String(payload.event),lastEventId:String(payload.event_id),symbol:signal.symbol,side:signal.side,status:signal.status,intelligenceScore:signal.intelligence.score},{merge:true});
     });
+    if(!duplicate){invalidateReadCaches();}
     if(!duplicate&&signal){broadcast({type:'tradingview-signal',updateType:'tradingview-signal',timestamp:receivedAt,event:signal.lastEvent,signal:publicSignal(signal)});}
     return sendJson(res,200,{ok:true,duplicate,setupId:id,eventId:String(payload.event_id),event:String(payload.event),status:signal?.status??null,intelligence:signal?.intelligence??null,receivedAt});
   }
 
+  async function allSignalsCached(){
+    const meta=await cachedMeta(),version=String(meta?.updatedAt||'none');
+    if(rowsCache.version===version&&rowsCache.rows.length)return rowsCache.rows;
+    const snap=await signals.orderBy('updatedAt','desc').limit(MAX_PUBLIC_SIGNALS).get();
+    const rows=snap.docs.map(doc=>publicSignal({id:doc.id,...doc.data()}));rowsCache={version,rows};return rows;
+  }
   async function listSignals(url,liveOnly=false){
     const limit=Math.min(MAX_PUBLIC_SIGNALS,Math.max(1,Number(url.searchParams.get('limit')||80)));
-    const snap=await signals.orderBy('updatedAt','desc').limit(Math.max(limit,liveOnly?120:limit)).get();
-    let rows=snap.docs.map(doc=>publicSignal({id:doc.id,...doc.data()}));
+    let rows=[...(await allSignalsCached())];
     if(liveOnly)rows=rows.filter(row=>ACTIVE_STATUSES.has(String(row.status)));
     const symbol=String(url.searchParams.get('symbol')||'').toUpperCase(),timeframe=String(url.searchParams.get('timeframe')||'').toUpperCase(),side=String(url.searchParams.get('side')||'').toUpperCase(),status=String(url.searchParams.get('status')||'').toUpperCase();
     if(symbol)rows=rows.filter(row=>String(row.symbol).toUpperCase()===symbol);
@@ -183,6 +202,14 @@ export function createTradingViewSignalService({db,broadcast=()=>{}}){
     if(side)rows=rows.filter(row=>String(row.side).toUpperCase()===side);
     if(status)rows=rows.filter(row=>String(row.status).toUpperCase()===status);
     return rows.slice(0,limit);
+  }
+  async function signalMetrics(){
+    const meta=await cachedMeta(),version=String(meta?.updatedAt||'none');
+    if(metricsCache.version===version&&metricsCache.value)return metricsCache.value;
+    const metrics=await metricsRef.get(),m=metrics.exists?metrics.data():{};
+    const total=Number(m.totalSignals||0),completed=Number(m.completed||0),tp1=Number(m.tp1Hits||0),tp2=Number(m.tp2Hits||0),tp3=Number(m.tp3Hits||0);
+    const value={...m,totalSignals:total,completionRate:total?Number((completed/total*100).toFixed(1)):0,tp1Rate:total?Number((tp1/total*100).toFixed(1)):0,tp2Rate:total?Number((tp2/total*100).toFixed(1)):0,tp3Rate:total?Number((tp3/total*100).toFixed(1)):0,latest:meta||null};
+    metricsCache={version,value};return value;
   }
 
   async function handle(req,res,url,sendJson,apiError){
@@ -193,7 +220,10 @@ export function createTradingViewSignalService({db,broadcast=()=>{}}){
     if(!url.pathname.startsWith('/api/tradingview/'))return false;
     if(req.method!=='GET')return apiError(res,405,'Method not allowed'),true;
     if(url.pathname==='/api/tradingview/config'){
-      sendJson(res,200,{schema:SCHEMA,engine:ENGINE,stream:'fxga_smc2000',transport:'TradingView HTTPS POST → Google Cloud Run → Firestore → WebSocket',authorization:'TradingView official webhook IP allowlist with optional manual secret header',allowedLifecycleEvents:[...ALLOWED_EVENTS],cloudflareProcessing:false},'public, max-age=30');return true;
+      sendJson(res,200,{schema:SCHEMA,engine:ENGINE,stream:'fxga_smc2000',transport:'TradingView HTTPS POST → Google Cloud Run → Firestore → WebSocket',authorization:'TradingView official webhook IP allowlist with optional manual secret header',allowedLifecycleEvents:[...ALLOWED_EVENTS],cloudflareProcessing:false,capacityMonitoring:'Google Cloud Monitoring'},'public, max-age=30');return true;
+    }
+    if(url.pathname==='/api/tradingview/firestore-usage'){
+      sendJson(res,200,await usageMonitor.snapshot(),'no-store');return true;
     }
     if(url.pathname==='/api/tradingview/signals/live'){
       const rows=await listSignals(url,true);sendJson(res,200,{generatedAt:new Date().toISOString(),count:rows.length,signals:rows},'no-store');return true;
@@ -202,15 +232,13 @@ export function createTradingViewSignalService({db,broadcast=()=>{}}){
       const rows=await listSignals(url,false);sendJson(res,200,{generatedAt:new Date().toISOString(),count:rows.length,signals:rows},'no-store');return true;
     }
     if(url.pathname==='/api/tradingview/signals/metrics'){
-      const [metrics,meta]=await Promise.all([metricsRef.get(),metaRef.get()]);const m=metrics.exists?metrics.data():{};
-      const total=Number(m.totalSignals||0),completed=Number(m.completed||0),tp1=Number(m.tp1Hits||0),tp2=Number(m.tp2Hits||0),tp3=Number(m.tp3Hits||0);
-      sendJson(res,200,{...m,totalSignals:total,completionRate:total?Number((completed/total*100).toFixed(1)):0,tp1Rate:total?Number((tp1/total*100).toFixed(1)):0,tp2Rate:total?Number((tp2/total*100).toFixed(1)):0,tp3Rate:total?Number((tp3/total*100).toFixed(1)):0,latest:meta.exists?meta.data():null},'no-store');return true;
+      sendJson(res,200,await signalMetrics(),'no-store');return true;
     }
     const match=url.pathname.match(/^\/api\/tradingview\/signals\/([a-f0-9]{40})$/);
     if(match){const [signalSnap,eventSnap]=await Promise.all([signals.doc(match[1]).get(),signalEvents.where('setupId','==',match[1]).limit(80).get()]);if(!signalSnap.exists)return apiError(res,404,'Signal not found'),true;const events=eventSnap.docs.map(doc=>{const data=doc.data();return {id:doc.id,eventId:data.eventId,event:data.event,receivedAt:data.receivedAt,payload:data.payload};}).sort((a,b)=>Date.parse(a.receivedAt)-Date.parse(b.receivedAt));sendJson(res,200,{signal:publicSignal({id:signalSnap.id,...signalSnap.data()}),events},'no-store');return true;}
     return apiError(res,404,'TradingView signal route not found'),true;
   }
 
-  function health(){return {schema:SCHEMA,engine:ENGINE,stream:'fxga_smc2000',officialIpAllowlist:true,optionalManualSecretConfigured:Boolean(process.env.TRADINGVIEW_WEBHOOK_SECRET),storage:'Google Cloud Firestore',realtime:'Google Cloud Run WebSocket',cloudflareProcessing:false};}
+  function health(){return {schema:SCHEMA,engine:ENGINE,stream:'fxga_smc2000',officialIpAllowlist:true,optionalManualSecretConfigured:Boolean(process.env.TRADINGVIEW_WEBHOOK_SECRET),storage:'Google Cloud Firestore',capacityMonitoring:'Google Cloud Monitoring',readGovernor:'version-aware shared signal cache',realtime:'Google Cloud Run WebSocket',cloudflareProcessing:false};}
   return {handle,health};
 }
