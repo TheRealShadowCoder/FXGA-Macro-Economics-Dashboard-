@@ -41,7 +41,7 @@ if(url.pathname==='/api/fred/catalog'){
   const counts=new Map();
   for(const row of observations)for(const raw of row.categories||[]){const id=String(raw||'').trim().toLowerCase();if(id)counts.set(id,(counts.get(id)||0)+1);}
   const title=id=>id.replaceAll('_',' ').replaceAll('-',' ').replace(/\\b\\w/g,m=>m.toUpperCase());
-  const categories=[...counts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([id,count])=>({id,label:title(id),description:`Decision-relevant ${title(id).toLowerCase()} indicators from the persisted macro dataset.`,count}));
+  const categories=[...counts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([id,count])=>({id,label:title(id),description:'Decision-relevant '+title(id).toLowerCase()+' indicators from the persisted macro dataset.',count}));
   const series=observations.map(x=>({id:x.seriesId,title:x.title,units:x.units,frequency:x.frequency,categories:x.categories}));
   return sendJson(res,200,{total:series.length,maxSeriesPerRequest:16,categories,series,policy:{importantOnly:true,scope:'persisted primary-source macro data'}},'public, max-age=30');
 }
