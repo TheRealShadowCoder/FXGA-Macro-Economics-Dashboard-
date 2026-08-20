@@ -116,7 +116,7 @@ export function fetchTechnicalHistory(asset: string, timeframe: string): Promise
   return getJson(`/api/technical-history?${params.toString()}`);
 }
 
-export function fetchEventStudies(days = 7, currency = ''): Promise<EventStudiesPayload> {
+export function fetchEventStudies(days = 60, currency = ''): Promise<EventStudiesPayload> {
   const params = new URLSearchParams({ days: String(days) });
   if (currency) params.set('currency', currency);
   return getJson<EventStudiesPayload>(`/api/event-studies?${params.toString()}`);
