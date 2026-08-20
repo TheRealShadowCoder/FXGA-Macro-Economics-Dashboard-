@@ -1,1 +1,284 @@
-{"schema":"fxga.production.audit.v1","passed":false,"generatedAt":"unknown","summary":{"passed":0,"failed":1,"total":1},"checks":[{"name":"audit-runner","passed":false,"error":"report was not generated"}]}
+{
+  "schema": "fxga.production.audit.v2",
+  "passed": false,
+  "generatedAt": "2026-08-20T23:13:49.553Z",
+  "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
+  "release": "cross-asset-mt5-20k-smc-fusion",
+  "releaseCommit": "8793f57c3829c36582eba0da7eb213a21a8b8333",
+  "backend": null,
+  "mt5": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app",
+  "summary": {
+    "passed": 9,
+    "failed": 25,
+    "total": 34
+  },
+  "checks": [
+    {
+      "name": "cloudflare-root",
+      "passed": true,
+      "durationMs": 116,
+      "detail": "React shell present"
+    },
+    {
+      "name": "release-marker",
+      "passed": false,
+      "durationMs": 53,
+      "error": "Unexpected release cross-asset-mt5-20k-smc-fusion"
+    },
+    {
+      "name": "frontend-current-bundle",
+      "passed": true,
+      "durationMs": 98,
+      "detail": "1 script bundle(s)"
+    },
+    {
+      "name": "cloudflare-static-only",
+      "passed": true,
+      "durationMs": 18,
+      "detail": "static only"
+    },
+    {
+      "name": "google-health",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "dashboard",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "analysis",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "economy-analysis",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "release-impact",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "research",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "session-signals",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "market-prices",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "technical",
+      "passed": false,
+      "durationMs": 1,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "calendar",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "calendar-history",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "event-studies",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "event-patterns",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "data-quality",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "global-macro",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "fred-catalog",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "acquisition-catalog",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "super-economist",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "news",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "sources",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "tradingview-live",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "tradingview-history",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "tradingview-metrics",
+      "passed": false,
+      "durationMs": 0,
+      "error": "Backend unresolved"
+    },
+    {
+      "name": "mt5-config",
+      "passed": false,
+      "durationMs": 161,
+      "error": "MT5 retention is not 60 days"
+    },
+    {
+      "name": "mt5-health",
+      "passed": true,
+      "durationMs": 79,
+      "detail": {
+        "endpoint": "/api/mt5/price-cache",
+        "query": "/api/mt5/prices",
+        "rangeQuery": "from/to epoch milliseconds on /api/mt5/prices",
+        "status": "/api/mt5/price-cache/status",
+        "syncPlan": "/api/mt5/price-cache/plan?symbol=EURUSD",
+        "schema": "fxga.mt5.price-cache.v2",
+        "baseTimeframe": "M1",
+        "retentionDays": 60,
+        "derivedTimeframes": [
+          "M1",
+          "M5",
+          "M15",
+          "M30",
+          "H1",
+          "H4",
+          "D1"
+        ],
+        "allowedSymbols": [
+          "DXY",
+          "EURUSD",
+          "GBPUSD",
+          "USDJPY",
+          "USDZAR",
+          "US2Y",
+          "US10Y",
+          "SPX",
+          "NASDAQ",
+          "DJI",
+          "VIX",
+          "GOLD",
+          "WTI",
+          "BRENT",
+          "BTCUSD",
+          "ETHUSD"
+        ],
+        "initialBarsPerAsset": 86400,
+        "incrementalBarsPerSync": 160,
+        "syncSeconds": 300,
+        "bootstrapPolicy": "one-time 60-day bootstrap, then incremental overlap only; one-day sequential catch-up after outages",
+        "fifoPolicy": "whole UTC-day chunks retire only after fully outside the 60-day window",
+        "cacheEnvelopeBytes": 200000000,
+        "payloadHardBytes": 190000000,
+        "evictTargetBytes": 175000000
+      }
+    },
+    {
+      "name": "mt5-status",
+      "passed": true,
+      "durationMs": 125,
+      "detail": {
+        "bars": 34822,
+        "chunks": 48,
+        "health": "EXCELLENT"
+      }
+    },
+    {
+      "name": "mt5-current-query",
+      "passed": true,
+      "durationMs": 127,
+      "detail": {
+        "count": 10,
+        "newestMs": 1787267400000
+      }
+    },
+    {
+      "name": "mt5-range-query",
+      "passed": true,
+      "durationMs": 91,
+      "detail": {
+        "count": 761,
+        "oldestMs": 1787181240000,
+        "newestMs": 1787267400000
+      }
+    },
+    {
+      "name": "mt5-future-reversed-normalization",
+      "passed": true,
+      "durationMs": 79,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "mt5-smc",
+      "passed": true,
+      "durationMs": 3333,
+      "detail": {
+        "assets": 16,
+        "confirmed": 0,
+        "contextAligned": 0,
+        "conflict": 0,
+        "warming": 16
+      }
+    }
+  ]
+}
