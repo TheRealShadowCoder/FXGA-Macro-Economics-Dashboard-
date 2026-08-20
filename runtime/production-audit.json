@@ -1,7 +1,7 @@
 {
   "schema": "fxga.production.audit.v2",
   "passed": false,
-  "generatedAt": "2026-08-20T23:13:49.553Z",
+  "generatedAt": "2026-08-20T23:18:34.623Z",
   "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
   "release": "cross-asset-mt5-20k-smc-fusion",
   "releaseCommit": "8793f57c3829c36582eba0da7eb213a21a8b8333",
@@ -16,25 +16,25 @@
     {
       "name": "cloudflare-root",
       "passed": true,
-      "durationMs": 116,
+      "durationMs": 155,
       "detail": "React shell present"
     },
     {
       "name": "release-marker",
       "passed": false,
-      "durationMs": 53,
+      "durationMs": 18,
       "error": "Unexpected release cross-asset-mt5-20k-smc-fusion"
     },
     {
       "name": "frontend-current-bundle",
       "passed": true,
-      "durationMs": 98,
+      "durationMs": 50,
       "detail": "1 script bundle(s)"
     },
     {
       "name": "cloudflare-static-only",
       "passed": true,
-      "durationMs": 18,
+      "durationMs": 19,
       "detail": "static only"
     },
     {
@@ -88,7 +88,7 @@
     {
       "name": "technical",
       "passed": false,
-      "durationMs": 1,
+      "durationMs": 0,
       "error": "Backend unresolved"
     },
     {
@@ -178,13 +178,13 @@
     {
       "name": "mt5-config",
       "passed": false,
-      "durationMs": 161,
+      "durationMs": 19,
       "error": "MT5 retention is not 60 days"
     },
     {
       "name": "mt5-health",
       "passed": true,
-      "durationMs": 79,
+      "durationMs": 60,
       "detail": {
         "endpoint": "/api/mt5/price-cache",
         "query": "/api/mt5/prices",
@@ -234,9 +234,9 @@
     {
       "name": "mt5-status",
       "passed": true,
-      "durationMs": 125,
+      "durationMs": 102,
       "detail": {
-        "bars": 34822,
+        "bars": 34905,
         "chunks": 48,
         "health": "EXCELLENT"
       }
@@ -244,26 +244,26 @@
     {
       "name": "mt5-current-query",
       "passed": true,
-      "durationMs": 127,
+      "durationMs": 130,
       "detail": {
         "count": 10,
-        "newestMs": 1787267400000
+        "newestMs": 1787267760000
       }
     },
     {
       "name": "mt5-range-query",
       "passed": true,
-      "durationMs": 91,
+      "durationMs": 154,
       "detail": {
-        "count": 761,
-        "oldestMs": 1787181240000,
-        "newestMs": 1787267400000
+        "count": 762,
+        "oldestMs": 1787181540000,
+        "newestMs": 1787267760000
       }
     },
     {
       "name": "mt5-future-reversed-normalization",
       "passed": true,
-      "durationMs": 79,
+      "durationMs": 90,
       "detail": {
         "count": 0
       }
@@ -271,7 +271,7 @@
     {
       "name": "mt5-smc",
       "passed": true,
-      "durationMs": 3333,
+      "durationMs": 3206,
       "detail": {
         "assets": 16,
         "confirmed": 0,
