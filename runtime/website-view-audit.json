@@ -1,0 +1,26 @@
+{
+  "schema": "fxga.production.website-view-audit.v1",
+  "passed": true,
+  "verifiedCommit": "a587cbcc7e095d6789eb283d03d489605db996d0",
+  "auditRunId": 32428169964,
+  "auditUrl": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32428169964",
+  "verifiedAt": "2026-08-20T23:20:00.080Z",
+  "scope": [
+    "Cloudflare static shell and current release",
+    "all 12 sidebar navigation labels",
+    "Macro Dashboard",
+    "Cross Asset Prices",
+    "Macro Analysis",
+    "Research & Risk",
+    "Currency Outlook",
+    "Live Signal Intelligence",
+    "Economic Calendar",
+    "economic event studies and pattern profiles",
+    "Core Indicators",
+    "Macro Data Library",
+    "Data Operations and data quality",
+    "Central Bank News",
+    "Data Coverage",
+    "60-day MT5 runtime configuration"
+  ]
+}
