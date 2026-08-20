@@ -5,6 +5,7 @@ import './MT5ExtractedDataView.css';
 
 const TIMEFRAMES=['M1','M5','M15','M30','H1','H4','D1'] as const;
 const MB=1_000_000;
+const RETENTION_DAYS=60;
 const fmt=(value?:number|null,digits=5)=>value==null||!Number.isFinite(value)?'—':value.toLocaleString(undefined,{maximumFractionDigits:digits});
 const mb=(value?:number|null)=>`${(Number(value||0)/MB).toFixed(3)} MB`;
 const time=(value?:string|null)=>value?new Date(value).toLocaleString():'—';
@@ -26,9 +27,10 @@ function CandleChart({bars}:{bars:MT5Bar[]}){
 }
 
 function PairHealth({asset,row,selected,onSelect}:{asset:MT5Asset;row?:MT5SeriesStatus;selected:boolean;onSelect:()=>void}){
+  const retention=row?.retentionProgressPercent??row?.bootstrapProgressPercent??0;
   return <button className={`mt5-pair-health ${selected?'selected':''} ${healthTone(row?.health)}`} onClick={onSelect}>
     <div className="mt5-pair-top"><div><strong>{asset}</strong><span>{row?.brokerSymbol||'broker symbol not found yet'}</span></div><b>{row?.health||'WAITING'}</b></div>
-    <div className="mt5-pair-health-grid"><span><small>Close</small>{fmt(row?.latestClose)}</span><span><small>M1 bars</small>{Number(row?.bars||0).toLocaleString()}</span><span><small>20K fill</small>{(row?.bootstrapProgressPercent??0).toFixed(1)}%</span><span><small>Integrity</small>{row?.integrityScore??0}%</span></div>
+    <div className="mt5-pair-health-grid"><span><small>Close</small>{fmt(row?.latestClose)}</span><span><small>M1 bars</small>{Number(row?.bars||0).toLocaleString()}</span><span><small>60d fill</small>{retention.toFixed(1)}%</span><span><small>Integrity</small>{row?.integrityScore??0}%</span></div>
   </button>;
 }
 
@@ -75,29 +77,31 @@ export function MT5ExtractedDataView(){
   const calculator=status?.sizeCalculator;
   const seriesRows=useMemo(()=>MT5_WEBSITE_ASSETS.map(id=>({id,row:status?.series?.[`${id}_M1`]})),[status]);
   const measured=seriesRows.filter(item=>(item.row?.bars||0)>0).length;
+  const retentionProgress=row?.retentionProgressPercent??row?.bootstrapProgressPercent??0;
+  const retainedDays=row?.retainedDays??0;
 
   return <div className="mt5-data-workspace">
     {error?<div className="alert warn">{error}</div>:null}
     <section className="panel mt5-data-hero">
-      <div><span className="eyebrow">MetaTrader 5 Canonical Market Database</span><h2>20,000 M1 bars per website asset · 160-bar safety overlap every 300 seconds</h2><p>The permanent price dataset is M1 only. M5, M15, M30, H1, H4 and D1 are reconstructed deterministically from those M1 candles whenever the website or SMC engine needs them.</p></div>
+      <div><span className="eyebrow">MetaTrader 5 Canonical Market Database</span><h2>Rolling 60-day M1 history · 160-bar safety overlap every 300 seconds</h2><p>The permanent hot dataset is M1 only and is retired by time-based FIFO after 60 calendar days. M5, M15, M30, H1, H4 and D1 are reconstructed deterministically whenever the website, SMC engine or economic-event research needs them.</p></div>
       <div className="mt5-data-hero-stats"><span><strong>{measured}/{MT5_WEBSITE_ASSETS.length}</strong><small>assets found on broker</small></span><span><strong>{Number(status?.totalBars||0).toLocaleString()}</strong><small>canonical M1 bars stored</small></span><span><strong>{(status?.utilizationPercent??0).toFixed(3)}%</strong><small>200 MB envelope used</small></span><span><strong>{status?.management?.governorState||'—'}</strong><small>storage governor</small></span></div>
     </section>
 
     <section className="mt5-size-grid">
       <article className="panel mt5-size-card"><span className="eyebrow">Exact Stored Size</span><strong>{mb(calculator?.exactStoredCompressedBytes)}</strong><p>Compressed Firestore payload</p><small>Raw JSON equivalent {mb(calculator?.exactStoredRawBytes)}</small></article>
       <article className="panel mt5-size-card"><span className="eyebrow">Measured Bytes / M1 Bar</span><strong>{calculator?.averageCompressedBytesPerBar?.toFixed(2)??'—'} B</strong><p>Average compressed</p><small>Raw {calculator?.averageRawBytesPerBar?.toFixed(2)??'—'} B/bar</small></article>
-      <article className="panel mt5-size-card"><span className="eyebrow">Projected 20K × All Assets</span><strong>{calculator?.projectedInitialCompressedBytesAllAssets==null?'Awaiting sample':mb(calculator.projectedInitialCompressedBytesAllAssets)}</strong><p>Projection uses actual measured bytes/bar</p><small>{calculator?.projectedInitialCompressedPercentOf200MB?.toFixed(2)??'—'}% of the 200 MB envelope</small></article>
+      <article className="panel mt5-size-card"><span className="eyebrow">Projected 60-day Max × All Assets</span><strong>{calculator?.projectedInitialCompressedBytesAllAssets==null?'Awaiting sample':mb(calculator.projectedInitialCompressedBytesAllAssets)}</strong><p>86,400 bars is the 24/7 ceiling per asset; session-limited markets retain fewer</p><small>{calculator?.projectedInitialCompressedPercentOf200MB?.toFixed(2)??'—'}% of the 200 MB envelope at the theoretical maximum</small></article>
       <article className="panel mt5-size-card"><span className="eyebrow">Compression Saving</span><strong>{calculator?.compressionSavingPercent?.toFixed(1)??'0'}%</strong><p>{mb(calculator?.compressionSavingBytes)} saved</p><small>{calculator?.measurement||'Actual byte measurement'}</small></article>
     </section>
 
     <section className="mt5-asset-strip">{seriesRows.map(item=><PairHealth key={item.id} asset={item.id} row={item.row} selected={asset===item.id} onSelect={()=>setAsset(item.id)}/>)}</section>
 
-    <section className="panel mt5-selected-head"><div><span className="eyebrow">Extracted from MetaTrader</span><h2>{asset}</h2><p>{row?.brokerSymbol||'Broker instrument has not been resolved yet'} · canonical M1 database</p></div><div className={`mt5-health-badge ${healthTone(row?.health)}`}><strong>{row?.health||'WAITING'}</strong><span>{row?.integrityScore??0}% integrity</span></div></section>
+    <section className="panel mt5-selected-head"><div><span className="eyebrow">Extracted from MetaTrader</span><h2>{asset}</h2><p>{row?.brokerSymbol||'Broker instrument has not been resolved yet'} · rolling 60-day canonical M1 database</p></div><div className={`mt5-health-badge ${healthTone(row?.health)}`}><strong>{row?.health||'WAITING'}</strong><span>{row?.integrityScore??0}% integrity</span></div></section>
 
     <section className="mt5-detail-grid">
-      <article className="panel"><span className="eyebrow">Cache Progress</span><div className="mt5-progress"><i style={{width:`${Math.min(100,row?.bootstrapProgressPercent??0)}%`}}/></div><strong>{Number(row?.bars||0).toLocaleString()} / {Number(row?.bootstrapTargetBars||20_000).toLocaleString()} M1 bars</strong><p>{(row?.bootstrapProgressPercent??0).toFixed(2)}% of initial target</p></article>
+      <article className="panel"><span className="eyebrow">Retention Window</span><div className="mt5-progress"><i style={{width:`${Math.min(100,retentionProgress)}%`}}/></div><strong>{retainedDays.toFixed(2)} / {RETENTION_DAYS} calendar days</strong><p>{retentionProgress.toFixed(2)}% window coverage · {Number(row?.bars||0).toLocaleString()} M1 bars retained</p></article>
       <article className="panel"><span className="eyebrow">Per Asset Storage</span><strong>{mb(row?.compressedBytes)}</strong><p>compressed · {mb(row?.rawBytes)} raw</p><small>{row?.size?.compressedBytesPerBar?.toFixed(2)??'—'} B compressed / bar</small></article>
-      <article className="panel"><span className="eyebrow">Data Window</span><strong>{row?.retainedDays?.toFixed(2)??'0'} days</strong><p>{timeMs(row?.oldestMs)} → {timeMs(row?.newestMs)}</p><small>Newest candle age {age(row?.newestMs)}</small></article>
+      <article className="panel"><span className="eyebrow">Data Window</span><strong>{retainedDays.toFixed(2)} days</strong><p>{timeMs(row?.oldestMs)} → {timeMs(row?.newestMs)}</p><small>Newest candle age {age(row?.newestMs)} · FIFO target {row?.retentionDays??RETENTION_DAYS} days</small></article>
       <article className="panel"><span className="eyebrow">Ingestion</span><strong>{Number(row?.ingestBatches||0).toLocaleString()} batches</strong><p>{Number(row?.deduplicatedBars||0).toLocaleString()} duplicates safely removed</p><small>Last sync {time(row?.lastIngestAt)}</small></article>
     </section>
 
