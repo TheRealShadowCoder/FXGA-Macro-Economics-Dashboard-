@@ -33,6 +33,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+
       - name: Validate MT5 ingress
         working-directory: google-cloud-mt5-ingress
         run: |
@@ -40,6 +41,7 @@ jobs:
           npm run check
           node --check price-cache.js
           node --check mt5-smc-engine.js
+          node --check server.js
 
       - id: config
         name: Resolve Google authentication
@@ -92,7 +94,7 @@ jobs:
           echo "MT5_URL=$MT5_URL" >> "$GITHUB_ENV"
           echo "url=$MT5_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Verify 20K canonical M1 cache and SMC fusion contract
+      - name: Verify 60-day canonical M1 FIFO and SMC fusion contract
         run: |
           curl --fail --silent --show-error "$MT5_URL/health" -o /tmp/health.json
           node <<'NODE'
@@ -100,27 +102,31 @@ jobs:
           const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
           if(!h.ok||h.source!=='MetaTrader5'||h.schema!=='fxga.smc.signal.v3'||h.cloudflareProcessing!==false) process.exit(1);
           if(h.priceCache?.schema!=='fxga.mt5.price-cache.v2'||h.priceCache?.cacheEnvelopeBytes!==200000000||h.priceCache?.payloadHardBytes!==190000000) process.exit(1);
-          if(h.priceCache?.initialBarsPerAsset!==20000||h.priceCache?.incrementalBarsPerSync!==160||h.priceCache?.syncSeconds!==300) process.exit(1);
+          if(h.priceCache?.initialBarsPerAsset!==86400||h.priceCache?.incrementalBarsPerSync!==160||h.priceCache?.syncSeconds!==300) process.exit(1);
           if(!Array.isArray(h.priceCache?.allowedSymbols)||h.priceCache.allowedSymbols.length!==16) process.exit(1);
           for(const asset of ['DXY','EURUSD','GBPUSD','USDJPY','USDZAR','US2Y','US10Y','SPX','NASDAQ','DJI','VIX','GOLD','WTI','BRENT','BTCUSD','ETHUSD']) if(!h.priceCache.allowedSymbols.includes(asset)) process.exit(1);
           if(h.smc?.canonicalTimeframe!=='M1'||!String(h.smc?.snapshot||'').includes('smc-snapshot')) process.exit(1);
-          console.log(h);
+          console.log('MT5 health contract verified');
           NODE
+
           curl --fail --silent --show-error "$MT5_URL/api/mt5/price-cache/status" -o /tmp/cache.json
           node <<'NODE'
           const fs=require('fs');
           const c=JSON.parse(fs.readFileSync('/tmp/cache.json','utf8'));
-          if(c.cacheEnvelopeBytes!==200000000||c.payloadHardBytes!==190000000||c.evictTargetBytes!==175000000) process.exit(1);
-          if(c.initialBarsPerAsset!==20000||c.incrementalBarsPerSync!==160||c.syncSeconds!==300) process.exit(1);
-          if(!c.databaseHealth||typeof c.databaseHealth.assetsOnline!=='number'||c.databaseHealth.assetsExpected!==16) process.exit(1);
-          if(!c.management?.evictionArmed||!c.management?.compressionActive||!c.management?.deduplicationActive||!c.management?.integrityMonitoring||!c.management?.canonicalM1Only||!c.management?.reconstructionOnDemand) process.exit(1);
-          if(!c.sizeCalculator||c.sizeCalculator.initialBarsPerAsset!==20000||c.sizeCalculator.incrementalBarsPerSync!==160||c.sizeCalculator.totalInitialTargetBars!==320000) process.exit(1);
-          if(!Array.isArray(c.derivedTimeframes)||!c.derivedTimeframes.includes('M30')||!c.derivedTimeframes.includes('H4')||!c.derivedTimeframes.includes('D1')) process.exit(1);
-          for(const asset of c.allowedSymbols){const row=c.series?.[`${asset}_M1`];if(!row||typeof row.integrityScore!=='number'||!Array.isArray(row.alerts)||!row.size) process.exit(1);}
-          console.log('20K MT5 cache contract verified',c.databaseHealth,c.management,c.sizeCalculator);
+          if(c.retentionDays!==60) throw new Error(`Expected 60-day retention, received ${c.retentionDays}`);
+          if(c.cacheEnvelopeBytes!==200000000||c.payloadHardBytes!==190000000||c.evictTargetBytes!==175000000) throw new Error('Cache safety envelope mismatch');
+          if(c.initialBarsPerAsset!==86400||c.incrementalBarsPerSync!==160||c.syncSeconds!==300) throw new Error('60-day ingestion contract mismatch');
+          if(!c.databaseHealth||typeof c.databaseHealth.assetsOnline!=='number'||c.databaseHealth.assetsExpected!==16) throw new Error('Database health contract missing');
+          if(!c.management?.evictionArmed||!c.management?.timeFifoActive||c.management?.retentionDays!==60||!c.management?.compressionActive||!c.management?.deduplicationActive||!c.management?.integrityMonitoring||!c.management?.canonicalM1Only||!c.management?.reconstructionOnDemand) throw new Error('Storage-management contract mismatch');
+          if(!c.sizeCalculator||c.sizeCalculator.retentionDays!==60||c.sizeCalculator.initialBarsPerAsset!==86400||c.sizeCalculator.incrementalBarsPerSync!==160||c.sizeCalculator.totalInitialTargetBars!==1382400) throw new Error('60-day capacity projection mismatch');
+          if(!Array.isArray(c.derivedTimeframes)||!c.derivedTimeframes.includes('M30')||!c.derivedTimeframes.includes('H4')||!c.derivedTimeframes.includes('D1')) throw new Error('Derived timeframe contract missing');
+          for(const asset of c.allowedSymbols){const row=c.series?.[`${asset}_M1`];if(!row||typeof row.integrityScore!=='number'||!Array.isArray(row.alerts)||!row.size||row.retentionDays!==60) throw new Error(`Series contract missing for ${asset}`);}
+          console.log('60-day MT5 cache contract verified',c.databaseHealth,c.management,c.sizeCalculator);
           NODE
+
           curl --fail --silent --show-error "$MT5_URL/api/mt5/smc-snapshot" -o /tmp/smc.json
           node -e "const fs=require('fs');const s=JSON.parse(fs.readFileSync('/tmp/smc.json','utf8'));if(s.canonicalTimeframe!=='M1'||s.methodology!=='canonical-mt5-m1-reconstructed-multi-timeframe-smc'||!s.counts)process.exit(1);console.log('SMC fusion verified',s.counts)"
+
           code=$(curl -sS -o /tmp/reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/webhook")
           test "$code" -eq 403 || { cat /tmp/reject.json; exit 1; }
           code=$(curl -sS -o /tmp/cache-reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/price-cache")
@@ -131,37 +137,38 @@ jobs:
           mkdir -p runtime public
           printf '%s\n' "$MT5_URL/api/mt5/webhook" > runtime/mt5-cloud-url.txt
           node - <<'NODE'
-          const fs = require('fs');
-          const base = process.env.MT5_URL;
+          const fs=require('fs');
+          const base=process.env.MT5_URL;
           const symbols=['DXY','EURUSD','GBPUSD','USDJPY','USDZAR','US2Y','US10Y','SPX','NASDAQ','DJI','VIX','GOLD','WTI','BRENT','BTCUSD','ETHUSD'];
-          const payload = {
-            service: 'fxga-mt5-signal-ingress',
-            project: process.env.GCP_PROJECT_ID,
-            region: process.env.GCP_REGION,
-            baseUrl: base,
-            webhookUrl: `${base}/api/mt5/webhook`,
-            healthUrl: `${base}/health`,
-            priceCacheIngestUrl: `${base}/api/mt5/price-cache`,
-            priceCacheStatusUrl: `${base}/api/mt5/price-cache/status`,
-            priceQueryUrl: `${base}/api/mt5/prices`,
-            smcSnapshotUrl: `${base}/api/mt5/smc-snapshot`,
-            priceCache: {
-              source: 'MetaTrader5',
+          const payload={
+            service:'fxga-mt5-signal-ingress',
+            project:process.env.GCP_PROJECT_ID,
+            region:process.env.GCP_REGION,
+            baseUrl:base,
+            webhookUrl:`${base}/api/mt5/webhook`,
+            healthUrl:`${base}/health`,
+            priceCacheIngestUrl:`${base}/api/mt5/price-cache`,
+            priceCacheStatusUrl:`${base}/api/mt5/price-cache/status`,
+            priceQueryUrl:`${base}/api/mt5/prices`,
+            smcSnapshotUrl:`${base}/api/mt5/smc-snapshot`,
+            priceCache:{
+              source:'MetaTrader5',
               symbols,
-              sourceTimeframe: 'M1',
-              initialBarsPerAsset: 20000,
-              incrementalBarsPerSync: 160,
-              syncSeconds: 300,
-              envelopeBytes: 200000000,
-              payloadHardBytes: 190000000,
-              evictionTargetBytes: 175000000,
-              policy: 'canonical M1 only + actual byte sizing + gzip + timestamp dedupe + FIFO + integrity diagnostics + deterministic higher-timeframe reconstruction'
+              sourceTimeframe:'M1',
+              retentionDays:60,
+              maximumM1BarsPer24x7Asset:86400,
+              incrementalBarsPerSync:160,
+              syncSeconds:300,
+              envelopeBytes:200000000,
+              payloadHardBytes:190000000,
+              evictionTargetBytes:175000000,
+              policy:'rolling 60-day canonical M1 + gzip + timestamp dedupe + time FIFO + capacity FIFO + integrity diagnostics + deterministic higher-timeframe reconstruction'
             },
-            updatedAt: new Date().toISOString(),
-            cloudflareProcessing: false
+            updatedAt:new Date().toISOString(),
+            cloudflareProcessing:false
           };
-          fs.writeFileSync('runtime/mt5-cloud.json', JSON.stringify(payload, null, 2) + '\n');
-          fs.writeFileSync('public/mt5-cloud.json', JSON.stringify(payload, null, 2) + '\n');
+          fs.writeFileSync('runtime/mt5-cloud.json',JSON.stringify(payload,null,2)+'\n');
+          fs.writeFileSync('public/mt5-cloud.json',JSON.stringify(payload,null,2)+'\n');
           NODE
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -180,8 +187,8 @@ jobs:
           echo "MT5 price ingest: $MT5_URL/api/mt5/price-cache"
           echo "MT5 price query: $MT5_URL/api/mt5/prices"
           echo "MT5 SMC snapshot: $MT5_URL/api/mt5/smc-snapshot"
-          echo "Canonical cache: 20,000 M1 bars per website asset; 160-bar overlap every 300 seconds"
-          echo "Storage: 200 MB envelope / 190 MB payload hard ceiling / 175 MB FIFO target"
-          echo "Sizing: exact raw JSON + exact gzip byte accounting with per-bar and full-universe projections"
+          echo "Canonical cache: rolling 60 calendar days of M1 for the 16 website assets; 160-bar overlap every 300 seconds"
+          echo "Maximum 24/7 M1 observations per asset: 86,400; session-limited instruments retain fewer bars over the same 60-day clock window"
+          echo "Storage: time FIFO first; 200 MB envelope / 190 MB payload hard ceiling / 175 MB capacity FIFO target"
           echo "SMC: M1 canonical; M5/M15/M30/H1/H4/D1 reconstructed deterministically"
           echo "Cloudflare processing: NONE"
