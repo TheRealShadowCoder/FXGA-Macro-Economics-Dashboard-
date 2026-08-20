@@ -1,15 +1,20 @@
 import { deriveTechnicalQuotes } from './technical-engine.js';
 
 export const EVENT_STUDY_HORIZONS = Object.freeze({
+  60: '1m',
   300: '5m',
   900: '15m',
+  1800: '30m',
   3600: '1h',
+  7200: '2h',
   14400: '4h',
+  28800: '8h',
+  86400: '24h',
 });
 
 const CURRENCY_MAPPINGS = Object.freeze({
   USD: [
-    ['DXY', 1], ['EURUSD', -1], ['GBPUSD', -1], ['USDJPY', 1], ['USDZAR', 1], ['XAUUSD', -1],
+    ['DXY', 1], ['EURUSD', -1], ['GBPUSD', -1], ['USDJPY', 1], ['USDZAR', 1], ['GOLD', -1], ['XAUUSD', -1],
   ],
   EUR: [
     ['EURUSD', 1], ['EURGBP', 1], ['EURZAR', 1],
@@ -38,7 +43,7 @@ function quoteMap(snapshot) {
 }
 
 function noiseThreshold(assetId) {
-  if (assetId === 'XAUUSD') return 0.015;
+  if (assetId === 'XAUUSD' || assetId === 'GOLD') return 0.015;
   if (assetId === 'DXY') return 0.005;
   if (/ZAR/.test(assetId)) return 0.008;
   return 0.004;
@@ -117,6 +122,7 @@ export function buildEventStudyMeasurement(event, baselineSnapshot, currentSnaps
   const muted = usable.filter((item) => item.alignment === 'muted').length;
   const meanBaseCurrencyMovePct = usable.length ? usable.reduce((sum, item) => sum + item.baseCurrencyMovePct, 0) / usable.length : null;
   const directionalAgreement = aligned + opposed > 0 ? aligned / (aligned + opposed) : null;
+  const averageAbsoluteMovePct = usable.length ? usable.reduce((sum,item) => sum + Math.abs(Number(item.rawMovePct || 0)),0) / usable.length : null;
 
   return {
     horizon,
@@ -137,25 +143,40 @@ export function buildEventStudyMeasurement(event, baselineSnapshot, currentSnaps
     muted,
     directionalAgreement,
     meanBaseCurrencyMovePct,
+    averageAbsoluteMovePct,
     reactions,
   };
 }
 
+function measurementAbsoluteMove(measurement) {
+  if (isNumber(measurement?.averageAbsoluteMovePct)) return measurement.averageAbsoluteMovePct;
+  const usable = Array.isArray(measurement?.reactions)
+    ? measurement.reactions.filter((row) => row?.available && isNumber(Number(row.rawMovePct)))
+    : [];
+  return usable.length ? usable.reduce((sum,row) => sum + Math.abs(Number(row.rawMovePct)),0) / usable.length : null;
+}
+
 export function summarizeEventStudies(studies = []) {
   const measurements = [];
+  const horizonSet = new Set(Object.values(EVENT_STUDY_HORIZONS));
   for (const study of studies) {
     for (const [horizon, measurement] of Object.entries(study?.horizons || {})) {
+      horizonSet.add(horizon);
       if (measurement?.quality !== 'measured') continue;
       measurements.push({ eventId:study.eventId, currency:study.currency, horizon, ...measurement });
     }
   }
   const byHorizon = {};
-  for (const horizon of Object.values(EVENT_STUDY_HORIZONS)) {
+  for (const horizon of horizonSet) {
     const rows = measurements.filter((item) => item.horizon === horizon);
     const directional = rows.filter((item) => typeof item.directionalAgreement === 'number');
+    const absolute = rows.map(measurementAbsoluteMove).filter(isNumber);
     byHorizon[horizon] = {
       observations:rows.length,
+      assetObservations:rows.reduce((sum,item) => sum + Number(item.usableAssets || 0),0),
+      averageUsableAssets:rows.length ? rows.reduce((sum,item) => sum + Number(item.usableAssets || 0),0) / rows.length : null,
       meanDirectionalAgreement:directional.length ? directional.reduce((sum, item) => sum + item.directionalAgreement, 0) / directional.length : null,
+      meanAbsoluteMovePct:absolute.length ? absolute.reduce((sum,value) => sum + value,0) / absolute.length : null,
       aligned:rows.reduce((sum, item) => sum + Number(item.aligned || 0), 0),
       opposed:rows.reduce((sum, item) => sum + Number(item.opposed || 0), 0),
     };
@@ -163,6 +184,7 @@ export function summarizeEventStudies(studies = []) {
   return {
     studies:studies.length,
     measuredHorizons:measurements.length,
+    assetMeasurements:measurements.reduce((sum,item) => sum + Number(item.usableAssets || 0),0),
     byHorizon,
   };
 }
