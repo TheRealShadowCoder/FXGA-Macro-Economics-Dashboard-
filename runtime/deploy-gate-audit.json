@@ -1,27 +1,27 @@
 {
   "schema": "fxga.deploy-gate-audit.v1",
-  "passed": false,
-  "generatedAt": "2026-08-20T23:16:15.958Z",
+  "passed": true,
+  "generatedAt": "2026-08-20T23:18:24.830Z",
   "summary": {
-    "passed": 17,
-    "failed": 3,
+    "passed": 20,
+    "failed": 0,
     "total": 20
   },
   "checks": [
     {
       "name": "root-npm-install",
       "passed": true,
-      "durationMs": 10610,
+      "durationMs": 9593,
       "status": 0,
-      "stdout": "\nadded 23 packages in 10s\n",
+      "stdout": "\nadded 23 packages in 9s\n",
       "stderr": ""
     },
     {
       "name": "frontend-typescript-vite-build",
       "passed": true,
-      "durationMs": 4834,
+      "durationMs": 5088,
       "status": 0,
-      "stdout": "\n> fxga-macro-intelligence-dashboard@0.3.2 build\n> npm run check:public-copy && tsc -b && vite build\n\n\n> fxga-macro-intelligence-dashboard@0.3.2 check:public-copy\n> node scripts/check-public-copy.mjs\n\nPublic presentation quality gate passed across 11 user-facing modules.\n\u001b[36mvite v8.2.0 \u001b[32mbuilding client environment for production...\u001b[36m\u001b[39m\ntransforming...\n✓ 93 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/index.html                   1.16 kB │ gzip:   0.51 kB\ndist/assets/index-Dj-04HBp.css  162.64 kB │ gzip:  30.39 kB\ndist/assets/index-DS72Cud9.js   526.69 kB │ gzip: 149.18 kB\n\n\u001b[32m✓ built in 176ms\u001b[39m\n",
+      "stdout": "\n> fxga-macro-intelligence-dashboard@0.3.2 build\n> npm run check:public-copy && tsc -b && vite build\n\n\n> fxga-macro-intelligence-dashboard@0.3.2 check:public-copy\n> node scripts/check-public-copy.mjs\n\nPublic presentation quality gate passed across 11 user-facing modules.\n\u001b[36mvite v8.2.0 \u001b[32mbuilding client environment for production...\u001b[36m\u001b[39m\ntransforming...\n✓ 93 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/index.html                   1.16 kB │ gzip:   0.51 kB\ndist/assets/index-Dj-04HBp.css  162.64 kB │ gzip:  30.39 kB\ndist/assets/index-DS72Cud9.js   526.69 kB │ gzip: 149.18 kB\n\n\u001b[32m✓ built in 168ms\u001b[39m\n",
       "stderr": "\u001b[33m[plugin builtin:vite-reporter] \n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application\n- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\u001b[39m\n"
     },
     {
@@ -58,11 +58,11 @@
     },
     {
       "name": "frontend-gate-event-price-research",
-      "passed": false,
+      "passed": true,
       "durationMs": 0,
-      "status": 1,
-      "stdout": "",
-      "stderr": "missing compiled string: Economic releases tied to Cross Asset price paths"
+      "status": 0,
+      "stdout": "found: Price action before and after every economic release",
+      "stderr": ""
     },
     {
       "name": "frontend-gate-live-signal-intelligence",
@@ -91,39 +91,39 @@
     {
       "name": "google-app-npm-install",
       "passed": true,
-      "durationMs": 4982,
+      "durationMs": 4185,
       "status": 0,
-      "stdout": "\nadded 132 packages in 5s\n",
+      "stdout": "\nadded 132 packages in 4s\n",
       "stderr": "npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead\nnpm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me\nnpm warn allow-scripts 1 package has install scripts not yet covered by allowScripts:\nnpm warn allow-scripts   protobufjs@7.6.5 (postinstall: node scripts/postinstall)\nnpm warn allow-scripts\nnpm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.\n"
     },
     {
       "name": "google-app-source-syntax",
       "passed": true,
-      "durationMs": 25,
+      "durationMs": 27,
       "status": 0,
       "stdout": "",
       "stderr": ""
     },
     {
       "name": "google-app-optimizer-syntax",
-      "passed": false,
-      "durationMs": 28,
-      "status": 1,
+      "passed": true,
+      "durationMs": 27,
+      "status": 0,
       "stdout": "",
-      "stderr": "/home/runner/work/FXGA-Macro-Economics-Dashboard-/FXGA-Macro-Economics-Dashboard-/google-cloud-app/optimize-server.js:44\n  const categories=[...counts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([id,count])=>({id,label:title(id),description:`Decision-relevant ${title(id).toLowerCase()} indicators from the persisted macro dataset.`,count}));\n                                                                                                                                              ^^^^^^^^\n\nSyntaxError: Unexpected identifier 'Decision'\n    at checkSyntax (node:internal/main/check_syntax:72:5)\n\nNode.js v24.19.0\n"
+      "stderr": ""
     },
     {
       "name": "google-app-optimizer-execution",
-      "passed": false,
-      "durationMs": 27,
-      "status": 1,
-      "stdout": "",
-      "stderr": "file:///home/runner/work/FXGA-Macro-Economics-Dashboard-/FXGA-Macro-Economics-Dashboard-/google-cloud-app/optimize-server.js:44\n  const categories=[...counts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([id,count])=>({id,label:title(id),description:`Decision-relevant ${title(id).toLowerCase()} indicators from the persisted macro dataset.`,count}));\n                                                                                                                                              ^^^^^^^^\n\nSyntaxError: Unexpected identifier 'Decision'\n    at compileSourceTextModule (node:internal/modules/esm/utils:318:16)\n    at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:89:18)\n    at #translate (node:internal/modules/esm/loader:434:20)\n    at afterLoad (node:internal/modules/esm/loader:502:29)\n    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:507:12)\n    at #getOrCreateModuleJobAfterResolve (node:internal/modules/esm/loader:560:36)\n    at afterResolve (node:internal/modules/esm/loader:607:52)\n    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:613:12)\n    at node:internal/modules/esm/loader:632:32\n    at TracingChannel.tracePromise (node:diagnostics_channel:362:14)\n\nNode.js v24.19.0\n"
+      "passed": true,
+      "durationMs": 32,
+      "status": 0,
+      "stdout": "Injected FXGA fast routes v2 and macro catalog contract\n",
+      "stderr": ""
     },
     {
       "name": "google-app-optimized-server-syntax",
       "passed": true,
-      "durationMs": 23,
+      "durationMs": 24,
       "status": 0,
       "stdout": "",
       "stderr": ""
@@ -131,9 +131,9 @@
     {
       "name": "mt5-npm-install",
       "passed": true,
-      "durationMs": 2690,
+      "durationMs": 2569,
       "status": 0,
-      "stdout": "\nadded 109 packages in 3s\n",
+      "stdout": "\nadded 109 packages in 2s\n",
       "stderr": "npm warn deprecated uuid@9.0.1: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).\nnpm warn allow-scripts 1 package has install scripts not yet covered by allowScripts:\nnpm warn allow-scripts   protobufjs@7.6.5 (postinstall: node scripts/postinstall)\nnpm warn allow-scripts\nnpm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.\n"
     },
     {
@@ -147,7 +147,7 @@
     {
       "name": "mt5-range-patch-execution",
       "passed": true,
-      "durationMs": 31,
+      "durationMs": 34,
       "status": 0,
       "stdout": "MT5 price-cache range semantics fixed: missing values stay null; future/reversed windows normalize safely\n",
       "stderr": ""
@@ -155,7 +155,7 @@
     {
       "name": "mt5-patched-cache-syntax",
       "passed": true,
-      "durationMs": 24,
+      "durationMs": 26,
       "status": 0,
       "stdout": "",
       "stderr": ""
@@ -163,7 +163,7 @@
     {
       "name": "mt5-server-syntax",
       "passed": true,
-      "durationMs": 23,
+      "durationMs": 26,
       "status": 0,
       "stdout": "",
       "stderr": ""
