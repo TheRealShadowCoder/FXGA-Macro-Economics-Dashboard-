@@ -156,7 +156,7 @@ jobs:
           grep -R -F "MT5 Data + SMC Fusion" dist >/dev/null || { echo '::error::Compiled frontend is missing the Cross Asset MT5 Data + SMC Fusion tab'; exit 1; }
           grep -R -F "Cross Asset Board" dist >/dev/null || { echo '::error::Compiled frontend is missing the Cross Asset Board tab'; exit 1; }
           grep -R -F "Event Study & Backtesting" dist >/dev/null || { echo '::error::Compiled frontend is missing Event Study & Backtesting'; exit 1; }
-          grep -R -F "Economic releases tied to Cross Asset price paths" dist >/dev/null || { echo '::error::Compiled frontend is missing the event-price research workspace'; exit 1; }
+          grep -R -F "Price action before and after every economic release" dist >/dev/null || { echo '::error::Compiled frontend is missing the pre/post-news event-price research workspace'; exit 1; }
           grep -R -F "Live Signal Intelligence" dist >/dev/null || { echo '::error::Compiled frontend is missing Live Signal Intelligence navigation'; exit 1; }
           test -f dist/fxga-build.json || { echo '::error::Release marker was not copied into the static build'; exit 1; }
 
