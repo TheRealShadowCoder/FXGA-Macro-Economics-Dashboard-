@@ -65,10 +65,14 @@ jobs:
           gcloud config set project "$GCP_PROJECT_ID"
           APP_URL=$(gcloud run services describe "$GCP_APP_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           test -n "$APP_URL" || { echo '::error::Google Cloud application service is missing'; exit 1; }
+          # IMPORTANT: GITHUB_ENV only affects later steps. Export APP_URL so the
+          # Node health-check in THIS step can read process.env.APP_URL.
+          export APP_URL
           echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "VITE_GOOGLE_CLOUD_API_BASE=$APP_URL" >> "$GITHUB_ENV"
           node <<'NODE'
           const base=process.env.APP_URL;
+          if(!base) throw new Error('APP_URL was not exported into the current workflow step');
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
           let last;
           for(let i=0;i<120;i++){
