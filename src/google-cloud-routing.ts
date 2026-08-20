@@ -8,6 +8,7 @@ const rawBase = String(
 if (typeof window !== 'undefined' && rawBase) {
   const apiOrigin = new URL(rawBase).origin;
   const nativeFetch = globalThis.fetch.bind(globalThis);
+  const transient = new Set([408, 425, 429, 500, 502, 503, 504]);
 
   const routeHttp = (value: string) => {
     try {
@@ -19,16 +20,47 @@ if (typeof window !== 'undefined' && rawBase) {
     return value;
   };
 
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+  const retryableApi = (value: string, init?: RequestInit) => {
+    try {
+      const url = new URL(value, window.location.origin);
+      const method = String(init?.method || 'GET').toUpperCase();
+      return method === 'GET' && url.origin === apiOrigin && (
+        url.pathname.startsWith('/api/tradingview/') ||
+        url.pathname.startsWith('/api/event-') ||
+        url.pathname === '/api/research' ||
+        url.pathname === '/api/calendar-history'
+      );
+    } catch { return false; }
+  };
+
+  const resilientFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    let routed: RequestInfo | URL = input;
+    let target = '';
     if (typeof input === 'string' || input instanceof URL) {
-      return nativeFetch(routeHttp(String(input)), init);
+      target = routeHttp(String(input));
+      routed = target;
+    } else if (input instanceof Request) {
+      target = routeHttp(input.url);
+      if (target !== input.url) routed = new Request(target, input);
+      else target = input.url;
     }
-    if (input instanceof Request) {
-      const routed = routeHttp(input.url);
-      if (routed !== input.url) return nativeFetch(new Request(routed, input), init);
+    const canRetry = retryableApi(target || String(input), init);
+    let last: Response | null = null;
+    for (let attempt = 0; attempt < (canRetry ? 3 : 1); attempt += 1) {
+      try {
+        const response = await nativeFetch(routed, init);
+        last = response;
+        if (!canRetry || !transient.has(response.status) || attempt === 2) return response;
+      } catch (error) {
+        if (!canRetry || attempt === 2) throw error;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350 * (2 ** attempt)));
     }
-    return nativeFetch(input, init);
-  }) as typeof fetch;
+    if (last) return last;
+    return nativeFetch(routed, init);
+  };
+
+  globalThis.fetch = resilientFetch as typeof fetch;
 
   const NativeWebSocket = globalThis.WebSocket;
   const routeSocket = (value: string | URL) => {
@@ -63,5 +95,5 @@ if (typeof window !== 'undefined' && rawBase) {
   });
   globalThis.WebSocket = RoutedWebSocket;
 
-  console.info(`FXGA browser routing active: static host ${window.location.origin}; Google Cloud API ${apiOrigin}`);
+  console.info(`FXGA browser routing active: static host ${window.location.origin}; Google Cloud API ${apiOrigin}; resilient live-signal/event reads enabled`);
 }
