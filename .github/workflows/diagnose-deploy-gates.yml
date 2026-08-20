@@ -1,0 +1,44 @@
+name: Diagnose FXGA Deployment Gates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-deploy-gates.yml'
+      - 'scripts/deploy-gate-audit.mjs'
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Validate diagnostic harness
+        run: node --check scripts/deploy-gate-audit.mjs
+      - name: Run deployment gate audit
+        continue-on-error: true
+        run: node scripts/deploy-gate-audit.mjs
+      - name: Publish deployment gate report
+        if: always()
+        run: |
+          mkdir -p runtime
+          test -f runtime/deploy-gate-audit.json || printf '%s\n' '{"schema":"fxga.deploy-gate-audit.v1","passed":false,"generatedAt":"unknown","summary":{"passed":0,"failed":1,"total":1},"checks":[{"name":"audit-runner","passed":false,"stderr":"report not generated"}]}' > runtime/deploy-gate-audit.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runtime/deploy-gate-audit.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish FXGA deployment gate audit [skip ci]"
+            git push origin HEAD:main
+          fi
+      - name: Fail if a deployment gate failed
+        if: always()
+        run: node -e "const r=JSON.parse(require('fs').readFileSync('runtime/deploy-gate-audit.json','utf8'));if(!r.passed)process.exit(1)"
