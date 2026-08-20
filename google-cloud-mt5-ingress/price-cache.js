@@ -203,12 +203,16 @@ async function trimExpired(db,meta,nowMs=Date.now()){
 }
 
 async function evictOldest(db,meta,requiredBytes,protectedIds=new Set()){
-  let current=Number(meta.totalCompressedBytes||0);if(current+requiredBytes<=PAYLOAD_HARD_BYTES)return {meta,evictedBytes:0,evictedBars:0,evictedChunks:0};
-  const target=Math.min(EVICT_TARGET_BYTES,Math.max(0,PAYLOAD_HARD_BYTES-requiredBytes));const selected=[];let guard=0;
-  while(current>target&&guard++<20){
-    const snap=await db.collection(CHUNKS).orderBy('endMs','asc').limit(80).get();if(snap.empty)break;let picked=0;
-    for(const doc of snap.docs){if(protectedIds.has(doc.id))continue;selected.push(doc);current-=Number(doc.data()?.compressedBytes||0);picked++;if(current<=target)break;}
-    if(!picked)break;
+  let current=Number(meta.totalCompressedBytes||0);
+  if(current+requiredBytes<=PAYLOAD_HARD_BYTES)return {meta,evictedBytes:0,evictedBars:0,evictedChunks:0};
+  const target=Math.min(EVICT_TARGET_BYTES,Math.max(0,PAYLOAD_HARD_BYTES-requiredBytes));
+  const snap=await db.collection(CHUNKS).orderBy('endMs','asc').limit(1200).get();
+  const selected=[];
+  for(const doc of snap.docs){
+    if(protectedIds.has(doc.id))continue;
+    selected.push(doc);
+    current-=Number(doc.data()?.compressedBytes||0);
+    if(current<=target)break;
   }
   return deleteChunks(db,meta,selected,'capacity-safety-fifo');
 }
