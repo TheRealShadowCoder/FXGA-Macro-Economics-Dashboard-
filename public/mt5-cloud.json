@@ -39,6 +39,6 @@
     "evictionTargetBytes": 175000000,
     "policy": "rolling 60-day canonical M1 + gzip + timestamp dedupe + time FIFO + capacity FIFO + integrity diagnostics + deterministic higher-timeframe reconstruction"
   },
-  "updatedAt": "2026-08-20T15:24:55.423Z",
+  "updatedAt": "2026-08-20T15:26:57.336Z",
   "cloudflareProcessing": false
 }
