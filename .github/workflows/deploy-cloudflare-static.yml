@@ -59,20 +59,31 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Resolve Google Cloud API and wait for passive-host + TradingView contract
+      - name: Wait for Google Cloud API service and verify contract
         run: |
           set -euo pipefail
           gcloud config set project "$GCP_PROJECT_ID"
-          APP_URL=$(gcloud run services describe "$GCP_APP_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
-          test -n "$APP_URL" || { echo '::error::Google Cloud application service is missing'; exit 1; }
-          # IMPORTANT: GITHUB_ENV only affects later steps. Export APP_URL so the
-          # Node health-check in THIS step can read process.env.APP_URL.
+
+          APP_URL=''
+          for attempt in $(seq 1 120); do
+            APP_URL=$(gcloud run services describe "$GCP_APP_SERVICE" \
+              --region "$GCP_REGION" \
+              --format='value(status.url)' 2>/dev/null || true)
+            if [ -n "$APP_URL" ]; then
+              echo "Found Google Cloud API service on attempt $attempt: $APP_URL"
+              break
+            fi
+            echo "Waiting for $GCP_APP_SERVICE to be created by the Google Cloud application workflow ($attempt/120)..."
+            sleep 5
+          done
+
+          test -n "$APP_URL" || { echo '::error::Google Cloud API service was not created within 10 minutes'; exit 1; }
           export APP_URL
           echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "VITE_GOOGLE_CLOUD_API_BASE=$APP_URL" >> "$GITHUB_ENV"
+
           node <<'NODE'
           const base=process.env.APP_URL;
-          if(!base) throw new Error('APP_URL was not exported into the current workflow step');
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
           let last;
           for(let i=0;i<120;i++){
@@ -81,15 +92,15 @@ jobs:
               const text=await r.text();
               if(!r.ok)throw new Error(`${r.status}: ${text.slice(0,400)}`);
               const h=JSON.parse(text);
-              if(h.architecture==='google-cloud-processing-cloudflare-static-hosting'&&h.cloudflareRole==='static-host-only'&&h.cloudflareProcessing===false&&h.tradingViewSignals?.schema==='fxga.smc.signal.v3'&&h.tradingViewSignals?.engine==='FXGA_SMC2000'){
-                console.log('Google Cloud processing + TradingView boundary ready:',base);
+              if(h.architecture==='google-cloud-processing-cloudflare-static-hosting'&&h.compute==='Google Cloud Run'&&h.state==='Google Cloud Firestore'&&h.cloudflareRole==='static-host-only'&&h.cloudflareProcessing===false&&h.tradingViewSignals?.schema==='fxga.smc.signal.v3'&&h.tradingViewSignals?.engine==='FXGA_SMC2000'){
+                console.log('Google Cloud API contract ready:',base);
                 process.exit(0);
               }
-              last=new Error(`Waiting for TradingView-ready Google backend; schema=${h.tradingViewSignals?.schema||'missing'}`);
+              last=new Error(`Google backend contract is not ready yet: ${JSON.stringify(h).slice(0,500)}`);
             }catch(error){last=error;}
             await sleep(5000);
           }
-          throw last||new Error('Google Cloud API did not become TradingView-ready');
+          throw last||new Error('Google Cloud API did not become ready');
           NODE
 
       - name: Build Cloudflare hosted frontend and stamp exact release
@@ -97,7 +108,7 @@ jobs:
           set -euo pipefail
           node <<'NODE'
           const fs=require('fs');
-          const marker={commit:process.env.GITHUB_SHA,builtAt:new Date().toISOString(),release:'cross-asset-mt5-20k-smc-fusion',features:['cross-asset-tabs','mt5-data-smc-fusion','20k-canonical-m1','160-bar-300-second-sync','size-calculator']};
+          const marker={commit:process.env.GITHUB_SHA,builtAt:new Date().toISOString(),release:'cross-asset-mt5-20k-smc-fusion',features:['cross-asset-tabs','mt5-data-smc-fusion','20k-canonical-m1','160-bar-300-second-sync','size-calculator','live-signal-intelligence']};
           fs.writeFileSync('public/fxga-build.json',JSON.stringify(marker,null,2)+'\n');
           NODE
           npm install --no-audit --no-fund
@@ -105,13 +116,14 @@ jobs:
           grep -R -F "$APP_URL" dist >/dev/null || { echo '::error::Frontend build is not pinned to the Google Cloud API'; exit 1; }
           grep -R -F "MT5 Data + SMC Fusion" dist >/dev/null || { echo '::error::Compiled frontend is missing the Cross Asset MT5 Data + SMC Fusion tab'; exit 1; }
           grep -R -F "20K M1 cache" dist >/dev/null || { echo '::error::Compiled frontend is missing the 20K canonical M1 tab contract'; exit 1; }
+          grep -R -F "Live Signal Intelligence" dist >/dev/null || { echo '::error::Compiled frontend is missing the Live Signal Intelligence navigation'; exit 1; }
           test -f dist/fxga-build.json || { echo '::error::Release marker was not copied into the static build'; exit 1; }
           node - <<'NODE'
           const fs=require('fs');
           const marker=JSON.parse(fs.readFileSync('dist/fxga-build.json','utf8'));
           if(marker.commit!==process.env.GITHUB_SHA)throw new Error(`Build marker commit mismatch: ${marker.commit}`);
           if(!marker.features?.includes('mt5-data-smc-fusion'))throw new Error('MT5 fusion release marker missing');
-          console.log('VERIFIED BEFORE DEPLOY: compiled frontend contains MT5 Data + SMC Fusion and exact release marker',marker);
+          console.log('VERIFIED BEFORE DEPLOY:',marker);
           NODE
 
       - name: Enforce static-only Cloudflare configuration
@@ -139,13 +151,13 @@ jobs:
           wranglerVersion: '4.123.0'
           command: deploy
 
-      - name: Verify exact Cross Asset MT5 release is live on Cloudflare
+      - name: Verify exact MT5 Cross Asset release is live on Cloudflare
         run: |
           node <<'NODE'
           const site=process.env.CLOUDFLARE_SITE_URL,api=process.env.APP_URL,sha=process.env.GITHUB_SHA;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
           let root,marker,last;
-          for(let i=0;i<30;i++){
+          for(let i=0;i<45;i++){
             try{
               root=await fetch(site+'/?release='+encodeURIComponent(sha),{headers:{'Cache-Control':'no-cache'},cache:'no-store'});
               const markerResponse=await fetch(site+'/fxga-build.json?release='+encodeURIComponent(sha),{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
@@ -166,7 +178,6 @@ jobs:
           if(edgeType.includes('application/json'))throw new Error('Cloudflare unexpectedly served an application API response');
           const cloud=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
           const h=await cloud.json();
-          if(!cloud.ok||h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore'||h.cloudflareProcessing!==false||h.tradingViewSignals?.schema!=='fxga.smc.signal.v3')throw new Error('Google Cloud processing/TradingView contract failed');
+          if(!cloud.ok||h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore'||h.cloudflareProcessing!==false)throw new Error('Google Cloud processing contract failed');
           console.log('VERIFIED LIVE RELEASE:',marker);
-          console.log('VERIFIED: Cloudflare serves the exact MT5 Data + SMC Fusion frontend; browser processing continues to target Google Cloud.');
           NODE
