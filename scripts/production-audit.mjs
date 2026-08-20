@@ -63,7 +63,9 @@ await check('frontend-current-bundle',async()=>{
   let source='';
   for(const script of scripts.slice(0,8))source+=(await request(script,{json:false,timeoutMs:30_000})).text;
   assert(!source.includes('timed out after 12 seconds'),'Obsolete 12-second core bundle is still live');
+  assert(!source.includes('Cloud Monitoring permission required'),'Obsolete raw Cloud Monitoring permission banner is still live');
   for(const label of ['Macro Dashboard','Cross Asset Prices','Macro Analysis','Research & Risk','Currency Outlook','Live Signal Intelligence','Economic Calendar','Core Indicators','Macro Data Library','Data Operations','Central Bank News','Data Coverage'])assert(source.includes(label),`Missing compiled navigation: ${label}`);
+  assert(source.includes('FRED supplies macro-series evidence'),'Event Study source-provenance UI is not live');
   return `${scripts.length} script bundle(s)`;
 });
 
@@ -93,7 +95,7 @@ const endpoints=[
   ['technical','/api/technical',body=>body.assets&&typeof body.assets==='object'],
   ['calendar','/api/calendar?days=7&importance=1',body=>Array.isArray(body.events)],
   ['calendar-history','/api/calendar-history?days=60',body=>body.days===60&&Array.isArray(body.events)],
-  ['event-studies','/api/event-studies?days=60&limit=20',body=>body.days===60&&Array.isArray(body.studies)&&Array.isArray(body.preNewsWindows)&&Array.isArray(body.horizons)],
+  ['event-studies','/api/event-studies?days=60&limit=20',body=>body.days===60&&Array.isArray(body.studies)&&body.studies.length>0&&Array.isArray(body.preNewsWindows)&&Array.isArray(body.horizons)],
   ['event-patterns','/api/event-pattern-profiles?minObservations=1&limit=20',body=>Array.isArray(body.profiles)],
   ['data-quality','/api/data-quality',body=>body.macro&&body.market&&body.technical&&body.calendar],
   ['global-macro','/api/global-macro',body=>typeof body.totalObservations==='number'&&body.economies],
@@ -102,9 +104,9 @@ const endpoints=[
   ['super-economist','/api/super-economist',body=>body&&typeof body==='object'&&body.operationalHealth],
   ['news','/api/news',body=>Array.isArray(body.items)],
   ['sources','/api/sources',body=>Array.isArray(body.sources)&&body.sources.length>0],
-  ['tradingview-live','/api/tradingview/signals/live?limit=5',body=>Array.isArray(body.signals)],
-  ['tradingview-history','/api/tradingview/signals?limit=5',body=>Array.isArray(body.signals)],
-  ['tradingview-metrics','/api/tradingview/signals/metrics',body=>body&&typeof body==='object'],
+  ['tradingview-live','/api/tradingview/signals/live?limit=5',body=>typeof body.generatedAt==='string'&&typeof body.count==='number'&&Array.isArray(body.signals)],
+  ['tradingview-history','/api/tradingview/signals?limit=5',body=>typeof body.generatedAt==='string'&&typeof body.count==='number'&&Array.isArray(body.signals)],
+  ['tradingview-metrics','/api/tradingview/signals/metrics',body=>body&&typeof body==='object'&&typeof body.totalSignals==='number'&&typeof body.totalEvents==='number'],
 ];
 
 for(const [name,path,validate] of endpoints){
@@ -117,9 +119,27 @@ for(const [name,path,validate] of endpoints){
       const categoryBody=(await request(`${backend}/api/fred?category=${encodeURIComponent(category)}&limit=16`)).body;
       assert(Array.isArray(categoryBody.series),'FRED category query missing series array');
     }
-    return 'contract OK';
+    return name==='event-studies'?{studies:body.studies.length,measurements:body.summary?.assetMeasurements??null}:'contract OK';
   });
 }
+
+await check('event-study-source-fusion',async()=>{
+  const body=(await request(`${backend}/api/event-study-sources`)).body;
+  assert(body?.sources?.fred?.seriesCount>0,'FRED evidence is empty');
+  assert(body?.sources?.cnbc?.assetCount>0,'CNBC cross-asset evidence is empty');
+  assert(body?.sources?.fxstreet?.eventCount>0,'FXStreet release evidence is empty');
+  assert(body?.sources?.mt5?.studyCount>0,'MT5 event-study evidence is empty');
+  assert(String(body?.policy?.cnbc||'').includes('not treated as a historical event candle'),'CNBC historical-use guard missing');
+  return {fred:body.sources.fred.seriesCount,cnbc:body.sources.cnbc.assetCount,fxstreet:body.sources.fxstreet.eventCount,mt5Studies:body.sources.mt5.studyCount};
+});
+
+await check('firestore-telemetry-safe-fallback',async()=>{
+  const {text,body}=await request(`${backend}/api/tradingview/firestore-usage`);
+  assert(!/PERMISSION_DENIED|Permission denied/i.test(text),'Raw Cloud Monitoring permission error is public');
+  assert(['cloud-monitoring','firestore-ledger-fallback'].includes(String(body.monitoringMode||'')),'Safe monitoring mode missing');
+  assert(typeof body.signalPipeline?.totalEvents==='number'&&typeof body.signalPipeline?.totalSignals==='number','Signal ledger totals missing');
+  return {mode:body.monitoringMode,events:body.signalPipeline.totalEvents,signals:body.signalPipeline.totalSignals};
+});
 
 await check('mt5-config',async()=>{
   const config=(await request(`${site}/mt5-cloud.json?audit=${Date.now()}`)).body;
@@ -171,7 +191,7 @@ await check('mt5-smc',async()=>{
 
 const passed=checks.every(check=>check.passed);
 const report={
-  schema:'fxga.production.audit.v2',
+  schema:'fxga.production.audit.v3',
   passed,
   generatedAt:new Date().toISOString(),
   site,
