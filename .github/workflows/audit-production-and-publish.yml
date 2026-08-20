@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/audit-production-and-publish.yml'
+      - 'scripts/production-audit.mjs'
   workflow_run:
     workflows:
       - 'Deploy FXGA Cloudflare Static Website'
@@ -35,80 +36,21 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Run audit and write report
+      - name: Validate audit harness
+        run: node --check scripts/production-audit.mjs
+
+      - name: Run production audit
         id: audit
         continue-on-error: true
         run: |
-          mkdir -p runtime
-          node <<'NODE'
-          const fs=require('fs');
-          const site=process.env.SITE_URL.replace(/\/$/,'');
-          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          const checks=[];
-          const assert=(c,m)=>{if(!c)throw new Error(m)};
-          async function request(url,{json=true,timeoutMs=45000,attempts=3}={}){
-            let last;
-            for(let i=1;i<=attempts;i++){
-              const c=new AbortController(),t=setTimeout(()=>c.abort(),timeoutMs);
-              try{
-                const r=await fetch(url,{headers:{Accept:json?'application/json':'text/html,*/*','Cache-Control':'no-cache'},cache:'no-store',signal:c.signal});
-                const text=await r.text();clearTimeout(t);
-                if(!r.ok)throw new Error(`HTTP ${r.status}: ${text.slice(0,300)}`);
-                if(!json)return {r,text};
-                let body;try{body=JSON.parse(text)}catch{throw new Error(`Invalid JSON: ${text.slice(0,200)}`)}
-                return {r,text,body};
-              }catch(e){clearTimeout(t);last=e;if(i<attempts)await sleep(i*1500)}
-            }
-            throw last;
-          }
-          async function check(name,fn){const at=Date.now();try{const detail=await fn();checks.push({name,passed:true,durationMs:Date.now()-at,detail})}catch(e){checks.push({name,passed:false,durationMs:Date.now()-at,error:String(e?.message||e)})}}
-
-          let root='',build=null,backend='',mt5='';
-          await check('cloudflare-root',async()=>{root=(await request(`${site}/?audit=${Date.now()}`,{json:false})).text;assert(/id=["']root["']/.test(root),'React root missing');return 'ok'});
-          await check('release-marker',async()=>{build=(await request(`${site}/fxga-build.json?audit=${Date.now()}`)).body;assert(build.release==='cross-asset-mt5-60d-event-research',`release=${build.release}`);backend=String(build.backendUrl||'').replace(/\/$/,'');assert(backend.startsWith('https://'),'backend URL missing');return {commit:build.commit,backend}});
-          await check('frontend-current-bundle',async()=>{const scripts=[...root.matchAll(/<script[^>]+src=["']([^"']+\.js[^"']*)["']/g)].map(m=>new URL(m[1],site).toString());assert(scripts.length,'JS bundle missing');let source='';for(const s of scripts.slice(0,8))source+=(await request(s,{json:false,timeoutMs:30000})).text;assert(!source.includes('timed out after 12 seconds'),'old 12-second core bundle live');for(const label of ['Macro Dashboard','Cross Asset Prices','Macro Analysis','Research & Risk','Currency Outlook','Live Signal Intelligence','Economic Calendar','Core Indicators','Macro Data Library','Data Operations','Central Bank News','Data Coverage'])assert(source.includes(label),`missing nav ${label}`);return `${scripts.length} scripts`});
-          await check('google-health',async()=>{const b=(await request(`${backend}/api/health`)).body;assert(b.ok&&b.compute==='Google Cloud Run'&&b.state==='Google Cloud Firestore','health contract');return b.updatedAt});
-
-          const endpoints=[
-            ['dashboard','/api/dashboard',b=>Array.isArray(b.macro)&&Array.isArray(b.calendar)&&Array.isArray(b.market)&&Array.isArray(b.news)&&Array.isArray(b.sources)],
-            ['analysis','/api/analysis',b=>Array.isArray(b.dimensions)],
-            ['research','/api/research',b=>b.dataQuality&&b.risk&&Array.isArray(b.forecasts)&&Array.isArray(b.scenarios)],
-            ['session-signals','/api/session-signals',b=>Array.isArray(b.sessions)&&Array.isArray(b.rankedOpportunities)],
-            ['calendar','/api/calendar?days=7&importance=1',b=>Array.isArray(b.events)],
-            ['calendar-history','/api/calendar-history?days=60',b=>b.days===60&&Array.isArray(b.events)],
-            ['event-studies','/api/event-studies?days=60&limit=20',b=>b.days===60&&Array.isArray(b.studies)&&Array.isArray(b.preNewsWindows)&&Array.isArray(b.horizons)],
-            ['event-patterns','/api/event-pattern-profiles?minObservations=1&limit=20',b=>Array.isArray(b.profiles)],
-            ['technical','/api/technical',b=>b.assets&&typeof b.assets==='object'],
-            ['data-quality','/api/data-quality',b=>b.macro&&b.market&&b.technical&&b.calendar],
-            ['fred-catalog','/api/fred/catalog',b=>typeof b.total==='number'&&typeof b.maxSeriesPerRequest==='number'&&Array.isArray(b.categories)&&Array.isArray(b.series)&&(b.total===0||b.categories.length>0)],
-            ['acquisition-catalog','/api/acquisition/catalog',b=>Array.isArray(b.sources)&&b.policy],
-            ['super-economist','/api/super-economist',b=>b&&typeof b==='object'&&b.operationalHealth],
-            ['news','/api/news',b=>Array.isArray(b.items)],
-            ['sources','/api/sources',b=>Array.isArray(b.sources)&&b.sources.length>0],
-            ['tradingview-live','/api/tradingview/signals/live?limit=5',b=>Array.isArray(b.signals)],
-            ['tradingview-history','/api/tradingview/signals?limit=5',b=>Array.isArray(b.signals)],
-            ['tradingview-metrics','/api/tradingview/signals/metrics',b=>b&&typeof b==='object'],
-          ];
-          for(const [name,path,valid] of endpoints)await check(name,async()=>{const b=(await request(`${backend}${path}`)).body;assert(valid(b),'payload contract failed');return 'ok'});
-
-          await check('mt5-config',async()=>{const c=(await request(`${site}/mt5-cloud.json?audit=${Date.now()}`)).body;mt5=String(c.baseUrl||'').replace(/\/$/,'');assert(c.priceCache?.retentionDays===60&&c.priceCache?.symbols?.length===16,'MT5 config contract');return mt5});
-          await check('mt5-health',async()=>{const b=(await request(`${mt5}/api/mt5/health`)).body;assert(b.ok&&b.source==='MetaTrader5'&&b.priceCache?.retentionDays===60,'MT5 health contract');return 'ok'});
-          await check('mt5-status',async()=>{const b=(await request(`${mt5}/api/mt5/price-cache/status`)).body;assert(b.retentionDays===60&&b.allowedSymbols?.length===16&&b.management?.timeFifoActive===true,'MT5 status contract');return {bars:b.totalBars,chunks:b.totalChunks,health:b.databaseHealth?.state}});
-          await check('mt5-current-query',async()=>{const b=(await request(`${mt5}/api/mt5/prices?symbol=EURUSD&timeframe=M1&limit=10`)).body;assert(Array.isArray(b.bars),'bars missing');return {count:b.count,newestMs:b.newestMs}});
-          await check('mt5-range-query',async()=>{const to=Date.now(),from=to-86400000,b=(await request(`${mt5}/api/mt5/prices?symbol=EURUSD&timeframe=M1&limit=2000&from=${from}&to=${to}`)).body;assert(Array.isArray(b.bars),'range bars missing');return {count:b.count}});
-          await check('mt5-smc',async()=>{const b=(await request(`${mt5}/api/mt5/smc-snapshot`)).body;assert(b.canonicalTimeframe==='M1'&&b.methodology==='canonical-mt5-m1-reconstructed-multi-timeframe-smc','SMC contract');return b.counts});
-
-          const passed=checks.every(x=>x.passed);
-          const report={schema:'fxga.production.audit.v1',passed,generatedAt:new Date().toISOString(),site,release:build?.release??null,releaseCommit:build?.commit??null,backend:backend||null,mt5:mt5||null,summary:{passed:checks.filter(x=>x.passed).length,failed:checks.filter(x=>!x.passed).length,total:checks.length},checks};
-          fs.writeFileSync('runtime/production-audit.json',JSON.stringify(report,null,2)+'\n');
-          console.table(checks.map(x=>({check:x.name,status:x.passed?'PASS':'FAIL',ms:x.durationMs,error:x.error||''})));
-          if(!passed)process.exitCode=1;
-          NODE
+          rm -f runtime/production-audit.json
+          node scripts/production-audit.mjs
 
       - name: Publish audit report
         if: always()
         run: |
-          test -f runtime/production-audit.json || printf '%s\n' '{"schema":"fxga.production.audit.v1","passed":false,"generatedAt":"unknown","summary":{"passed":0,"failed":1,"total":1},"checks":[{"name":"audit-runner","passed":false,"error":"report was not generated"}]}' > runtime/production-audit.json
+          mkdir -p runtime
+          test -f runtime/production-audit.json || printf '%s\n' '{"schema":"fxga.production.audit.v2","passed":false,"generatedAt":"unknown","summary":{"passed":0,"failed":1,"total":1},"checks":[{"name":"audit-runner","passed":false,"error":"report was not generated"}]}' > runtime/production-audit.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add runtime/production-audit.json
@@ -122,4 +64,4 @@ jobs:
       - name: Fail workflow if audit failed
         if: always()
         run: |
-          node -e "const r=require('./runtime/production-audit.json');if(!r.passed){console.error(JSON.stringify(r,null,2));process.exit(1)}"
+          node -e "const r=JSON.parse(require('fs').readFileSync('runtime/production-audit.json','utf8'));if(!r.passed){console.error(JSON.stringify(r,null,2));process.exit(1)}"
