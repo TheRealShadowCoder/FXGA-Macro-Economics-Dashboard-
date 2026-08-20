@@ -6,6 +6,12 @@ COPY google-cloud-app/package.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY google-cloud-app/*.js ./
 
+# Inject latency-sensitive API fast paths at image-build time. The source server
+# remains the canonical readable implementation, while the production image skips
+# unrelated Firestore state fan-out for dashboard/analysis/news requests.
+RUN node optimize-server.js \
+ && node --check server.js
+
 # Cloudflare is the only frontend host. This container is intentionally API-only,
 # so a React/TypeScript build can never block recreation of the Cloud Run API.
 # Same-instance WebSocket broadcasts remain immediate; the cross-instance
