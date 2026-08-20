@@ -64,8 +64,6 @@ function fuseMarketQuote(asset: MarketQuote, payload: MT5PricePayload | undefine
   const externalStale = Boolean(asset.stale);
   const mt5Newer = mt5Ms != null && (externalMs == null || mt5Ms >= externalMs);
 
-  // MT5 is a live broker-price authority only when it is fresh enough to be useful,
-  // or when the normal cross-asset feed is missing/stale and MT5 is the newer verified observation.
   const useMT5Price =
     externalMissing ||
     (mt5Fresh && (externalMs == null || mt5Ms! >= externalMs - 60_000)) ||
@@ -90,7 +88,7 @@ function fuseMarketQuote(asset: MarketQuote, payload: MT5PricePayload | undefine
     change: useMT5Price ? resolvedChange : asset.change ?? resolvedChange,
     changePercent: useMT5Price ? resolvedChangePercent : asset.changePercent ?? resolvedChangePercent,
     fetchedAt: useMT5Price ? mt5Iso ?? asset.fetchedAt : asset.fetchedAt,
-    sourceName: useMT5Price ? 'MetaTrader 5 · FXGA canonical M1 broker feed' : asset.sourceName,
+    sourceName: useMT5Price ? 'MetaTrader 5 · FXGA rolling 60-day canonical M1 broker feed' : asset.sourceName,
     source: useMT5Price ? 'MetaTrader 5' : asset.source,
     sourceUrl: useMT5Price ? undefined : asset.sourceUrl,
     mode: useMT5Price ? 'mt5-live-price-fusion' : assisted ? 'cross-feed-mt5-supplement' : asset.mode,
@@ -158,14 +156,14 @@ export function MarketsView({ assets }: { assets: MarketQuote[] }) {
   return <>
     <section className="cross-asset-tabs" role="tablist" aria-label="Cross asset workspace tabs">
       <button className={tab === 'board' ? 'active' : ''} onClick={() => setTab('board')}><strong>Cross Asset Board</strong><span>Prices + technical structure</span></button>
-      <button className={tab === 'mt5' ? 'active' : ''} onClick={() => setTab('mt5')}><strong>MT5 Data + SMC Fusion</strong><span>20K M1 cache · raw data · reconstruction</span></button>
+      <button className={tab === 'mt5' ? 'active' : ''} onClick={() => setTab('mt5')}><strong>MT5 Data + SMC Fusion</strong><span>60-day M1 research database · raw data · reconstruction</span></button>
     </section>
     {tab === 'mt5' ? <MT5ExtractedDataView /> : <>
       <section className="market-summary panel">
         <div>
           <span className="eyebrow">Cross Asset Market Feed</span>
           <h2>FX, yields, commodities, equity indices and digital assets</h2>
-          <p>FXGA now resolves every displayed price against the MT5 broker cache and the normal cross-asset feeds. Fresh MT5 prices are preferred when they are newer or when the normal feed is missing or stale; a stale MT5 observation can no longer overwrite a fresher external quote. Source and freshness remain visible on every card.</p>
+          <p>FXGA resolves every displayed price against the MT5 broker cache and the normal cross-asset feeds. Fresh MT5 prices are preferred when they are newer or when the normal feed is missing or stale; a stale MT5 observation cannot overwrite a fresher external quote. MT5 M1 history is retained on a rolling 60-day FIFO for event research and future backtests.</p>
         </div>
         <div className="market-summary-stats">
           <strong>{displayAssets.filter((item) => item.price != null).length}</strong><span>priced</span>
@@ -184,7 +182,7 @@ export function MarketsView({ assets }: { assets: MarketQuote[] }) {
             ? isClosed ? 'MT5 closed' : asset.stale ? 'MT5 cached' : 'MT5 live'
             : asset.mt5Assisted ? 'Live · MT5 covered' : asset.stale ? 'Last verified' : 'Live';
           const sourceDetail = isMT5
-            ? `MetaTrader 5 · canonical M1 broker price${asset.mt5FreshnessMinutes != null ? ` · ${Math.round(asset.mt5FreshnessMinutes)}m age` : ''}`
+            ? `MetaTrader 5 · rolling 60-day canonical M1${asset.mt5FreshnessMinutes != null ? ` · ${Math.round(asset.mt5FreshnessMinutes)}m age` : ''}`
             : asset.mt5Assisted ? `${asset.sourceName || 'Market feed'} · MT5 available as fallback` : asset.sourceName || 'Market feed';
           return <article className={`market-card ${asset.stale ? 'stale' : ''} ${isMT5 ? 'mt5-market-card' : ''}`} key={asset.id}>
             <div className="market-card-head"><div><span className="eyebrow">{asset.assetClass || 'Market'} · {asset.symbol}</span><h3>{asset.label}</h3></div><span className={`market-state ${asset.stale ? 'stale' : 'live'} ${isMT5 ? 'mt5' : ''}`}>{sourceState}</span></div>
