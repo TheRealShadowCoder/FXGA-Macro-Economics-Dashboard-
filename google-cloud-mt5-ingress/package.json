@@ -1,14 +1,14 @@
 {
   "name": "fxga-mt5-signal-ingress",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "start": "node server.js",
-    "check": "node --check server.js"
+    "start": "node fix-price-cache-range.js && node server.js",
+    "check": "node --check fix-price-cache-range.js && node --check price-cache.js && node --check mt5-smc-engine.js && node --check server.js"
   },
   "dependencies": {
     "@google-cloud/firestore": "^7.11.5"
