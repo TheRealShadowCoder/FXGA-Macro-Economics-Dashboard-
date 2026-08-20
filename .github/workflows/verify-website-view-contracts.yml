@@ -1,0 +1,125 @@
+name: Verify FXGA Website View Contracts
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - 'Deploy FXGA Cloudflare Static Website'
+      - 'Deploy FXGA Google Cloud Application'
+      - 'Deploy FXGA Google Cloud MT5 Signal Ingress'
+    types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-website-view-contracts.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fxga-website-view-contracts
+  cancel-in-progress: true
+
+jobs:
+  verify-views:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SITE_URL: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Audit every production navigation view
+        run: |
+          node <<'NODE'
+          const site=process.env.SITE_URL.replace(/\/$/,'');
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          const results=[];
+          const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+
+          async function request(url,{json=true,timeoutMs=45_000,attempts=4}={}){
+            let last;
+            for(let attempt=1;attempt<=attempts;attempt++){
+              const controller=new AbortController();
+              const timer=setTimeout(()=>controller.abort(),timeoutMs);
+              try{
+                const response=await fetch(url,{headers:{Accept:json?'application/json':'text/html,*/*','Cache-Control':'no-cache'},cache:'no-store',signal:controller.signal});
+                const text=await response.text();
+                clearTimeout(timer);
+                if(!response.ok)throw new Error(`${url} HTTP ${response.status}: ${text.slice(0,400)}`);
+                if(!json)return {response,text};
+                let body;try{body=JSON.parse(text);}catch{throw new Error(`${url} returned invalid JSON`);}
+                return {response,text,body};
+              }catch(error){clearTimeout(timer);last=error;if(attempt<attempts)await sleep(attempt*1200);}
+            }
+            throw last;
+          }
+
+          async function check(name,fn){
+            const start=Date.now();
+            try{const detail=await fn();results.push({name,status:'PASS',ms:Date.now()-start,detail:typeof detail==='string'?detail:JSON.stringify(detail??'')});console.log('PASS',name,detail??'');}
+            catch(error){results.push({name,status:'FAIL',ms:Date.now()-start,detail:String(error?.message||error)});console.error('FAIL',name,error);}
+          }
+
+          let build,backend,root,bundle='';
+          await check('Static website shell',async()=>{
+            root=(await request(`${site}/?view-audit=${Date.now()}`,{json:false})).text;
+            assert(/id=["']root["']/.test(root),'React root missing');
+            return 'React shell present';
+          });
+          await check('Current release marker',async()=>{
+            build=(await request(`${site}/fxga-build.json?view-audit=${Date.now()}`)).body;
+            assert(build.release==='cross-asset-mt5-60d-event-research',`wrong release ${build.release}`);
+            backend=String(build.backendUrl||'').replace(/\/$/,'');
+            assert(backend.startsWith('https://'),'backend URL absent');
+            return {commit:build.commit,backend};
+          });
+          await check('All sidebar views compiled',async()=>{
+            const scripts=[...root.matchAll(/<script[^>]+src=["']([^"']+\.js[^"']*)["']/g)].map(m=>new URL(m[1],site).toString());
+            assert(scripts.length,'compiled JS bundle missing');
+            for(const src of scripts.slice(0,10))bundle+=(await request(src,{json:false,timeoutMs:30_000})).text;
+            for(const label of ['Macro Dashboard','Cross Asset Prices','Macro Analysis','Research & Risk','Currency Outlook','Live Signal Intelligence','Economic Calendar','Core Indicators','Macro Data Library','Data Operations','Central Bank News','Data Coverage'])assert(bundle.includes(label),`compiled navigation missing ${label}`);
+            assert(!bundle.includes('timed out after 12 seconds'),'obsolete 12-second core timeout still live');
+            return '12/12 navigation labels compiled';
+          });
+
+          await check('Macro Dashboard',async()=>{const b=(await request(`${backend}/api/dashboard`)).body;assert(Array.isArray(b.macro)&&Array.isArray(b.calendar)&&Array.isArray(b.market)&&Array.isArray(b.news)&&Array.isArray(b.sources),'dashboard contract incomplete');return {macro:b.macro.length,calendar:b.calendar.length,market:b.market.length,news:b.news.length};});
+          await check('Cross Asset Prices',async()=>{const b=(await request(`${backend}/api/market-prices`)).body;assert(Array.isArray(b.assets),'market assets missing');return `${b.assets.length} market assets`;});
+          await check('Macro Analysis',async()=>{const b=(await request(`${backend}/api/analysis`)).body;assert(b&&typeof b==='object'&&Array.isArray(b.dimensions),'macro analysis dimensions missing');return `${b.dimensions.length} dimensions`;});
+          await check('Research & Risk',async()=>{const b=(await request(`${backend}/api/research`)).body;assert(b&&b.dataQuality&&b.risk&&Array.isArray(b.forecasts)&&Array.isArray(b.scenarios)&&Array.isArray(b.regimes)&&b.operatingStandards,'research payload incomplete');return {forecasts:b.forecasts.length,scenarios:b.scenarios.length,regimes:b.regimes.length};});
+          await check('Currency Outlook',async()=>{const b=(await request(`${backend}/api/session-signals`)).body;assert(Array.isArray(b.sessions)&&Array.isArray(b.rankedOpportunities),'session signals contract incomplete');return {sessions:b.sessions.length,ranked:b.rankedOpportunities.length};});
+
+          let signalId='';
+          await check('Live Signal Intelligence · live list',async()=>{const b=(await request(`${backend}/api/tradingview/signals/live?limit=5`)).body;assert(Array.isArray(b.signals),'live signal list missing');signalId=b.signals[0]?.id||'';return `${b.signals.length} live signals`;});
+          await check('Live Signal Intelligence · history',async()=>{const b=(await request(`${backend}/api/tradingview/signals?limit=5`)).body;assert(Array.isArray(b.signals),'signal history missing');signalId=signalId||b.signals[0]?.id||'';return `${b.signals.length} historical signals`;});
+          await check('Live Signal Intelligence · metrics',async()=>{const b=(await request(`${backend}/api/tradingview/signals/metrics`)).body;assert(b&&typeof b==='object','signal metrics missing');return {totalSignals:b.totalSignals??0,totalEvents:b.totalEvents??0};});
+          if(signalId)await check('Live Signal Intelligence · detail',async()=>{const b=(await request(`${backend}/api/tradingview/signals/${encodeURIComponent(signalId)}`)).body;assert(b.signal&&Array.isArray(b.events),'signal detail contract incomplete');return `${b.events.length} lifecycle events`;});
+
+          await check('Economic Calendar',async()=>{const b=(await request(`${backend}/api/calendar?days=7&importance=1`)).body;assert(Array.isArray(b.events),'calendar events missing');return `${b.events.length} calendar events`;});
+          await check('Economic Event Research',async()=>{const b=(await request(`${backend}/api/event-studies?days=60&limit=30`)).body;assert(b.days===60&&Array.isArray(b.studies)&&Array.isArray(b.preNewsWindows)&&Array.isArray(b.horizons),'60-day event study contract incomplete');return {studies:b.studies.length,preNews:b.preNewsWindows,horizons:b.horizons};});
+          await check('Event Pattern Profiles',async()=>{const b=(await request(`${backend}/api/event-pattern-profiles?minObservations=1&limit=30`)).body;assert(Array.isArray(b.profiles),'event pattern profiles missing');return `${b.profiles.length} profiles`;});
+          await check('Core Indicators',async()=>{const b=(await request(`${backend}/api/dashboard`)).body;assert(Array.isArray(b.macro),'core indicator macro list missing');return `${b.macro.length} indicators`;});
+
+          let catalog;
+          await check('Macro Data Library · catalog',async()=>{catalog=(await request(`${backend}/api/fred/catalog`)).body;assert(typeof catalog.total==='number'&&typeof catalog.maxSeriesPerRequest==='number'&&Array.isArray(catalog.categories)&&Array.isArray(catalog.series),'FRED catalog contract incomplete');if(catalog.total>0)assert(catalog.categories.length>0,'FRED categories empty despite available series');return {total:catalog.total,categories:catalog.categories.length,max:catalog.maxSeriesPerRequest};});
+          if(catalog?.categories?.length){
+            await check('Macro Data Library · category query',async()=>{const category=catalog.categories[0].id;const b=(await request(`${backend}/api/fred?category=${encodeURIComponent(category)}&limit=16`)).body;assert(Array.isArray(b.series),'FRED category series missing');return `${category}: ${b.series.length} series`;});
+          }
+
+          await check('Data Operations · catalog',async()=>{const b=(await request(`${backend}/api/acquisition/catalog`)).body;assert(Array.isArray(b.sources)&&b.policy,'acquisition catalog incomplete');return `${b.sources.length} source groups`;});
+          await check('Data Operations · operational health',async()=>{const b=(await request(`${backend}/api/super-economist`)).body;assert(b&&typeof b==='object'&&b.operationalHealth,'operational health missing');return b.operationalHealth.status||'available';});
+          await check('Data Operations · evidence quality',async()=>{const b=(await request(`${backend}/api/data-quality`)).body;assert(b.macro&&b.market&&b.technical&&b.calendar,'data-quality contract incomplete');return b.macro.coverage?.status||'available';});
+          await check('Central Bank News',async()=>{const b=(await request(`${backend}/api/news`)).body;assert(Array.isArray(b.items),'news items missing');return `${b.items.length} news items`;});
+          await check('Data Coverage',async()=>{const b=(await request(`${backend}/api/sources`)).body;assert(Array.isArray(b.sources)&&b.sources.length>0,'source coverage missing');return `${b.sources.length} source groups`;});
+
+          await check('MT5 Cross Asset runtime config',async()=>{const c=(await request(`${site}/mt5-cloud.json?view-audit=${Date.now()}`)).body;assert(c.priceCache?.retentionDays===60&&Array.isArray(c.priceCache?.symbols)&&c.priceCache.symbols.length===16,'MT5 website config incomplete');return c.baseUrl;});
+
+          console.log('\n=== FXGA WEBSITE VIEW AUDIT ===');
+          console.table(results.map(({name,status,ms,detail})=>({name,status,ms,detail})));
+          const failed=results.filter(r=>r.status==='FAIL');
+          if(failed.length){console.error(`${failed.length} website view contract(s) failed`);process.exit(1);}
+          console.log(`ALL ${results.length} WEBSITE VIEW CONTRACTS PASSED`);
+          NODE
