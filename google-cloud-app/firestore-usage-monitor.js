@@ -32,13 +32,24 @@ async function series(type,start,end,aggregation){
 }
 function sumRows(rows){let total=0;for(const row of rows)for(const point of row.points||[])total+=pointValue(point);return total;}
 function latestRows(rows){let winner={value:0,time:null,ms:0};for(const row of rows)for(const point of row.points||[]){const time=pointTime(point),ms=time?Date.parse(time):0;if(ms>=winner.ms)winner={value:pointValue(point),time,ms};}return winner;}
+function monitoringFallback(error){
+  const message=String(error?.message||error||'');
+  const permission=/permission_denied|permission denied|code\s*7/i.test(message);
+  return {
+    mode:'firestore-ledger-fallback',
+    diagnostic:permission?'monitoring-viewer-unavailable':'monitoring-query-unavailable',
+    notice:permission
+      ?'Cloud Monitoring project metrics are not readable by this runtime. Firestore signal lifecycle totals remain live through the internal ledger while project-wide quota gauges are hidden.'
+      :'Cloud Monitoring project metrics are temporarily unavailable. Firestore signal lifecycle totals remain live through the internal ledger while project-wide quota gauges are hidden.',
+  };
+}
 
 export function createFirestoreUsageMonitor({metricsRef}){
   let cache={at:0,value:null};
   async function snapshot(){
     const now=new Date();if(cache.value&&Date.now()-cache.at<60_000)return cache.value;
     const metricSnap=await metricsRef.get().catch(()=>null),m=metricSnap?.exists?metricSnap.data():{};
-    const base={generatedAt:now.toISOString(),projectId:PROJECT_ID,databaseId:DATABASE_ID,quotaTimezone:QUOTA_TIMEZONE,quotaDayStart:quotaDayStart(now).toISOString(),monitoringAvailable:false,monitoringError:null,storage:{...ratio(0,FREE.storageBytes),usedGiB:0,limitGiB:1,remainingGiB:1,growthBytesPerDay:null,projectedDaysRemaining:null},reads:ratio(0,FREE.reads),writes:ratio(0,FREE.writes),deletes:ratio(0,FREE.deletes),outbound:{limitBytes:FREE.outboundBytes,limitGiB:10,usedBytes:null,note:'Firestore free tier includes 10 GiB/month outbound. This monitor does not infer billable egress from response payloads.'},signalPipeline:{totalEvents:Number(m.totalEvents||0),mt5Events:Number(m.mt5Events||0),totalSignals:Number(m.totalSignals||0),mt5Signals:Number(m.mt5Signals||0),estimatedWritesPerAcceptedEvent:4,remainingAcceptedEventsAtCurrentWriteHeadroom:0},notes:['Free-tier operation quotas reset around midnight Pacific Time.','Cloud Monitoring Firestore metrics are sampled periodically and can appear several minutes after the underlying operation.','Storage is the Firestore data + index storage metric, so it includes index overhead rather than only JSON payload bytes.']};
+    const base={generatedAt:now.toISOString(),projectId:PROJECT_ID,databaseId:DATABASE_ID,quotaTimezone:QUOTA_TIMEZONE,quotaDayStart:quotaDayStart(now).toISOString(),monitoringAvailable:false,monitoringMode:'firestore-ledger-fallback',monitoringError:null,monitoringNotice:'Project-wide Cloud Monitoring metrics are not yet available; the Firestore signal ledger remains active.',monitoringDiagnostic:null,storage:{...ratio(0,FREE.storageBytes),usedGiB:0,limitGiB:1,remainingGiB:1,growthBytesPerDay:null,projectedDaysRemaining:null},reads:ratio(0,FREE.reads),writes:ratio(0,FREE.writes),deletes:ratio(0,FREE.deletes),outbound:{limitBytes:FREE.outboundBytes,limitGiB:10,usedBytes:null,note:'Firestore free tier includes 10 GiB/month outbound. This monitor does not infer billable egress from response payloads.'},signalPipeline:{totalEvents:Number(m.totalEvents||0),mt5Events:Number(m.mt5Events||0),totalSignals:Number(m.totalSignals||0),mt5Signals:Number(m.mt5Signals||0),estimatedWritesPerAcceptedEvent:4,remainingAcceptedEventsAtCurrentWriteHeadroom:null},notes:['Free-tier operation quotas reset around midnight Pacific Time.','Project-wide quota gauges are shown only when Cloud Monitoring returns verified metrics.','Signal lifecycle counts are read directly from the FXGA Firestore ledger and remain available without Cloud Monitoring.']};
     try{
       const dayStart=quotaDayStart(now),weekStart=new Date(now.getTime()-8*86400_000);
       const [readRows,writeRows,deleteRows,storageRows,storageDaily]=await Promise.all([
@@ -54,11 +65,11 @@ export function createFirestoreUsageMonitor({metricsRef}){
       if(dailyPoints.length>=2){const first=dailyPoints[0],last=dailyPoints[dailyPoints.length-1],days=Math.max(1,(last.ms-first.ms)/86400_000);growthBytesPerDay=(last.value-first.value)/days;if(growthBytesPerDay>0&&storageBytes<FREE.storageBytes)projectedDaysRemaining=(FREE.storageBytes-storageBytes)/growthBytesPerDay;}
       const storageRatio=ratio(storageBytes,FREE.storageBytes),writeRatio=ratio(writes,FREE.writes);
       const metricTimes=[storageLatest.time,...readRows.flatMap(r=>(r.points||[]).map(pointTime)),...writeRows.flatMap(r=>(r.points||[]).map(pointTime)),...deleteRows.flatMap(r=>(r.points||[]).map(pointTime))].filter(Boolean).sort();
-      base.monitoringAvailable=true;base.metricTimestamp=metricTimes.at(-1)||null;
+      base.monitoringAvailable=true;base.monitoringMode='cloud-monitoring';base.monitoringNotice=null;base.monitoringDiagnostic=null;base.metricTimestamp=metricTimes.at(-1)||null;
       base.storage={...storageRatio,usedGiB:storageBytes/GIB,limitGiB:1,remainingGiB:storageRatio.remaining/GIB,growthBytesPerDay,projectedDaysRemaining};
       base.reads=ratio(reads,FREE.reads);base.writes=writeRatio;base.deletes=ratio(deletes,FREE.deletes);
       base.signalPipeline.remainingAcceptedEventsAtCurrentWriteHeadroom=Math.max(0,Math.floor(writeRatio.remaining/4));
-    }catch(error){base.monitoringError=String(error?.message||error).slice(0,600);base.signalPipeline.remainingAcceptedEventsAtCurrentWriteHeadroom=Math.floor(FREE.writes/4);}
+    }catch(error){const fallback=monitoringFallback(error);base.monitoringAvailable=false;base.monitoringMode=fallback.mode;base.monitoringNotice=fallback.notice;base.monitoringDiagnostic=fallback.diagnostic;base.monitoringError=null;}
     cache={at:Date.now(),value:base};return base;
   }
   return {snapshot,freeTier:FREE};
