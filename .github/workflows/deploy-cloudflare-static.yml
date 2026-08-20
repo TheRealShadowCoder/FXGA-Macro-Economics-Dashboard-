@@ -88,11 +88,27 @@ jobs:
           throw last||new Error('Google Cloud API did not become TradingView-ready');
           NODE
 
-      - name: Build Cloudflare hosted frontend
+      - name: Build Cloudflare hosted frontend and stamp exact release
         run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          const marker={commit:process.env.GITHUB_SHA,builtAt:new Date().toISOString(),release:'cross-asset-mt5-20k-smc-fusion',features:['cross-asset-tabs','mt5-data-smc-fusion','20k-canonical-m1','160-bar-300-second-sync','size-calculator']};
+          fs.writeFileSync('public/fxga-build.json',JSON.stringify(marker,null,2)+'\n');
+          NODE
           npm install --no-audit --no-fund
           npm run build
           grep -R -F "$APP_URL" dist >/dev/null || { echo '::error::Frontend build is not pinned to the Google Cloud API'; exit 1; }
+          grep -R -F "MT5 Data + SMC Fusion" dist >/dev/null || { echo '::error::Compiled frontend is missing the Cross Asset MT5 Data + SMC Fusion tab'; exit 1; }
+          grep -R -F "20K M1 cache" dist >/dev/null || { echo '::error::Compiled frontend is missing the 20K canonical M1 tab contract'; exit 1; }
+          test -f dist/fxga-build.json || { echo '::error::Release marker was not copied into the static build'; exit 1; }
+          node - <<'NODE'
+          const fs=require('fs');
+          const marker=JSON.parse(fs.readFileSync('dist/fxga-build.json','utf8'));
+          if(marker.commit!==process.env.GITHUB_SHA)throw new Error(`Build marker commit mismatch: ${marker.commit}`);
+          if(!marker.features?.includes('mt5-data-smc-fusion'))throw new Error('MT5 fusion release marker missing');
+          console.log('VERIFIED BEFORE DEPLOY: compiled frontend contains MT5 Data + SMC Fusion and exact release marker',marker);
+          NODE
 
       - name: Enforce static-only Cloudflare configuration
         env:
@@ -119,17 +135,26 @@ jobs:
           wranglerVersion: '4.123.0'
           command: deploy
 
-      - name: Verify Cloudflare is serving only the website
+      - name: Verify exact Cross Asset MT5 release is live on Cloudflare
         run: |
           node <<'NODE'
-          const site=process.env.CLOUDFLARE_SITE_URL,api=process.env.APP_URL;
+          const site=process.env.CLOUDFLARE_SITE_URL,api=process.env.APP_URL,sha=process.env.GITHUB_SHA;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          let root;
-          for(let i=0;i<20;i++){
-            try{root=await fetch(site+'/',{headers:{'Cache-Control':'no-cache'}});if(root.ok)break;}catch{}
+          let root,marker,last;
+          for(let i=0;i<30;i++){
+            try{
+              root=await fetch(site+'/?release='+encodeURIComponent(sha),{headers:{'Cache-Control':'no-cache'},cache:'no-store'});
+              const markerResponse=await fetch(site+'/fxga-build.json?release='+encodeURIComponent(sha),{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
+              if(root.ok&&markerResponse.ok){
+                const candidate=await markerResponse.json();
+                if(candidate.commit===sha&&candidate.release==='cross-asset-mt5-20k-smc-fusion'&&candidate.features?.includes('mt5-data-smc-fusion')){marker=candidate;break;}
+                last=new Error(`Cloudflare still serves another release: ${candidate.commit||'unknown'}`);
+              }
+            }catch(error){last=error;}
             await sleep(2000);
           }
           if(!root?.ok)throw new Error('Cloudflare static website did not become ready');
+          if(!marker)throw last||new Error('Exact Cross Asset MT5 release marker did not become live');
           const html=await root.text();
           if(!/<div[^>]+id=["']root["']/i.test(html))throw new Error('Cloudflare root is not the FXGA frontend');
           const edgeApi=await fetch(site+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
@@ -138,5 +163,6 @@ jobs:
           const cloud=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
           const h=await cloud.json();
           if(!cloud.ok||h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore'||h.cloudflareProcessing!==false||h.tradingViewSignals?.schema!=='fxga.smc.signal.v3')throw new Error('Google Cloud processing/TradingView contract failed');
-          console.log('VERIFIED: Cloudflare serves static website; browser data and TradingView signal paths target Google Cloud directly.');
+          console.log('VERIFIED LIVE RELEASE:',marker);
+          console.log('VERIFIED: Cloudflare serves the exact MT5 Data + SMC Fusion frontend; browser processing continues to target Google Cloud.');
           NODE
