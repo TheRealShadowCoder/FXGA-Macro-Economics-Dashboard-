@@ -1,6 +1,8 @@
 // Browser-side routing boundary for the Cloudflare-hosted SPA.
 // Cloudflare only serves static files. Every /api request and live socket is sent
 // directly from the user's browser to the public Google Cloud Run application.
+// Release guard: this source revision includes safe Firestore telemetry, resilient
+// Live Signal Intelligence reads, and FRED/CNBC Event Study source provenance.
 const rawBase = String(
   (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_GOOGLE_CLOUD_API_BASE || ''
 ).trim().replace(/\/+$/, '');
