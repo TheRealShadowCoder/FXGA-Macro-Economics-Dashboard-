@@ -15,6 +15,7 @@ const db = new Firestore({ projectId:PROJECT_ID, ignoreUndefinedProperties:true 
 const state = db.collection('fxga_collector_state');
 const chunks = db.collection('fxga_collector_state_chunks');
 const releaseSnapshots = db.collection('fxga_release_snapshots');
+const calendarHistory = db.collection('fxga_calendar_history');
 const tradingViewLive = db.collection('fxga_tradingview_live');
 const cache = new Map();
 const CACHE_MS = 2500;
@@ -176,17 +177,22 @@ async function api(req,res,url){
   if(url.pathname==='/api/market-prices')return sendJson(res,200,market,'public, max-age=2');
   if(url.pathname==='/api/technical')return sendJson(res,200,technical,'public, max-age=3');
   if(url.pathname==='/api/calendar-history'){
-    const days=Math.min(7,Math.max(1,Number(url.searchParams.get('days')||7))),now=Date.now(),cutoff=now-days*86400000;
-    return sendJson(res,200,{generatedAt:s.calendar?.payload?.generatedAt??null,days,events:events.filter(e=>{const time=Date.parse(e.date);return Number.isFinite(time)&&time<=now&&time>=cutoff;})},'public, max-age=5');
+    const days=Math.min(60,Math.max(1,Number(url.searchParams.get('days')||60))),now=Date.now(),cutoff=now-days*86400000,cutoffIso=new Date(cutoff).toISOString();
+    const archived=await calendarHistory.where('date','>=',cutoffIso).orderBy('date','asc').limit(3000).get();
+    const merged=new Map();
+    for(const event of events){const time=Date.parse(event?.date||'');if(Number.isFinite(time)&&time<=now&&time>=cutoff)merged.set(event.id||`${event.date}:${event.currency}:${event.event}`,event);}
+    for(const doc of archived.docs){const event=doc.data(),time=Date.parse(event?.date||'');if(Number.isFinite(time)&&time<=now&&time>=cutoff)merged.set(event.id||doc.id,event);}
+    return sendJson(res,200,{generatedAt:s.calendar?.payload?.generatedAt??null,days,events:[...merged.values()].sort((a,b)=>Date.parse(a.date)-Date.parse(b.date)),source:'fxga_calendar_history + current calendar state'},'public, max-age=5');
   }
   if(url.pathname==='/api/calendar'){
     const days=Math.min(31,Math.max(1,Number(url.searchParams.get('days')||7))),importance=Math.min(3,Math.max(1,Number(url.searchParams.get('importance')||1))),cutoff=Date.now()+days*86400000;
     return sendJson(res,200,{events:events.filter(e=>Number(e.importance??1)>=importance&&Date.parse(e.date)<=cutoff).sort((a,b)=>Date.parse(a.date)-Date.parse(b.date)),cached:true,mode:'google-cloud-direct',calendarSyncedAt:s.calendar?.payload?.generatedAt??null},'public, max-age=5');
   }
   if(url.pathname==='/api/event-studies'){
-    const days=Math.min(7,Math.max(1,Number(url.searchParams.get('days')||7))),currency=(url.searchParams.get('currency')||'').toUpperCase(),cutoff=Date.now()-days*86400000;
+    const days=Math.min(60,Math.max(1,Number(url.searchParams.get('days')||60))),currency=(url.searchParams.get('currency')||'').toUpperCase(),cutoff=Date.now()-days*86400000;
     let studies=Array.isArray(s.eventStudies?.payload?.studies)?s.eventStudies.payload.studies:[];studies=studies.filter(study=>Date.parse(study.releaseAt)>=cutoff&&(!currency||study.currency===currency));
-    return sendJson(res,200,{generatedAt:s.eventStudies?.payload?.generatedAt??null,days,currency:currency||null,summary:s.eventStudies?.payload?.summary??{studies:studies.length,measuredHorizons:0,byHorizon:{}},studies},'public, max-age=5');
+    const storedSummary=s.eventStudies?.payload?.summary??{studies:studies.length,measuredHorizons:0,assetMeasurements:0,byHorizon:{}};
+    return sendJson(res,200,{generatedAt:s.eventStudies?.payload?.generatedAt??null,days,currency:currency||null,source:s.eventStudies?.payload?.source??'persisted Google Cloud event research',priceUniverse:s.eventStudies?.payload?.priceUniverse??[],horizons:s.eventStudies?.payload?.horizons??[],summary:storedSummary,studies},'public, max-age=5');
   }
   if(url.pathname==='/api/technical-history'){
     const asset=(url.searchParams.get('asset')||'EURUSD').toUpperCase(),timeframe=(url.searchParams.get('timeframe')||'H1').toUpperCase(),frame=technical.assets?.[asset]?.timeframes?.[timeframe];
