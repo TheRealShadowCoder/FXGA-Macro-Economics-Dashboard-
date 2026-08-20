@@ -23,7 +23,7 @@ if(build.status===0){
     ['cross-asset-board','Cross Asset Board'],
     ['mt5-fusion-tab','MT5 Data + SMC Fusion'],
     ['event-study','Event Study & Backtesting'],
-    ['event-price-research','Economic releases tied to Cross Asset price paths'],
+    ['event-price-research','Price action before and after every economic release'],
     ['live-signal-intelligence','Live Signal Intelligence'],
     ['macro-data-library','Macro Data Library'],
     ['data-operations','Data Operations'],
