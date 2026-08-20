@@ -33,6 +33,7 @@ env:
   GCP_DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
   CLOUDFLARE_ACCOUNT_ID: 4f260a0775a3df407e08512610c9898b
   CLOUDFLARE_SITE_URL: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
+  RELEASE_NAME: cross-asset-mt5-60d-event-research
 
 jobs:
   deploy-static-site:
@@ -62,6 +63,7 @@ jobs:
           WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
           WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
         run: |
+          set -euo pipefail
           WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
           test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
           echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
@@ -74,101 +76,98 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Discover live FXGA macro API and verify contract
+      - name: Resolve and warm the Google Cloud API
         run: |
           set -euo pipefail
           gcloud config set project "$GCP_PROJECT_ID"
-
-          APP_URL=''
-          APP_SERVICE=''
-
-          for attempt in $(seq 1 120); do
-            while IFS=$'\t' read -r service url; do
-              [ -n "${url:-}" ] || continue
-              if FXGA_CANDIDATE_URL="$url" node <<'NODE'
-          const base=process.env.FXGA_CANDIDATE_URL;
-          const timeout=ms=>new Promise((_,reject)=>setTimeout(()=>reject(new Error('timeout')),ms));
-          async function main(){
-            try{
-              const healthResponse=await Promise.race([
-                fetch(base+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),
-                timeout(5000)
-              ]);
-              if(!healthResponse.ok)process.exit(1);
-              const h=await healthResponse.json();
-              if(h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')process.exit(1);
-              const dashboardResponse=await Promise.race([
-                fetch(base+'/api/dashboard',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),
-                timeout(8000)
-              ]);
-              if(!dashboardResponse.ok)process.exit(1);
-              const d=await dashboardResponse.json();
-              if(!d||!Array.isArray(d.market)||!Array.isArray(d.sources))process.exit(1);
-              console.log('FXGA macro API candidate accepted:',base,'market assets=',d.market.length);
-              process.exit(0);
-            }catch{process.exit(1);}
-          }
-          main();
-          NODE
-              then
-                APP_URL="$url"
-                APP_SERVICE="$service"
-                break
-              fi
-            done < <(gcloud run services list --region "$GCP_REGION" --platform managed --format='value(metadata.name,status.url)' 2>/dev/null || true)
-
-            if [ -n "$APP_URL" ]; then
-              echo "Discovered FXGA macro backend service: $APP_SERVICE"
-              echo "Discovered FXGA macro backend URL: $APP_URL"
-              break
-            fi
-
-            echo "No valid FXGA macro API discovered yet ($attempt/120). Waiting 5 seconds..."
-            sleep 5
-          done
-
-          test -n "$APP_URL" || { echo '::error::No Cloud Run service exposing the FXGA /api/dashboard contract was found within 10 minutes'; exit 1; }
-          export APP_URL
+          APP_URL=$(gcloud run services describe "$GCP_APP_SERVICE" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --format='value(status.url)')
+          test -n "$APP_URL" || { echo '::error::Google Cloud application URL is missing'; exit 1; }
           echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
-          echo "APP_SERVICE=$APP_SERVICE" >> "$GITHUB_ENV"
+          echo "APP_SERVICE=$GCP_APP_SERVICE" >> "$GITHUB_ENV"
           echo "VITE_GOOGLE_CLOUD_API_BASE=$APP_URL" >> "$GITHUB_ENV"
 
-          node <<'NODE'
+          APP_URL="$APP_URL" node <<'NODE'
           const base=process.env.APP_URL;
-          const [healthResponse,dashboardResponse]=await Promise.all([
-            fetch(base+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),
-            fetch(base+'/api/dashboard',{headers:{Accept:'application/json','Cache-Control':'no-cache'}})
-          ]);
-          if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}`);
-          if(!dashboardResponse.ok)throw new Error(`/api/dashboard ${dashboardResponse.status}`);
-          const h=await healthResponse.json();
-          const d=await dashboardResponse.json();
-          if(h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')throw new Error('Not the FXGA Google Cloud macro backend');
-          if(!Array.isArray(d.market)||!Array.isArray(d.sources))throw new Error('Dashboard payload contract missing');
-          console.log('Google Cloud macro API ready:',base,'service=',process.env.APP_SERVICE||'auto-discovered');
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          async function timed(url,ms){
+            const controller=new AbortController();
+            const timer=setTimeout(()=>controller.abort(),ms);
+            try{return await fetch(url,{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store',signal:controller.signal});}
+            finally{clearTimeout(timer);}
+          }
+          let last;
+          for(let attempt=1;attempt<=24;attempt++){
+            try{
+              const healthResponse=await timed(base+'/api/health',30000);
+              if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}`);
+              const h=await healthResponse.json();
+              if(h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')throw new Error('Google Cloud health contract mismatch');
+
+              const dashboardResponse=await timed(base+'/api/dashboard',45000);
+              if(!dashboardResponse.ok)throw new Error(`/api/dashboard ${dashboardResponse.status}`);
+              const d=await dashboardResponse.json();
+              if(!Array.isArray(d.market)||!Array.isArray(d.sources))throw new Error('Dashboard payload contract missing market/sources');
+              console.log('Google Cloud macro API ready:',base,'assets=',d.market.length,'attempt=',attempt);
+              process.exit(0);
+            }catch(error){
+              last=error;
+              console.log(`Backend warm-up attempt ${attempt}/24 failed:`,String(error?.message||error));
+              await sleep(5000);
+            }
+          }
+          throw last||new Error('Google Cloud macro API did not become ready');
           NODE
 
-      - name: Build Cloudflare hosted frontend and stamp exact release
+      - name: Build Cloudflare static frontend and stamp release
         run: |
           set -euo pipefail
           node <<'NODE'
           const fs=require('fs');
-          const marker={commit:process.env.RELEASE_SHA,builtAt:new Date().toISOString(),release:'cross-asset-mt5-20k-smc-fusion',backendService:process.env.APP_SERVICE||null,backendUrl:process.env.APP_URL||null,features:['cross-asset-tabs','mt5-data-smc-fusion','20k-canonical-m1','160-bar-300-second-sync','size-calculator','live-signal-intelligence','sticky-cross-asset-tabs']};
+          const marker={
+            commit:process.env.RELEASE_SHA,
+            builtAt:new Date().toISOString(),
+            release:process.env.RELEASE_NAME,
+            backendService:process.env.APP_SERVICE||null,
+            backendUrl:process.env.APP_URL||null,
+            features:[
+              'cross-asset-tabs',
+              'mt5-data-smc-fusion',
+              '60-day-canonical-m1',
+              'incremental-mt5-sync',
+              'event-price-research',
+              'pre-news-price-action',
+              'time-signatures',
+              'pattern-profiling',
+              'cold-start-aware-api-client',
+              'live-signal-intelligence',
+              'sticky-cross-asset-tabs'
+            ]
+          };
           fs.writeFileSync('public/fxga-build.json',JSON.stringify(marker,null,2)+'\n');
           NODE
+
           npm install --no-audit --no-fund
           npm run build
+
           grep -R -F "$APP_URL" dist >/dev/null || { echo '::error::Frontend build is not pinned to the discovered Google Cloud API'; exit 1; }
           grep -R -F "MT5 Data + SMC Fusion" dist >/dev/null || { echo '::error::Compiled frontend is missing the Cross Asset MT5 Data + SMC Fusion tab'; exit 1; }
           grep -R -F "Cross Asset Board" dist >/dev/null || { echo '::error::Compiled frontend is missing the Cross Asset Board tab'; exit 1; }
-          grep -R -F "20K M1 cache" dist >/dev/null || { echo '::error::Compiled frontend is missing the 20K canonical M1 tab contract'; exit 1; }
-          grep -R -F "Live Signal Intelligence" dist >/dev/null || { echo '::error::Compiled frontend is missing the Live Signal Intelligence navigation'; exit 1; }
+          grep -R -F "Event Study & Backtesting" dist >/dev/null || { echo '::error::Compiled frontend is missing Event Study & Backtesting'; exit 1; }
+          grep -R -F "Economic releases tied to Cross Asset price paths" dist >/dev/null || { echo '::error::Compiled frontend is missing the event-price research workspace'; exit 1; }
+          grep -R -F "Live Signal Intelligence" dist >/dev/null || { echo '::error::Compiled frontend is missing Live Signal Intelligence navigation'; exit 1; }
           test -f dist/fxga-build.json || { echo '::error::Release marker was not copied into the static build'; exit 1; }
-          node - <<'NODE'
+
+          node <<'NODE'
           const fs=require('fs');
           const marker=JSON.parse(fs.readFileSync('dist/fxga-build.json','utf8'));
           if(marker.commit!==process.env.RELEASE_SHA)throw new Error(`Build marker commit mismatch: ${marker.commit}`);
-          if(!marker.features?.includes('mt5-data-smc-fusion')||!marker.features?.includes('sticky-cross-asset-tabs'))throw new Error('Cross Asset MT5 release marker missing');
+          if(marker.release!==process.env.RELEASE_NAME)throw new Error(`Unexpected release marker: ${marker.release}`);
+          for(const feature of ['60-day-canonical-m1','event-price-research','pre-news-price-action','cold-start-aware-api-client']){
+            if(!marker.features?.includes(feature))throw new Error(`Release marker missing ${feature}`);
+          }
           console.log('VERIFIED BEFORE DEPLOY:',marker);
           NODE
 
@@ -198,10 +197,13 @@ jobs:
           wranglerVersion: '4.123.0'
           command: deploy
 
-      - name: Verify exact MT5 Cross Asset release is live on Cloudflare
+      - name: Verify exact release is live on Cloudflare
         run: |
           node <<'NODE'
-          const site=process.env.CLOUDFLARE_SITE_URL,api=process.env.APP_URL,sha=process.env.RELEASE_SHA;
+          const site=process.env.CLOUDFLARE_SITE_URL;
+          const api=process.env.APP_URL;
+          const sha=process.env.RELEASE_SHA;
+          const release=process.env.RELEASE_NAME;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
           let root,marker,last;
           for(let i=0;i<60;i++){
@@ -210,17 +212,20 @@ jobs:
               const markerResponse=await fetch(site+'/fxga-build.json?release='+encodeURIComponent(sha),{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
               if(root.ok&&markerResponse.ok){
                 const candidate=await markerResponse.json();
-                if(candidate.commit===sha&&candidate.release==='cross-asset-mt5-20k-smc-fusion'&&candidate.features?.includes('sticky-cross-asset-tabs')){marker=candidate;break;}
-                last=new Error(`Cloudflare still serves another release: ${candidate.commit||'unknown'}`);
+                if(candidate.commit===sha&&candidate.release===release&&candidate.features?.includes('cold-start-aware-api-client')){
+                  marker=candidate;
+                  break;
+                }
+                last=new Error(`Cloudflare still serves another release: ${candidate.commit||'unknown'} / ${candidate.release||'unknown'}`);
               }
             }catch(error){last=error;}
             await sleep(2000);
           }
           if(!root?.ok)throw new Error('Cloudflare static website did not become ready');
-          if(!marker)throw last||new Error('Exact Cross Asset MT5 release marker did not become live');
-          const cloud=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+          if(!marker)throw last||new Error('Exact 60-day event-research release marker did not become live');
+
+          const cloud=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
           const h=await cloud.json();
           if(!cloud.ok||h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')throw new Error('Google Cloud processing contract failed');
           console.log('VERIFIED LIVE RELEASE:',marker);
-          console.log('Resolved macro backend:',process.env.APP_SERVICE||'auto-discovered',api);
           NODE
