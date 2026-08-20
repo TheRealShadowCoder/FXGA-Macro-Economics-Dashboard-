@@ -2,6 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { Firestore, FieldValue } from '@google-cloud/firestore';
 import { createMT5PriceCache } from './price-cache.js';
+import { createMT5SmcEngine } from './mt5-smc-engine.js';
 
 const PORT=Number(process.env.PORT||8080);
 const PROJECT_ID=process.env.GCP_PROJECT_ID||process.env.GOOGLE_CLOUD_PROJECT||undefined;
@@ -11,7 +12,7 @@ const ENGINE='FXGA_SMC2000';
 const SOURCE='MetaTrader5';
 const ALLOWED_EVENTS=new Set(['SIGNAL_NEW','LIMIT_FILLED','TP1_HIT','TP2_HIT','TP3_HIT','INVALIDATED','LIMIT_EXPIRED','LIMIT_MISSED']);
 const MAX_BODY_BYTES=750_000;
-const MAX_PER_MINUTE=180;
+const MAX_PER_MINUTE=360;
 const db=new Firestore({projectId:PROJECT_ID,ignoreUndefinedProperties:true});
 const signals=db.collection('fxga_tradingview_signals');
 const events=db.collection('fxga_tradingview_signal_events');
@@ -19,6 +20,7 @@ const live=db.collection('fxga_tradingview_live');
 const metricsRef=live.doc('metrics');
 const metaRef=live.doc('meta');
 const priceCache=createMT5PriceCache({db});
+const mt5Smc=createMT5SmcEngine({db});
 const rate=new Map();
 
 const sha=value=>crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -35,7 +37,13 @@ function sendJson(res,status,payload,cacheControl='no-store'){
 function requestIp(req){const forwarded=String(req.headers['x-forwarded-for']||'').split(',')[0].trim();return forwarded||String(req.socket?.remoteAddress||'').replace(/^::ffff:/,'');}
 function authorized(req){const supplied=String(req.headers['x-fxga-mt5-token']||'');if(!supplied||!EXPECTED_TOKEN_SHA256)return false;const got=Buffer.from(sha(supplied),'hex'),expected=Buffer.from(EXPECTED_TOKEN_SHA256,'hex');return got.length===expected.length&&crypto.timingSafeEqual(got,expected);}
 function rateAllowed(ip){const minute=Math.floor(Date.now()/60000),key=ip||'unknown',row=rate.get(key);if(!row||row.minute!==minute){rate.set(key,{minute,count:1});return true;}row.count+=1;return row.count<=MAX_PER_MINUTE;}
-async function readJson(req){const chunks=[];let bytes=0;for await(const chunk of req){bytes+=chunk.length;if(bytes>MAX_BODY_BYTES)throw Object.assign(new Error('Payload exceeds 750 KB'),{statusCode:413});chunks.push(chunk);}if(!chunks.length)throw Object.assign(new Error('Empty JSON body'),{statusCode:400});try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw Object.assign(new Error('Body must be valid JSON'),{statusCode:400});}}
+async function readJson(req){
+  const chunks=[];let bytes=0;
+  for await(const chunk of req){bytes+=chunk.length;if(bytes>MAX_BODY_BYTES)throw Object.assign(new Error('Payload exceeds 750 KB'),{statusCode:413});chunks.push(chunk);}
+  if(!chunks.length)throw Object.assign(new Error('Empty JSON body'),{statusCode:400});
+  try{const parsed=JSON.parse(Buffer.concat(chunks).toString('utf8'));Object.defineProperty(parsed,'__transportBytes',{value:bytes,enumerable:false,configurable:false});return parsed;}
+  catch{throw Object.assign(new Error('Body must be valid JSON'),{statusCode:400});}
+}
 function validate(p){if(!p||typeof p!=='object')return 'Payload must be a JSON object';if(p.schema!==SCHEMA)return `Unsupported schema; expected ${SCHEMA}`;if(String(p.source||'')!==SOURCE)return `source must be ${SOURCE}`;if(String(p.engine||'')!==ENGINE)return `engine must be ${ENGINE}`;if(!ALLOWED_EVENTS.has(String(p.event||'')))return 'Unsupported lifecycle event';if(!String(p.event_id||'').trim())return 'event_id is required';if(!String(p.symbol||p.instrument?.symbol||'').trim())return 'symbol is required';if(!['BUY','SELL'].includes(String(p.side||'')))return 'side must be BUY or SELL';return null;}
 function trueRatio(obj){if(!obj||typeof obj!=='object')return 0;const vals=Object.values(obj).filter(x=>typeof x==='boolean');return vals.length?vals.filter(Boolean).length/vals.length:0;}
 function intelligence(p){
@@ -67,18 +75,24 @@ async function ingest(req,res){
   await db.runTransaction(async tx=>{const [e,s]=await Promise.all([tx.get(eventRef),tx.get(signalRef)]);if(e.exists){duplicate=true;signal=s.exists?s.data():null;return;}const existing=s.exists?s.data():null;signal=canonical(p,existing,id,receivedAt);tx.create(eventRef,{id:eventId,setupId:id,eventId:String(p.event_id),event:String(p.event),symbol:signal.symbol,side:signal.side,source:SOURCE,platform:'MT5',receivedAt,authMode:'mt5-token-sha256',payload:p});tx.set(signalRef,signal,{merge:false});tx.set(metricsRef,{...increments(String(p.event),String(p.side)),updatedAt:receivedAt,lastSignalId:id},{merge:true});tx.set(metaRef,{updatedAt:receivedAt,lastSignalId:id,lastEvent:String(p.event),lastEventId:String(p.event_id),symbol:signal.symbol,side:signal.side,status:signal.status,intelligenceScore:signal.intelligence.score,source:SOURCE,platform:'MT5'},{merge:true});});
   return sendJson(res,200,{ok:true,duplicate,setupId:id,eventId:String(p.event_id),event:String(p.event),status:signal?.status??null,intelligence:signal?.intelligence??null,receivedAt});
 }
-async function ingestPriceCache(req,res){const ip=requestIp(req);if(!authorized(req))return sendJson(res,403,{error:'MT5 price-cache token rejected'});if(!rateAllowed(ip))return sendJson(res,429,{error:'MT5 ingress rate limit exceeded'});try{const payload=await readJson(req),result=await priceCache.ingest(payload);return sendJson(res,200,result);}catch(error){return sendJson(res,error.statusCode||500,{error:String(error?.message||error)});}}
+async function ingestPriceCache(req,res){
+  const ip=requestIp(req);if(!authorized(req))return sendJson(res,403,{error:'MT5 price-cache token rejected'});if(!rateAllowed(ip))return sendJson(res,429,{error:'MT5 ingress rate limit exceeded'});
+  try{const payload=await readJson(req),result=await priceCache.ingest(payload),smc=await mt5Smc.ingest(payload,result);return sendJson(res,200,{...result,smc});}
+  catch(error){return sendJson(res,error.statusCode||500,{error:String(error?.message||error)});}
+}
 
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url||'/',`http://${req.headers.host||'localhost'}`);
   try{
     if(req.method==='OPTIONS'){res.writeHead(204,{...CORS,'Content-Length':'0'});return res.end();}
-    if(req.method==='GET'&&(url.pathname==='/'||url.pathname==='/health'||url.pathname==='/api/mt5/health'))return sendJson(res,200,{ok:true,service:'FXGA MT5 Signal + Price Ingress',architecture:'google-cloud-direct',compute:'Google Cloud Run',storage:'Google Cloud Firestore',schema:SCHEMA,engine:ENGINE,source:SOURCE,endpoint:'/api/mt5/webhook',priceCache:{endpoint:'/api/mt5/price-cache',query:'/api/mt5/prices',status:'/api/mt5/price-cache/status',schema:priceCache.constants.SCHEMA,baseTimeframe:priceCache.constants.BASE_TIMEFRAME,derivedTimeframes:priceCache.constants.TIMEFRAMES,allowedSymbols:priceCache.constants.ALLOWED_SYMBOLS,cacheEnvelopeBytes:priceCache.constants.CACHE_ENVELOPE_BYTES,payloadHardBytes:priceCache.constants.PAYLOAD_HARD_BYTES,evictTargetBytes:priceCache.constants.EVICT_TARGET_BYTES},cloudflareProcessing:false,timestamp:new Date().toISOString()},'public, max-age=15');
+    if(req.method==='GET'&&(url.pathname==='/'||url.pathname==='/health'||url.pathname==='/api/mt5/health'))return sendJson(res,200,{ok:true,service:'FXGA MT5 Signal + Canonical M1 Price Cache + SMC Fusion',architecture:'google-cloud-direct',compute:'Google Cloud Run',storage:'Google Cloud Firestore',schema:SCHEMA,engine:ENGINE,source:SOURCE,endpoint:'/api/mt5/webhook',priceCache:{endpoint:'/api/mt5/price-cache',query:'/api/mt5/prices',status:'/api/mt5/price-cache/status',schema:priceCache.constants.SCHEMA,baseTimeframe:priceCache.constants.BASE_TIMEFRAME,derivedTimeframes:priceCache.constants.TIMEFRAMES,allowedSymbols:priceCache.constants.ALLOWED_SYMBOLS,initialBarsPerAsset:priceCache.constants.INITIAL_BARS_PER_ASSET,incrementalBarsPerSync:priceCache.constants.INCREMENTAL_BARS_PER_SYNC,syncSeconds:priceCache.constants.SYNC_SECONDS,cacheEnvelopeBytes:priceCache.constants.CACHE_ENVELOPE_BYTES,payloadHardBytes:priceCache.constants.PAYLOAD_HARD_BYTES,evictTargetBytes:priceCache.constants.EVICT_TARGET_BYTES},smc:{snapshot:'/api/mt5/smc-snapshot',asset:'/api/mt5/smc',canonicalTimeframe:'M1',derivedTimeframes:mt5Smc.constants.timeframes},cloudflareProcessing:false,timestamp:new Date().toISOString()},'public, max-age=15');
     if(url.pathname==='/api/mt5/price-cache/status'){if(req.method!=='GET')return sendJson(res,405,{error:'Price-cache status requires GET'});return sendJson(res,200,await priceCache.status(),'public, max-age=15');}
     if(url.pathname==='/api/mt5/prices'){if(req.method!=='GET')return sendJson(res,405,{error:'MT5 price query requires GET'});try{return sendJson(res,200,await priceCache.query({symbol:url.searchParams.get('symbol'),timeframe:url.searchParams.get('timeframe')||'M1',limit:url.searchParams.get('limit')||1000}),'public, max-age=15');}catch(error){return sendJson(res,error.statusCode||500,{error:String(error?.message||error)});}}
+    if(url.pathname==='/api/mt5/smc-snapshot'){if(req.method!=='GET')return sendJson(res,405,{error:'MT5 SMC snapshot requires GET'});return sendJson(res,200,await mt5Smc.snapshot(),'public, max-age=15');}
+    if(url.pathname==='/api/mt5/smc'){if(req.method!=='GET')return sendJson(res,405,{error:'MT5 SMC asset query requires GET'});try{const asset=await mt5Smc.get(url.searchParams.get('symbol'));return asset?sendJson(res,200,asset,'public, max-age=15'):sendJson(res,404,{error:'MT5 SMC state not initialized for symbol'});}catch(error){return sendJson(res,error.statusCode||500,{error:String(error?.message||error)});}}
     if(url.pathname==='/api/mt5/price-cache'){if(req.method!=='POST')return sendJson(res,405,{error:'MT5 price cache requires POST'});return await ingestPriceCache(req,res);}
     if(url.pathname==='/api/mt5/webhook'){if(req.method!=='POST')return sendJson(res,405,{error:'MT5 webhook requires POST'});return await ingest(req,res);}
     return sendJson(res,404,{error:'Not found'});
   }catch(error){console.error(error);return sendJson(res,500,{error:'MT5 ingress internal error'});}
 });
-server.listen(PORT,'0.0.0.0',()=>console.log(`FXGA MT5 signal + bounded price-cache ingress listening on ${PORT}`));
+server.listen(PORT,'0.0.0.0',()=>console.log(`FXGA MT5 signal + 20K M1 price cache + SMC fusion listening on ${PORT}`));
