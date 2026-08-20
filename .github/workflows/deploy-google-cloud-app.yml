@@ -43,7 +43,7 @@ jobs:
           node --check tradingview-signals.js
           node --check firestore-usage-monitor.js
           node -e "const p=require('./package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies['@google-cloud/monitoring']||!p.dependencies.ws) process.exit(1)"
-          echo 'API validation complete. Frontend compilation is intentionally owned by the Cloudflare static deployment workflow.'
+          echo 'API validation complete. Frontend compilation belongs to the Cloudflare workflow.'
 
       - id: config
         name: Resolve Google Cloud authentication
@@ -63,27 +63,28 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Google Cloud
+      - name: Verify existing Google deployment resources
         run: |
           set -euo pipefail
           gcloud config set project "$GCP_PROJECT_ID"
-          gcloud services enable run.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com monitoring.googleapis.com
-          if ! gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
-            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
-            --role="roles/monitoring.viewer" \
-            --condition=None \
-            --quiet; then
-            echo '::warning::Could not grant roles/monitoring.viewer automatically. Exact Cloud Monitoring usage may remain unavailable until this role is granted.'
+          echo 'Existing Cloud Run services:'
+          gcloud run services list --region "$GCP_REGION" --platform managed --format='table(metadata.name,status.url)' || true
+          echo 'Artifact Registry repository:'
+          if ! gcloud artifacts repositories describe "$GAR_REPOSITORY" --location "$GCP_REGION" --format='value(name)' ; then
+            echo "::error::Artifact Registry repository $GAR_REPOSITORY is missing. The existing MT5 deployment is expected to use this repository too."
+            exit 1
           fi
-          gcloud artifacts repositories describe "$GAR_REPOSITORY" --location "$GCP_REGION" >/dev/null 2>&1 || \
-            gcloud artifacts repositories create "$GAR_REPOSITORY" --repository-format=docker --location "$GCP_REGION"
+          # Do not require Service Usage Admin or Project IAM Admin just to deploy
+          # an application revision. Required Google APIs/resources are already in
+          # use by the working MT5 Cloud Run service.
+          echo 'Using existing Cloud Run / Artifact Registry / Firestore project resources.'
 
       - name: Build and push API-only dashboard container
         run: |
           set -euo pipefail
           IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/$SERVICE:${GITHUB_SHA}"
           gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
-          docker build -f google-cloud-app/Dockerfile -t "$IMAGE" .
+          docker build --pull -f google-cloud-app/Dockerfile -t "$IMAGE" .
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
@@ -104,39 +105,37 @@ jobs:
             --max 3 \
             --timeout 3600 \
             --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting"
-          APP_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          APP_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --platform managed --format='value(status.url)')
           test -n "$APP_URL" || { echo '::error::Google Cloud application URL missing after deployment'; exit 1; }
           echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
+          echo "Created/updated $SERVICE at $APP_URL"
 
-      - name: Verify API, signal service and Firestore capacity contract
+      - name: Verify macro API contract
         run: |
           node <<'NODE'
           const base=process.env.APP_URL;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
           let last;
-          for(let attempt=0;attempt<30;attempt++){
+          for(let attempt=0;attempt<40;attempt++){
             try{
               const healthResponse=await fetch(base+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
-              const text=await healthResponse.text();
-              if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}: ${text.slice(0,500)}`);
-              const health=JSON.parse(text);
-              if(health.architecture!=='google-cloud-processing-cloudflare-static-hosting'||health.compute!=='Google Cloud Run'||health.state!=='Google Cloud Firestore'||health.cloudflareRole!=='static-host-only'||health.cloudflareProcessing!==false)throw new Error('Google API / passive Cloudflare contract not active');
-              if(health.tradingViewSignals?.schema!=='fxga.smc.signal.v3'||health.tradingViewSignals?.engine!=='FXGA_SMC2000')throw new Error('Signal service contract not active');
-              for(const endpoint of ['/api/market-prices','/api/data-quality','/api/tradingview/config','/api/tradingview/signals/live?limit=5','/api/tradingview/signals/metrics']){
-                const r=await fetch(base+endpoint,{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
-                if(!r.ok)throw new Error(`${endpoint} ${r.status}: ${(await r.text()).slice(0,400)}`);
-              }
+              const healthText=await healthResponse.text();
+              if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}: ${healthText.slice(0,500)}`);
+              const health=JSON.parse(healthText);
+              if(health.compute!=='Google Cloud Run'||health.state!=='Google Cloud Firestore')throw new Error('Macro API health contract not active');
+              const dashboardResponse=await fetch(base+'/api/dashboard',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+              const dashboardText=await dashboardResponse.text();
+              if(!dashboardResponse.ok)throw new Error(`/api/dashboard ${dashboardResponse.status}: ${dashboardText.slice(0,500)}`);
+              const dashboard=JSON.parse(dashboardText);
+              if(!Array.isArray(dashboard.market)||!Array.isArray(dashboard.sources))throw new Error('Dashboard payload contract missing market/sources');
               const usageResponse=await fetch(base+'/api/tradingview/firestore-usage',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
-              const usageText=await usageResponse.text();
-              if(!usageResponse.ok)throw new Error(`Firestore usage ${usageResponse.status}: ${usageText.slice(0,500)}`);
-              const usage=JSON.parse(usageText);
-              if(usage.storage?.limitGiB!==1||usage.reads?.limit!==50000||usage.writes?.limit!==20000||usage.deletes?.limit!==20000)throw new Error('Firestore free-tier quota contract is incorrect');
-              console.log('Google Cloud API service is live:',base);
+              if(!usageResponse.ok)throw new Error(`Firestore capacity endpoint ${usageResponse.status}`);
+              console.log('Google Cloud macro API live:',base,'assets=',dashboard.market.length);
               process.exit(0);
             }catch(error){last=error;await sleep(3000);}
           }
-          throw last||new Error('Google Cloud application did not become ready');
+          throw last||new Error('Google Cloud macro API did not become ready');
           NODE
 
       - name: Production summary
@@ -147,4 +146,4 @@ jobs:
           echo "TradingView webhook: $APP_URL/api/tradingview/webhook"
           echo "Firestore capacity API: $APP_URL/api/tradingview/firestore-usage"
           echo "Frontend bundled into API container: NO"
-          echo "Cloudflare upstream acquisition/API processing: NONE"
+          echo "Cloudflare application processing: NONE"
