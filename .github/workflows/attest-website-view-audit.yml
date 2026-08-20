@@ -1,0 +1,65 @@
+name: Attest FXGA Website View Audit
+
+on:
+  workflow_run:
+    workflows: ['Verify FXGA Website View Contracts']
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  attest:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Record successful production audit
+        env:
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+          AUDIT_RUN_ID: ${{ github.event.workflow_run.id }}
+          AUDIT_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          mkdir -p runtime
+          node <<'NODE'
+          const fs=require('fs');
+          const report={
+            schema:'fxga.production.website-view-audit.v1',
+            passed:true,
+            verifiedCommit:process.env.VERIFIED_SHA,
+            auditRunId:Number(process.env.AUDIT_RUN_ID),
+            auditUrl:process.env.AUDIT_URL,
+            verifiedAt:new Date().toISOString(),
+            scope:[
+              'Cloudflare static shell and current release',
+              'all 12 sidebar navigation labels',
+              'Macro Dashboard',
+              'Cross Asset Prices',
+              'Macro Analysis',
+              'Research & Risk',
+              'Currency Outlook',
+              'Live Signal Intelligence',
+              'Economic Calendar',
+              'economic event studies and pattern profiles',
+              'Core Indicators',
+              'Macro Data Library',
+              'Data Operations and data quality',
+              'Central Bank News',
+              'Data Coverage',
+              '60-day MT5 runtime configuration'
+            ]
+          };
+          fs.writeFileSync('runtime/website-view-audit.json',JSON.stringify(report,null,2)+'\n');
+          NODE
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runtime/website-view-audit.json
+          if git diff --cached --quiet; then
+            echo 'Audit attestation unchanged.'
+          else
+            git commit -m "Attest successful FXGA production website audit [skip ci]"
+            git push origin HEAD:main
+          fi
