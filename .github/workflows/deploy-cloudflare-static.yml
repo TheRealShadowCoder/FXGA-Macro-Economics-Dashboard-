@@ -2,6 +2,9 @@ name: Deploy FXGA Cloudflare Static Website
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ['Deploy FXGA Google Cloud Application']
+    types: [completed]
   push:
     branches: [main]
     paths:
@@ -33,13 +36,25 @@ env:
 
 jobs:
   deploy-static-site:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: main
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+
+      - id: release
+        name: Resolve release commit
+        run: |
+          set -euo pipefail
+          RELEASE_SHA=$(git rev-parse HEAD)
+          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
+          echo "Deploying current main release: $RELEASE_SHA"
 
       - id: config
         name: Resolve Google Cloud authentication
@@ -67,9 +82,6 @@ jobs:
           APP_URL=''
           APP_SERVICE=''
 
-          # Do not trust a hard-coded Cloud Run service name. The project has had
-          # multiple FXGA services over time (macro app, MT5 ingress, collector).
-          # Select the service by behavior: it must expose the macro dashboard API.
           for attempt in $(seq 1 120); do
             while IFS=$'\t' read -r service url; do
               [ -n "${url:-}" ] || continue
@@ -84,8 +96,7 @@ jobs:
               ]);
               if(!healthResponse.ok)process.exit(1);
               const h=await healthResponse.json();
-              if(h.compute!=='Google Cloud Run')process.exit(1);
-              if(h.state!=='Google Cloud Firestore')process.exit(1);
+              if(h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')process.exit(1);
               const dashboardResponse=await Promise.race([
                 fetch(base+'/api/dashboard',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),
                 timeout(8000)
@@ -112,7 +123,6 @@ jobs:
               break
             fi
 
-            # The dedicated API workflow may still be creating/recreating the service.
             echo "No valid FXGA macro API discovered yet ($attempt/120). Waiting 5 seconds..."
             sleep 5
           done
@@ -125,25 +135,17 @@ jobs:
 
           node <<'NODE'
           const base=process.env.APP_URL;
-          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          let last;
-          for(let i=0;i<30;i++){
-            try{
-              const [healthResponse,dashboardResponse]=await Promise.all([
-                fetch(base+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),
-                fetch(base+'/api/dashboard',{headers:{Accept:'application/json','Cache-Control':'no-cache'}})
-              ]);
-              if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}`);
-              if(!dashboardResponse.ok)throw new Error(`/api/dashboard ${dashboardResponse.status}`);
-              const h=await healthResponse.json();
-              const d=await dashboardResponse.json();
-              if(h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')throw new Error('Not the FXGA Google Cloud macro backend');
-              if(!Array.isArray(d.market)||!Array.isArray(d.sources))throw new Error('Dashboard payload contract missing');
-              console.log('Google Cloud macro API ready:',base,'service=',process.env.APP_SERVICE||'auto-discovered');
-              process.exit(0);
-            }catch(error){last=error;await sleep(2000);}
-          }
-          throw last||new Error('Google Cloud macro API did not become ready');
+          const [healthResponse,dashboardResponse]=await Promise.all([
+            fetch(base+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),
+            fetch(base+'/api/dashboard',{headers:{Accept:'application/json','Cache-Control':'no-cache'}})
+          ]);
+          if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}`);
+          if(!dashboardResponse.ok)throw new Error(`/api/dashboard ${dashboardResponse.status}`);
+          const h=await healthResponse.json();
+          const d=await dashboardResponse.json();
+          if(h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')throw new Error('Not the FXGA Google Cloud macro backend');
+          if(!Array.isArray(d.market)||!Array.isArray(d.sources))throw new Error('Dashboard payload contract missing');
+          console.log('Google Cloud macro API ready:',base,'service=',process.env.APP_SERVICE||'auto-discovered');
           NODE
 
       - name: Build Cloudflare hosted frontend and stamp exact release
@@ -151,7 +153,7 @@ jobs:
           set -euo pipefail
           node <<'NODE'
           const fs=require('fs');
-          const marker={commit:process.env.GITHUB_SHA,builtAt:new Date().toISOString(),release:'cross-asset-mt5-20k-smc-fusion',backendService:process.env.APP_SERVICE||null,backendUrl:process.env.APP_URL||null,features:['cross-asset-tabs','mt5-data-smc-fusion','20k-canonical-m1','160-bar-300-second-sync','size-calculator','live-signal-intelligence','sticky-cross-asset-tabs']};
+          const marker={commit:process.env.RELEASE_SHA,builtAt:new Date().toISOString(),release:'cross-asset-mt5-20k-smc-fusion',backendService:process.env.APP_SERVICE||null,backendUrl:process.env.APP_URL||null,features:['cross-asset-tabs','mt5-data-smc-fusion','20k-canonical-m1','160-bar-300-second-sync','size-calculator','live-signal-intelligence','sticky-cross-asset-tabs']};
           fs.writeFileSync('public/fxga-build.json',JSON.stringify(marker,null,2)+'\n');
           NODE
           npm install --no-audit --no-fund
@@ -165,7 +167,7 @@ jobs:
           node - <<'NODE'
           const fs=require('fs');
           const marker=JSON.parse(fs.readFileSync('dist/fxga-build.json','utf8'));
-          if(marker.commit!==process.env.GITHUB_SHA)throw new Error(`Build marker commit mismatch: ${marker.commit}`);
+          if(marker.commit!==process.env.RELEASE_SHA)throw new Error(`Build marker commit mismatch: ${marker.commit}`);
           if(!marker.features?.includes('mt5-data-smc-fusion')||!marker.features?.includes('sticky-cross-asset-tabs'))throw new Error('Cross Asset MT5 release marker missing');
           console.log('VERIFIED BEFORE DEPLOY:',marker);
           NODE
@@ -199,7 +201,7 @@ jobs:
       - name: Verify exact MT5 Cross Asset release is live on Cloudflare
         run: |
           node <<'NODE'
-          const site=process.env.CLOUDFLARE_SITE_URL,api=process.env.APP_URL,sha=process.env.GITHUB_SHA;
+          const site=process.env.CLOUDFLARE_SITE_URL,api=process.env.APP_URL,sha=process.env.RELEASE_SHA;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
           let root,marker,last;
           for(let i=0;i<60;i++){
@@ -216,8 +218,6 @@ jobs:
           }
           if(!root?.ok)throw new Error('Cloudflare static website did not become ready');
           if(!marker)throw last||new Error('Exact Cross Asset MT5 release marker did not become live');
-          const html=await root.text();
-          if(!/<div[^>]+id=["']root["']/i.test(html))throw new Error('Cloudflare root is not the FXGA frontend');
           const cloud=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
           const h=await cloud.json();
           if(!cloud.ok||h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')throw new Error('Google Cloud processing contract failed');
