@@ -42,6 +42,7 @@ jobs:
           node --check server.js
           node --check tradingview-signals.js
           node --check firestore-usage-monitor.js
+          node --check optimize-server.js
           node -e "const p=require('./package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies['@google-cloud/monitoring']||!p.dependencies.ws) process.exit(1)"
           echo 'API validation complete. Frontend compilation belongs to the Cloudflare workflow.'
 
@@ -63,6 +64,23 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      - name: Best-effort Cloud Monitoring read access
+        run: |
+          set +e
+          echo "Attempting roles/monitoring.viewer for $RUNTIME_SERVICE_ACCOUNT"
+          gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role="roles/monitoring.viewer" \
+            --condition=None \
+            --quiet
+          STATUS=$?
+          if [ "$STATUS" -eq 0 ]; then
+            echo 'Cloud Monitoring viewer access is configured.'
+          else
+            echo '::warning::Deploy identity cannot grant roles/monitoring.viewer. The application will use the safe Firestore-ledger fallback and will not expose IAM errors to users.'
+          fi
+          exit 0
+
       - name: Verify existing Google deployment resources
         run: |
           set -euo pipefail
@@ -74,9 +92,6 @@ jobs:
             echo "::error::Artifact Registry repository $GAR_REPOSITORY is missing. The existing MT5 deployment is expected to use this repository too."
             exit 1
           fi
-          # Do not require Service Usage Admin or Project IAM Admin just to deploy
-          # an application revision. Required Google APIs/resources are already in
-          # use by the working MT5 Cloud Run service.
           echo 'Using existing Cloud Run / Artifact Registry / Firestore project resources.'
 
       - name: Build and push API-only dashboard container
@@ -131,7 +146,10 @@ jobs:
               if(!Array.isArray(dashboard.market)||!Array.isArray(dashboard.sources))throw new Error('Dashboard payload contract missing market/sources');
               const usageResponse=await fetch(base+'/api/tradingview/firestore-usage',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
               if(!usageResponse.ok)throw new Error(`Firestore capacity endpoint ${usageResponse.status}`);
-              console.log('Google Cloud macro API live:',base,'assets=',dashboard.market.length);
+              const usage=await usageResponse.json();
+              if(String(usage.monitoringError||'').match(/PERMISSION_DENIED|Permission denied/i))throw new Error('Raw Cloud Monitoring IAM error leaked through public telemetry contract');
+              if(!['cloud-monitoring','firestore-ledger-fallback'].includes(String(usage.monitoringMode||'')))throw new Error(`Unexpected Firestore monitoring mode ${usage.monitoringMode}`);
+              console.log('Google Cloud macro API live:',base,'assets=',dashboard.market.length,'monitoringMode=',usage.monitoringMode);
               process.exit(0);
             }catch(error){last=error;await sleep(3000);}
           }
