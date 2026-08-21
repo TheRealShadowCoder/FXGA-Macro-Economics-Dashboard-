@@ -2,13 +2,29 @@ import { FAMILY_REGISTRY, SPECIAL_METHODS, REGISTRY_TOTALS } from './fxga-regist
 
 export const REGISTRY={totalMethods:REGISTRY_TOTALS.totalMethods,totalFamilies:REGISTRY_TOTALS.totalFamilies,familyDefinitions:FAMILY_REGISTRY};
 
-export const TARGET_ECONOMIES = ['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN'];
+export const TARGET_ECONOMIES = ['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN','CANADA','AUSTRALIA','NEW_ZEALAND','SWITZERLAND','CHINA','INDIA','BRAZIL','MEXICO','SOUTH_KOREA','INDONESIA','SAUDI_ARABIA','TURKEY','ARGENTINA','SINGAPORE','NORWAY','SWEDEN'];
 const ECONOMY_META = {
   USA:{label:'United States',currency:'USD',centralBank:'Federal Reserve'},
   EUROPE:{label:'Euro Area',currency:'EUR',centralBank:'European Central Bank'},
   UK:{label:'United Kingdom',currency:'GBP',centralBank:'Bank of England'},
   SOUTH_AFRICA:{label:'South Africa',currency:'ZAR',centralBank:'South African Reserve Bank'},
   JAPAN:{label:'Japan',currency:'JPY',centralBank:'Bank of Japan'},
+  CANADA:{label:'Canada',currency:'CAD',centralBank:'Bank of Canada'},
+  AUSTRALIA:{label:'Australia',currency:'AUD',centralBank:'Reserve Bank of Australia'},
+  NEW_ZEALAND:{label:'New Zealand',currency:'NZD',centralBank:'Reserve Bank of New Zealand'},
+  SWITZERLAND:{label:'Switzerland',currency:'CHF',centralBank:'Swiss National Bank'},
+  CHINA:{label:'China',currency:'CNY',centralBank:"People's Bank of China"},
+  INDIA:{label:'India',currency:'INR',centralBank:'Reserve Bank of India'},
+  BRAZIL:{label:'Brazil',currency:'BRL',centralBank:'Central Bank of Brazil'},
+  MEXICO:{label:'Mexico',currency:'MXN',centralBank:'Bank of Mexico'},
+  SOUTH_KOREA:{label:'South Korea',currency:'KRW',centralBank:'Bank of Korea'},
+  INDONESIA:{label:'Indonesia',currency:'IDR',centralBank:'Bank Indonesia'},
+  SAUDI_ARABIA:{label:'Saudi Arabia',currency:'SAR',centralBank:'Saudi Central Bank'},
+  TURKEY:{label:'Türkiye',currency:'TRY',centralBank:'Central Bank of the Republic of Türkiye'},
+  ARGENTINA:{label:'Argentina',currency:'ARS',centralBank:'Central Bank of Argentina'},
+  SINGAPORE:{label:'Singapore',currency:'SGD',centralBank:'Monetary Authority of Singapore'},
+  NORWAY:{label:'Norway',currency:'NOK',centralBank:'Norges Bank'},
+  SWEDEN:{label:'Sweden',currency:'SEK',centralBank:'Sveriges Riksbank'},
 };
 const DIMENSIONS = ['inflation','growth','labour','policy','financial'];
 const DOMAIN_PATTERNS = {

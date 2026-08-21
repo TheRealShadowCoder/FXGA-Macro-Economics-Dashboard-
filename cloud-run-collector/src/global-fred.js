@@ -84,6 +84,20 @@ export const ECONOMY_SEARCHES = {
   ],
 };
 
+const EXTENDED_ECONOMY_LABELS = {
+  CANADA:'Canada',AUSTRALIA:'Australia',NEW_ZEALAND:'New Zealand',SWITZERLAND:'Switzerland',CHINA:'China',INDIA:'India',BRAZIL:'Brazil',MEXICO:'Mexico',SOUTH_KOREA:'South Korea',INDONESIA:'Indonesia',SAUDI_ARABIA:'Saudi Arabia',TURKEY:'Turkey',ARGENTINA:'Argentina',SINGAPORE:'Singapore',NORWAY:'Norway',SWEDEN:'Sweden',
+};
+for (const [economy,label] of Object.entries(EXTENDED_ECONOMY_LABELS)) {
+  ECONOMY_SEARCHES[economy] = [
+    ['inflation',label+' consumer price inflation CPI'],
+    ['unemployment',label+' unemployment rate employment'],
+    ['growth',label+' real GDP economic growth'],
+    ['policy-rate',label+' central bank policy interest rate'],
+    ['industrial',label+' industrial production manufacturing'],
+    ['trade',label+' trade balance current account'],
+  ];
+}
+
 const ECONOMY_TERMS = {
   USA:/united states|u\.s\.|usa/i,
   EUROPE:/euro area|eurozone|european central bank|european union/i,
@@ -91,7 +105,8 @@ const ECONOMY_TERMS = {
   SOUTH_AFRICA:/south africa|sarb|south african/i,
   JAPAN:/japan|bank of japan|japanese/i,
 };
-const ECONOMY_MINIMUM = { USA:10, EUROPE:14, UK:14, SOUTH_AFRICA:14, JAPAN:14 };
+for (const [economy,label] of Object.entries(EXTENDED_ECONOMY_LABELS)) ECONOMY_TERMS[economy]=new RegExp(label,'i');
+const ECONOMY_MINIMUM = Object.fromEntries(Object.keys(ECONOMY_SEARCHES).map(economy=>[economy,economy==='USA'?10:['EUROPE','UK','SOUTH_AFRICA','JAPAN'].includes(economy)?14:5]));
 
 function recentEnough(series) {
   const end=Date.parse(series.observation_end||'');
@@ -113,7 +128,7 @@ function scoreSeries(series,economy,category) {
 
 export async function discoverGlobalFredUniverse(apiKey,fetchJson,options={}) {
   if (!apiKey) throw new Error('FRED API key is required for global discovery');
-  const maxSeries=Math.min(Math.max(Number(options.maxSeries||180),110),220);
+  const maxSeries=Math.min(Math.max(Number(options.maxSeries||260),150),360);
   const maxPerQuery=Math.min(Math.max(Number(options.maxPerQuery||2),1),3);
   const curated=FRED_BASE_IDS.map((seriesId)=>({seriesId,economy:seriesId==='DEXSFUS'?'SOUTH_AFRICA':'USA',category:'fxga-core',source:'FRED curated core',curated:true}));
   const discoveredByEconomy=Object.fromEntries(Object.keys(ECONOMY_SEARCHES).map((economy)=>[economy,new Map()]));
