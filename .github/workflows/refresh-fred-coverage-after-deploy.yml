@@ -20,6 +20,7 @@ jobs:
   refresh-fred-coverage:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
         with:
@@ -69,6 +70,7 @@ jobs:
           TOKEN: ${{ steps.invoke.outputs.id_token }}
         run: |
           set -euo pipefail
+          READY=no
           for attempt in $(seq 1 18); do
             curl --max-time 60 -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state" > /tmp/state.json || true
             READY=$(node - <<'NODE'
@@ -87,6 +89,7 @@ jobs:
             echo "Waiting for FRED coverage repair state ($attempt/18)..."
             sleep 10
           done
+          test "$READY" = yes || { echo '::error::FRED coverage repair metadata never became ready'; exit 1; }
 
       - name: Force full FRED macro refresh
         env:
@@ -96,13 +99,39 @@ jobs:
           STATUS=$(curl --max-time 900 -sS -o /tmp/full-macro.json -w '%{http_code}' -X POST \
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
-            -d '{"mode":"full","reason":"fred-coverage-repair"}' \
+            -d '{"mode":"full","reason":"institutional-post-deploy-refresh"}' \
             "$SERVICE_URL/macro-sync?mode=full")
           echo "Full macro refresh HTTP $STATUS"
           test "$STATUS" -ge 200 -a "$STATUS" -lt 300 || { head -c 3000 /tmp/full-macro.json; exit 1; }
-          cat /tmp/full-macro.json
+          node <<'NODE'
+          const fs=require('fs');
+          const x=JSON.parse(fs.readFileSync('/tmp/full-macro.json','utf8'));
+          if(Number(x.observations||0)<100)throw new Error(`Full macro refresh produced too few usable observations: ${x.observations}`);
+          if(x.intelligenceDegraded)console.warn('Macro data published successfully but inline intelligence refresh degraded:',x.intelligenceDegraded);
+          console.log('Primary macro refresh published',JSON.stringify({observations:x.observations,fetchedNow:x.fetchedNow,staleRetained:x.staleRetained,failures:x.failures,intelligenceDegraded:x.intelligenceDegraded||null},null,2));
+          NODE
 
-      - name: Verify FRED coverage and remaining gaps
+      - name: Rebuild institutional intelligence from refreshed macro state
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          STATUS=$(curl --max-time 900 -sS -o /tmp/intelligence.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{"forceNews":true,"reason":"institutional-post-deploy-refresh"}' \
+            "$SERVICE_URL/refresh-intelligence")
+          echo "Intelligence rebuild HTTP $STATUS"
+          test "$STATUS" -ge 200 -a "$STATUS" -lt 300 || { head -c 5000 /tmp/intelligence.json; exit 1; }
+          node <<'NODE'
+          const fs=require('fs');
+          const x=JSON.parse(fs.readFileSync('/tmp/intelligence.json','utf8'));
+          if(Number(x.economies||0)<21)throw new Error(`Institutional intelligence rebuilt only ${x.economies||0} economies; expected at least 21`);
+          if(Number(x.observations||0)<100)throw new Error(`Institutional intelligence has too few macro observations: ${x.observations||0}`);
+          console.log('Institutional intelligence rebuilt',JSON.stringify({economies:x.economies,observations:x.observations,coverage:x.coverage,operationalHealth:x.operationalHealth},null,2));
+          NODE
+
+      - name: Verify FRED coverage, 21 economies, and remaining gaps
         env:
           TOKEN: ${{ steps.invoke.outputs.id_token }}
         run: |
@@ -114,22 +143,42 @@ jobs:
           const state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8'));
           const macro=state?.macro?.payload||{};
           const universe=state?.fredUniverse?.payload||{};
+          const intelligence=state?.intelligence?.payload||{};
           const repair=universe.coverageRepair||{};
           const quality=macro.coverageQuality||{};
           const diagnostics=macro.failureDiagnostics||{};
           const usable=Number(quality.usableObservations||macro.observations?.length||0);
           const effective=Number(quality.effectiveCoveragePercent||0);
+          const liveCoverage=Number(quality.liveCoveragePercent||0);
           const categoryCoverage=Number(repair.coveragePercent||0);
+          const targetEconomies=Array.isArray(macro.targetEconomies)?macro.targetEconomies:[];
+          const modelEconomies=Array.isArray(intelligence?.economyAnalysis?.economies)?intelligence.economyAnalysis.economies:[];
+          const modelIds=new Set(modelEconomies.map(row=>row.id));
+          const observations=Array.isArray(macro.observations)?macro.observations:[];
+          const populated=targetEconomies.filter(id=>observations.some(row=>(row.economies||[row.economy]).includes(id)));
           if(repair.schema!=='fxga.fred.coverage-repair.v1')throw new Error('FRED coverage repair metadata is missing');
           if(usable<100)throw new Error(`Usable macro observations too low after FRED repair: ${usable}`);
-          if(effective<90)throw new Error(`Effective FRED macro coverage below 90% after repair: ${effective}%`);
-          if(categoryCoverage<90)throw new Error(`Required FRED category coverage below 90%: ${categoryCoverage}%`);
+          if(!Number.isFinite(effective)||effective<90||effective>100)throw new Error(`Effective FRED macro coverage must be 90-100%, received ${effective}%`);
+          if(!Number.isFinite(liveCoverage)||liveCoverage<0||liveCoverage>100)throw new Error(`Live FRED coverage is invalid: ${liveCoverage}%`);
+          if(categoryCoverage<90||categoryCoverage>100)throw new Error(`Required FRED category coverage must be 90-100%, received ${categoryCoverage}%`);
+          if(targetEconomies.length<21)throw new Error(`Macro state exposes only ${targetEconomies.length} target economies; expected at least 21`);
+          if(populated.length<16)throw new Error(`Only ${populated.length}/${targetEconomies.length} target economies have usable FRED observations`);
+          if(modelEconomies.length<21||modelIds.size!==modelEconomies.length)throw new Error(`Economy analysis model is incomplete: ${modelEconomies.length} states / ${modelIds.size} unique IDs`);
+          for(const row of modelEconomies){
+            if(!Array.isArray(row.dimensions)||row.dimensions.length!==5)throw new Error(`${row.id} does not expose all five institutional macro dimensions`);
+            if(!row.dimensions.every(d=>Number.isFinite(Number(d.score))))throw new Error(`${row.id} contains a non-finite macro dimension score`);
+            if(!Number.isFinite(Number(row.confidence))||Number(row.confidence)<0||Number(row.confidence)>100)throw new Error(`${row.id} evidence confidence is invalid`);
+          }
           const report={
-            schema:'fxga.fred.coverage-audit.v1',
+            schema:'fxga.fred.coverage-audit.v2',
             passed:true,
             generatedAt:new Date().toISOString(),
             macroGeneratedAt:macro.generatedAt,
+            intelligenceGeneratedAt:intelligence.generatedAt,
             fredSeries:Array.isArray(universe.series)?universe.series.length:0,
+            targetEconomies:targetEconomies.length,
+            populatedEconomies:populated.length,
+            modelEconomies:modelEconomies.length,
             categoriesRequired:repair.categoriesRequired,
             categoriesCovered:repair.categoriesCovered,
             categoriesMissing:repair.categoriesMissing,
@@ -143,17 +192,20 @@ jobs:
             usableObservations:usable,
             unresolvedObservations:quality.unresolved,
             effectiveCoveragePercent:effective,
-            liveCoveragePercent:quality.liveCoveragePercent,
+            liveCoveragePercent:liveCoverage,
             failureTypes:diagnostics.byType||{},
             failureEconomies:diagnostics.byEconomy||{},
             failureCategories:diagnostics.byCategory||{},
             sampleFailures:Array.isArray(macro.failures)?macro.failures.slice(0,30):[],
           };
-          console.log('FRED COVERAGE VERIFIED',JSON.stringify(report,null,2));
+          console.log('INSTITUTIONAL FRED / ECONOMY COVERAGE VERIFIED',JSON.stringify(report,null,2));
           fs.writeFileSync('runtime/fred-coverage-audit.json',JSON.stringify(report,null,2)+'\n');
           const lines=[
-            '# FRED Coverage Repair', '',
+            '# Institutional FRED + Economy Coverage', '',
             `* FRED series in persisted universe: ${report.fredSeries}`,
+            `* Target economies: ${report.targetEconomies}`,
+            `* Economies with usable observations: ${report.populatedEconomies}`,
+            `* Economy model states: ${report.modelEconomies}`,
             `* Required category lanes: ${report.categoriesCovered}/${report.categoriesRequired} (${report.categoryCoveragePercent}%)`,
             `* Repair operations applied: ${report.repairsApplied}`,
             `* Remaining repair targets: ${report.unresolvedRepairTargets}`,
@@ -165,7 +217,7 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join('\n')+'\n');
           NODE
 
-      - name: Publish FRED coverage audit
+      - name: Publish FRED and global-economy coverage audit
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -175,5 +227,5 @@ jobs:
             echo 'FRED coverage audit is unchanged.'
             exit 0
           fi
-          git commit -m 'Publish FRED coverage audit [skip ci]'
+          git commit -m 'Publish institutional FRED and economy coverage audit [skip ci]'
           git push origin HEAD:main
