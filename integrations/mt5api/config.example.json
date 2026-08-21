@@ -1,0 +1,25 @@
+{
+  "mt5api_base_url": "http://127.0.0.1:8000",
+  "fxga_ingress_url": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app",
+  "sync_interval_seconds": 300,
+  "request_timeout_seconds": 30,
+  "symbol_map": {},
+  "symbol_candidates": {
+    "DXY": ["DXY", "USDX", "USDIDX", "DX"],
+    "EURUSD": ["EURUSD"],
+    "GBPUSD": ["GBPUSD"],
+    "USDJPY": ["USDJPY"],
+    "USDZAR": ["USDZAR"],
+    "US2Y": ["US2Y", "US02Y", "UST2Y"],
+    "US10Y": ["US10Y", "UST10Y"],
+    "SPX": ["SPX", "US500", "SP500"],
+    "NASDAQ": ["NASDAQ", "NAS100", "US100", "USTEC"],
+    "DJI": ["DJI", "US30", "DJ30", "DOW"],
+    "VIX": ["VIX"],
+    "GOLD": ["GOLD", "XAUUSD"],
+    "WTI": ["WTI", "USOIL", "XTIUSD"],
+    "BRENT": ["BRENT", "UKOIL", "XBRUSD"],
+    "BTCUSD": ["BTCUSD"],
+    "ETHUSD": ["ETHUSD"]
+  }
+}
