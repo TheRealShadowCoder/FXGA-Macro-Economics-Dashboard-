@@ -1,0 +1,19 @@
+{
+  "schema": "fxga.upgrade-production.audit.v1",
+  "generatedAt": "2026-08-21T01:46:40.653Z",
+  "passed": false,
+  "workflowConclusion": "failure",
+  "runId": 32437454600,
+  "summary": {
+    "passed": 0,
+    "failed": 1,
+    "total": 1
+  },
+  "checks": [
+    {
+      "name": "workflow",
+      "passed": false,
+      "error": "Upgrade production audit failure"
+    }
+  ]
+}
