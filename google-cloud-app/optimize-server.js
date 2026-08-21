@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 
 const file = new URL('./server.js', import.meta.url);
 let source = await readFile(file, 'utf8');
-const injectedMarker = 'FXGA_FAST_ROUTE_V3';
+const injectedMarker = 'FXGA_FAST_ROUTE_V4';
 const markerCandidates = ['\nconst s=await liteState()', '\n  const s=await liteState()'];
 const marker = markerCandidates.find((candidate) => source.includes(candidate));
 
@@ -10,9 +10,20 @@ if (!marker) {
   throw new Error('FXGA API optimizer could not find liteState route marker in compact or formatted server source');
 }
 
+const patternCollection="const eventPatternProfiles=db.collection('fxga_event_pattern_profiles');";
+const backtestCollection="const eventBacktests=db.collection('fxga_event_backtest_profiles');";
+if (!source.includes(backtestCollection)) {
+  if (!source.includes(patternCollection)) throw new Error('FXGA API optimizer could not find event pattern collection declaration');
+  source=source.replace(patternCollection,`${patternCollection}\n${backtestCollection}`);
+}
+
+if (!source.includes('backtestResearch:research.backtestResearch??null')) {
+  source=source.replace('patternResearch:research.patternResearch??null,summary:storedSummary,studies','patternResearch:research.patternResearch??null,backtestResearch:research.backtestResearch??null,summary:storedSummary,studies');
+}
+
 if (!source.includes(injectedMarker)) {
   const fastRoutes = `
-// FXGA_FAST_ROUTE_V3
+// FXGA_FAST_ROUTE_V4
 // Latency-sensitive routes return before generic liteState fan-out. This keeps
 // Cloud Run cold starts bounded and restores exact browser/API payload contracts.
 if(url.pathname==='/api/dashboard'){
@@ -71,9 +82,23 @@ if(url.pathname==='/api/event-study-sources'){
     policy:{fred:'FRED macro observations enrich economic context and never overwrite the recorded release actual/consensus fields.',cnbc:'CNBC is an independent current market cross-check; it is not treated as a historical event candle.',mt5:'Only verified MT5 M1 observations are used to calculate historical pre-news and post-release price paths.',missingData:'Unavailable evidence remains unavailable; no prices or release values are synthesized.'}
   },'public, max-age=10');
 }
+if(url.pathname==='/api/event-pattern-backtests'){
+  const research=(await readState('event-studies'))?.payload?.backtestResearch??null;
+  if(!research?.generation)return sendJson(res,200,{generatedAt:null,summary:research,tests:[]},'public, max-age=5');
+  const asset=(url.searchParams.get('asset')||'').toUpperCase(),currency=(url.searchParams.get('currency')||'').toUpperCase(),eventFamily=(url.searchParams.get('eventFamily')||'').toLowerCase(),horizon=(url.searchParams.get('horizon')||'').toLowerCase(),validatedOnly=['1','true','yes'].includes(String(url.searchParams.get('validatedOnly')||'').toLowerCase()),limit=Math.min(300,Math.max(1,Number(url.searchParams.get('limit')||100)));
+  const snap=await eventBacktests.where('generation','==',research.generation).limit(750).get();
+  let tests=snap.docs.map(doc=>doc.data());
+  if(asset)tests=tests.filter(test=>String(test.assetId||'').toUpperCase()===asset);
+  if(currency)tests=tests.filter(test=>String(test.currency||'').toUpperCase()===currency);
+  if(eventFamily)tests=tests.filter(test=>String(test.eventFamily||'').toLowerCase().includes(eventFamily));
+  if(horizon)tests=tests.filter(test=>String(test.horizon||'').toLowerCase()===horizon);
+  if(validatedOnly)tests=tests.filter(test=>Boolean(test.promotionEligible));
+  tests.sort((a,b)=>Number(Boolean(b.promotionEligible))-Number(Boolean(a.promotionEligible))||Number(a.qValue??1)-Number(b.qValue??1)||Number(b.holdoutObservations||0)-Number(a.holdoutObservations||0));
+  return sendJson(res,200,{generatedAt:research.generatedAt,generation:research.generation,summary:research,tests:tests.slice(0,limit),policy:{validatedCandidateIsNotProfitabilityGuarantee:true,outOfSample:true,fdrControlled:true,costsApplied:true}},'public, max-age=10');
+}
 `;
   source = source.replace(marker, `${fastRoutes}${marker}`);
 }
 
 await writeFile(file, source, 'utf8');
-console.log('Injected FXGA fast routes v3, macro catalog and event-study source fusion');
+console.log('Injected FXGA fast routes v4, macro catalog, event-study source fusion and OOS backtest API');
