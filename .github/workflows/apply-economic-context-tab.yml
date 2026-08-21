@@ -1,0 +1,40 @@
+name: Apply Economic Context Tab
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/apply-economic-context-tab.mjs'
+      - 'src/components/EconomicContextReport.tsx'
+      - 'src/components/EconomicContextReport.css'
+      - '.github/workflows/apply-economic-context-tab.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fxga-economic-context-tab
+  cancel-in-progress: true
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Integrate Economic Context tab
+        run: node scripts/apply-economic-context-tab.mjs
+      - name: Build production frontend
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Commit integrated app shell
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/App.tsx
+          git diff --cached --quiet || git commit -m 'Add dedicated Economic Context report tab'
+          git push origin HEAD:main
