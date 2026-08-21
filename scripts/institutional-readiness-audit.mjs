@@ -48,9 +48,10 @@ if(backend){
   try{
     const quality=await json(`${backend}/api/data-quality`);
     const coverage=Number(quality?.macro?.coverage?.effectiveCoveragePercent),liveCoverage=Number(quality?.macro?.coverage?.liveCoveragePercent),requested=Number(quality?.macro?.coverage?.requested||0),unresolved=Number(quality?.macro?.failures?.unresolved??0);
-    const bounded=Number.isFinite(coverage)&&coverage>=0&&coverage<=100&&(!Number.isFinite(liveCoverage)||(liveCoverage>=0&&liveCoverage<=100));
+    const bounded=Number.isFinite(coverage)&&coverage>=0&&coverage<=100&&Number.isFinite(liveCoverage)&&liveCoverage>=0&&liveCoverage<=100;
     const sufficientlyComplete=coverage>=75&&unresolved<=Math.max(10,requested*0.25);
-    dimensions.push(result('macro-data-health',bounded&&sufficientlyComplete,{coveragePercent:coverage,liveCoveragePercent:Number.isFinite(liveCoverage)?liveCoverage:null,requested,unresolved,status:quality?.macro?.coverage?.status||null,boundedPercentages:Boolean(quality?.macro?.coverage?.boundedPercentages)}));
+    const meaningfulLiveCoverage=liveCoverage>=25;
+    dimensions.push(result('macro-data-health',bounded&&sufficientlyComplete&&meaningfulLiveCoverage,{coveragePercent:coverage,liveCoveragePercent:liveCoverage,minimumLiveCoveragePercent:25,requested,unresolved,status:quality?.macro?.coverage?.status||null,boundedPercentages:Boolean(quality?.macro?.coverage?.boundedPercentages),lastKnownGoodAllowed:true}));
   }catch(error){dimensions.push(result('macro-data-health',false,{error:String(error?.message||error)}));}
 
   try{
@@ -106,7 +107,7 @@ try{
 const blocking=dimensions.filter(row=>row.blocking);
 const institutionalReady=blocking.every(row=>row.ready);
 const report={
-  schema:'fxga.institutional.readiness.v2',
+  schema:'fxga.institutional.readiness.v3',
   generatedAt:new Date().toISOString(),
   institutionalReady,
   tradeModelReady:dimensions.find(row=>row.name==='trade-model-readiness')?.ready??false,
@@ -115,7 +116,7 @@ const report={
   mt5:mt5||null,
   summary:{ready:dimensions.filter(row=>row.ready).length,notReady:dimensions.filter(row=>!row.ready).length,blockingFailures:blocking.filter(row=>!row.ready).length,total:dimensions.length},
   dimensions,
-  interpretation:{institutionalReady:'Core infrastructure, bounded/fresh evidence, global macro and MT5 readiness. This is not a regulatory certification.',tradeModelReady:'At least one event-pattern candidate has passed the configured OOS promotion gates. It is never a profitability guarantee.',confidence:'UI confidence values are evidence-quality scores until empirical calibration proves probability reliability.'},
+  interpretation:{institutionalReady:'Core infrastructure, bounded/fresh evidence, global macro and MT5 readiness. This is not a regulatory certification.',tradeModelReady:'At least one event-pattern candidate has passed the configured OOS promotion gates. It is never a profitability guarantee.',confidence:'UI confidence values are evidence-quality scores until empirical calibration proves probability reliability.',lastKnownGood:'Last-known-good data preserves continuity but cannot by itself satisfy institutional live-data readiness.'},
 };
 fs.mkdirSync('runtime',{recursive:true});
 fs.writeFileSync('runtime/institutional-readiness.json',JSON.stringify(report,null,2)+'\n');
