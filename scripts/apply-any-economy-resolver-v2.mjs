@@ -13,6 +13,9 @@ const newBlock=`patch('src/lib/api.ts',
 'frontend resolver API');`;
 if(!source.includes(oldBlock))throw new Error('Could not adapt original resolver integration API block');
 source=source.replace(oldBlock,newBlock);
+const unsafeHelper=".replace(/\\\\/$/,'')";
+if(!source.includes(unsafeHelper))throw new Error('Could not find collector URL regex helper to simplify');
+source=source.replace(unsafeHelper,'.trim()');
 const runtime='scripts/.apply-any-economy-resolver-runtime.mjs';
 fs.writeFileSync(runtime,source);
 try{await import(pathToFileURL(process.cwd()+'/'+runtime).href+'?v='+Date.now());}finally{fs.rmSync(runtime,{force:true});}
