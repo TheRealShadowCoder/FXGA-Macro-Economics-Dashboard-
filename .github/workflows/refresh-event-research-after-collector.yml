@@ -5,6 +5,10 @@ on:
   workflow_run:
     workflows: ['Deploy FXGA Google Cloud Collector']
     types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - '.github/force-event-research-refresh.trigger'
 
 permissions:
   contents: read
@@ -18,7 +22,7 @@ env:
 
 jobs:
   rebuild:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - id: config
@@ -73,5 +77,49 @@ jobs:
           if(!Array.isArray(research.horizons)||research.horizons.length!==9)throw new Error('Post-release horizons incomplete');
           if(!pattern.researchGovernance?.outOfSampleRequired)throw new Error('Pattern OOS governance missing');
           if(!backtest.schema?.startsWith('fxga.event-pattern-backtest.'))throw new Error('OOS backtest state missing');
-          console.log(JSON.stringify({studyCount:research.studyCount,profiles:pattern.profiles,recurringProfiles:pattern.recurringProfiles,tests:backtest.tests,validatedCandidates:backtest.validatedCandidates},null,2));
+          const report={schema:'fxga.event-research.refresh.v1',generatedAt:new Date().toISOString(),studyCount:Number(research.studyCount||0),preNewsWindows:research.preNewsWindows.length,horizons:research.horizons.length,profiles:Number(pattern.profiles||0),recurringProfiles:Number(pattern.recurringProfiles||0),tests:Number(backtest.tests||0),validatedCandidates:Number(backtest.validatedCandidates||0),backtestSchema:backtest.schema};
+          fs.writeFileSync('/tmp/event-research-verified.json',JSON.stringify(report,null,2)+'\n');
+          console.log(JSON.stringify(report,null,2));
           NODE
+      - name: Upload verified research report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxga-event-research-refresh
+          path: /tmp/event-research-verified.json
+          retention-days: 14
+
+  attest:
+    needs: rebuild
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download verified report
+        if: ${{ needs.rebuild.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: fxga-event-research-refresh
+          path: runtime
+      - name: Publish event research refresh status
+        env:
+          CONCLUSION: ${{ needs.rebuild.result }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p runtime
+          if [ -f runtime/event-research-verified.json ]; then
+            mv runtime/event-research-verified.json runtime/event-research-refresh-status.json
+          else
+            node <<'NODE'
+          const fs=require('fs');
+          fs.writeFileSync('runtime/event-research-refresh-status.json',JSON.stringify({schema:'fxga.event-research.refresh.v1',generatedAt:new Date().toISOString(),conclusion:process.env.CONCLUSION,runId:Number(process.env.RUN_ID),error:`Event research rebuild ${process.env.CONCLUSION}`},null,2)+'\n');
+          NODE
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add runtime/event-research-refresh-status.json
+          git diff --cached --quiet || git commit -m 'Record event research refresh status [skip ci]'
+          git push origin HEAD:main
