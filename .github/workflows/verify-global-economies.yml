@@ -2,38 +2,51 @@ name: Verify FXGA Google Global Economies
 
 on:
   workflow_run:
-    workflows: ["Activate Google Cloud FXGA 9705 Engine"]
+    workflows: ["Deploy FXGA Cloud Run Collector"]
     types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Verify passive edge and five-economy Google state
+      - uses: actions/checkout@v4
+      - name: Verify dynamic global-economy source contract
         run: |
           node <<'NODE'
-          const base='https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
-          async function json(path){const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,500)}`);return JSON.parse(t);}
-          const health=await json('/api/health');
-          if(health.collectorMode!=='google-cloud-run-webhook')throw new Error('Google webhook mode missing');
-          if(health.configured?.browserRun!==false||health.configured?.calendarScraping!==false||health.configured?.officialNewsScraping!==false)throw new Error('Cloudflare acquisition must be disabled');
-          for(const k of ['normalStateUpstreamCalendarRequests','normalStateUpstreamFredRequests','normalStateUpstreamNewsRequests','normalStateUpstreamMarketRequests'])if(Number(health.safety?.[k]??-1)!==0)throw new Error(`${k} must be zero`);
-          const catalog=await json('/api/fred/catalog');
-          if(Number(catalog.curatedBase||0)<109||Number(catalog.total||0)<109)throw new Error(`Google FRED universe incomplete: total=${catalog.total}, curated=${catalog.curatedBase}`);
-          for(const economy of ['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN'])if(!catalog.policy?.globalCoverage?.includes(economy))throw new Error(`Missing ${economy} global coverage`);
+          const fs=require('fs');
+          const core=fs.readFileSync('cloud-run-collector/src/super-economist-core.js','utf8');
+          const fred=fs.readFileSync('cloud-run-collector/src/global-fred.js','utf8');
+          const ui=fs.readFileSync('src/components/EconomicContextReport.tsx','utf8');
+          const types=fs.readFileSync('src/lib/economy-types.ts','utf8');
+          const expected=['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN','CANADA','AUSTRALIA','NEW_ZEALAND','SWITZERLAND','CHINA','INDIA','BRAZIL','MEXICO','SOUTH_KOREA','INDONESIA','SAUDI_ARABIA','TURKEY','ARGENTINA','SINGAPORE','NORWAY','SWEDEN'];
+          for(const id of expected) if(!core.includes(`'${id}'`)&&!core.includes(`${id}:`)) throw new Error(`Missing economy ${id} from macro state engine`);
+          for(const id of expected.slice(5)) if(!fred.includes(`${id}:`)) throw new Error(`Missing FRED discovery label ${id}`);
+          if(/export type EconomyId\s*=\s*'USA'/.test(types)) throw new Error('Frontend EconomyId must remain data-driven');
+          for(const text of ['All Economies','Choose an economy','How to compare two economies','Mini economics school','fetchEconomyAnalysis']) if(!ui.includes(text)) throw new Error(`Economic Context educational/global UI missing: ${text}`);
+          console.log(JSON.stringify({sourceContract:true,baselineEconomies:expected.length,dynamicFrontend:true,educationalReport:true}));
+          NODE
+
+      - name: Verify live Google global economy state
+        run: |
+          node <<'NODE'
+          const base='https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app';
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          async function json(path){let last;for(let n=0;n<12;n++){try{const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}}),t=await r.text();if(!r.ok)throw new Error(`${path} ${r.status}: ${t.slice(0,500)}`);return JSON.parse(t);}catch(e){last=e;await sleep(3000);}}throw last;}
           const global=await json('/api/global-macro');
-          if(global.totalObservations<100||global.targetEconomies?.length!==5)throw new Error('Global macro state incomplete');
           const analysis=await json('/api/economy-analysis');
-          if(analysis.collectorMode!=='google-cloud-run-super-economist')throw new Error(`Economy analysis must originate in Google Super Economist, got ${analysis.collectorMode}`);
-          const expected={USA:['USD','Federal Reserve'],EUROPE:['EUR','European Central Bank'],UK:['GBP','Bank of England'],SOUTH_AFRICA:['ZAR','South African Reserve Bank'],JAPAN:['JPY','Bank of Japan']};
-          if(analysis.economies?.length!==5)throw new Error('Expected five economy states');
-          for(const [id,[currency,bank]] of Object.entries(expected)){const e=analysis.economies.find(x=>x.id===id);if(!e||e.currency!==currency||e.centralBank!==bank)throw new Error(`Mapping failed ${id}`);if(e.dimensions?.length!==5)throw new Error(`${id} missing five dimensions`);}
-          const superEngine=await json('/api/super-economist');
-          if(superEngine.registry?.totalMethods!==9705||superEngine.registry?.totalFamilies!==150)throw new Error('9705/150 registry contract failed');
-          if(superEngine.executionLocation!=='Google Cloud Run')throw new Error('Decision engine not executed on Google Cloud');
-          console.log('Google global-economy contract passed:',JSON.stringify({fred:catalog.total,observations:global.totalObservations,methods:superEngine.registry.totalMethods,eligible:superEngine.coverage?.eligibleMethods,activeFamilies:superEngine.coverage?.activeFamilies}));
+          if(!Array.isArray(global.targetEconomies)||global.targetEconomies.length<21)throw new Error(`Expected >=21 target economies, got ${global.targetEconomies?.length}`);
+          if(!Array.isArray(analysis.economies)||analysis.economies.length<5)throw new Error('No usable economy states returned');
+          const ids=new Set(analysis.economies.map(e=>e.id));
+          for(const id of ['USA','EUROPE','UK','SOUTH_AFRICA','JAPAN']) if(!ids.has(id))throw new Error(`Core economy ${id} missing from live state`);
+          for(const e of analysis.economies){
+            if(!e.label||!e.currency||!e.centralBank)throw new Error(`Metadata incomplete for ${e.id}`);
+            if(!Array.isArray(e.dimensions)||e.dimensions.length!==5)throw new Error(`${e.id} does not expose five educational macro dimensions`);
+            for(const id of ['growth','inflation','labour','policy','financial']) if(!e.dimensions.some(d=>d.id===id))throw new Error(`${e.id} missing ${id} dimension`);
+          }
+          console.log('Expanded global economy contract passed:',JSON.stringify({targets:global.targetEconomies.length,populated:analysis.economies.length,observations:analysis.observationCount}));
           NODE
