@@ -11,7 +11,7 @@ import type {
   TechnicalTimeframeState,
 } from './types';
 import type { EconomyAnalysisPayload, GlobalMacroPayload } from './economy-types';
-import type { EventStudiesPayload } from './event-study-types';
+import type { EventPatternBacktestPayload, EventStudiesPayload, EventStudyHorizon } from './event-study-types';
 import type { DataQualityPayload } from './data-quality-types';
 import { apiGetJson } from './api-runtime';
 
@@ -62,6 +62,22 @@ export function fetchEventStudies(days = 60, currency = ''): Promise<EventStudie
   const params = new URLSearchParams({ days: String(days) });
   if (currency) params.set('currency', currency);
   return apiGetJson<EventStudiesPayload>(`/api/event-studies?${params.toString()}`, 'critical');
+}
+
+export function fetchEventPatternBacktests(options: { asset?: string; currency?: string; eventFamily?: string; horizon?: EventStudyHorizon; validatedOnly?: boolean; limit?: number } = {}): Promise<EventPatternBacktestPayload> {
+  const params = new URLSearchParams();
+  if (options.asset) params.set('asset', options.asset);
+  if (options.currency) params.set('currency', options.currency);
+  if (options.eventFamily) params.set('eventFamily', options.eventFamily);
+  if (options.horizon) params.set('horizon', options.horizon);
+  if (options.validatedOnly) params.set('validatedOnly', 'true');
+  if (options.limit) params.set('limit', String(options.limit));
+  const query = params.toString();
+  return apiGetJson<EventPatternBacktestPayload>(`/api/event-pattern-backtests${query ? `?${query}` : ''}`);
+}
+
+export function fetchEventStudySources<T>(): Promise<T> {
+  return apiGetJson<T>('/api/event-study-sources');
 }
 
 export function fetchDataQuality(): Promise<DataQualityPayload> {
