@@ -24,6 +24,7 @@ env:
   DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
   RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
   PUBLIC_ORIGIN: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
+  MT5_SECRET_NAME: fxga-mt5-token-sha256
 
 jobs:
   deploy:
@@ -62,8 +63,38 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      - name: Ensure secret-backed MT5 authentication
+        env:
+          OPTIONAL_BOOTSTRAP_HASH: ${{ secrets.FXGA_MT5_TOKEN_SHA256 }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          gcloud services enable secretmanager.googleapis.com run.googleapis.com
+
+          if ! gcloud secrets describe "$MT5_SECRET_NAME" >/dev/null 2>&1; then
+            VALUE="${OPTIONAL_BOOTSTRAP_HASH:-}"
+            if [ -z "$VALUE" ] && gcloud run services describe "$SERVICE" --region "$GCP_REGION" >/dev/null 2>&1; then
+              # One-time migration from the currently deployed Cloud Run revision. The value
+              # is captured into a shell variable and is never echoed to Actions logs.
+              VALUE=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format=json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const x=JSON.parse(s);const env=x?.spec?.template?.spec?.containers?.[0]?.env||[];process.stdout.write(String(env.find(e=>e.name==='FXGA_MT5_TOKEN_SHA256')?.value||''))})")
+            fi
+            printf '%s' "$VALUE" | grep -Eq '^[A-Fa-f0-9]{64}$' || { echo '::error::No valid MT5 token hash exists to migrate. Set GitHub secret FXGA_MT5_TOKEN_SHA256 once for bootstrap.'; exit 1; }
+            gcloud secrets create "$MT5_SECRET_NAME" --replication-policy=automatic --quiet
+            printf '%s' "$VALUE" | gcloud secrets versions add "$MT5_SECRET_NAME" --data-file=- --quiet >/dev/null
+            unset VALUE
+            echo 'Created MT5 authentication secret from an existing trusted value.'
+          else
+            echo 'MT5 authentication secret already exists.'
+          fi
+
+          gcloud secrets add-iam-policy-binding "$MT5_SECRET_NAME" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role="roles/secretmanager.secretAccessor" \
+            --quiet >/dev/null
+
       - name: Build and push MT5 ingress
         run: |
+          set -euo pipefail
           gcloud config set project "$GCP_PROJECT_ID"
           gcloud services enable run.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com
           gcloud artifacts repositories describe "$GAR_REPOSITORY" --location "$GCP_REGION" >/dev/null 2>&1 || \
@@ -76,11 +107,8 @@ jobs:
 
       - id: deploy
         name: Deploy public authenticated MT5 ingress
-        env:
-          MT5_TOKEN_SHA256: ${{ secrets.FXGA_MT5_TOKEN_SHA256 }}
         run: |
-          test -n "$MT5_TOKEN_SHA256" || { echo '::error::GitHub secret FXGA_MT5_TOKEN_SHA256 is required; no repository fallback is permitted'; exit 1; }
-          printf '%s' "$MT5_TOKEN_SHA256" | grep -Eq '^[A-Fa-f0-9]{64}$' || { echo '::error::FXGA_MT5_TOKEN_SHA256 must be a 64-character SHA-256 hex digest'; exit 1; }
+          set -euo pipefail
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
             --region "$GCP_REGION" \
@@ -93,7 +121,8 @@ jobs:
             --min 0 \
             --max 2 \
             --timeout 30 \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_MT5_TOKEN_SHA256=$MT5_TOKEN_SHA256,FXGA_PUBLIC_ORIGIN=$PUBLIC_ORIGIN,FXGA_ARCHITECTURE=google-cloud-direct"
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_PUBLIC_ORIGIN=$PUBLIC_ORIGIN,FXGA_ARCHITECTURE=google-cloud-direct" \
+            --set-secrets "FXGA_MT5_TOKEN_SHA256=$MT5_SECRET_NAME:latest"
           MT5_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           test -n "$MT5_URL" || { echo '::error::MT5 Cloud Run URL missing'; exit 1; }
           echo "MT5_URL=$MT5_URL" >> "$GITHUB_ENV"
@@ -170,7 +199,7 @@ jobs:
               evictionTargetBytes:175000000,
               policy:'rolling 60-day canonical M1 + gzip + timestamp dedupe + time FIFO + capacity FIFO + integrity diagnostics + deterministic higher-timeframe reconstruction'
             },
-            authentication:{mode:'sha256-token-secret',repositoryFallback:false},
+            authentication:{mode:'google-secret-manager-backed-sha256-token',repositoryFallback:false},
             updatedAt:new Date().toISOString(),
             cloudflareProcessing:false
           };
@@ -194,7 +223,7 @@ jobs:
           echo "MT5 price ingest: $MT5_URL/api/mt5/price-cache"
           echo "MT5 price query: $MT5_URL/api/mt5/prices"
           echo "MT5 SMC snapshot: $MT5_URL/api/mt5/smc-snapshot"
-          echo "Authentication: secret-backed SHA-256 token digest; no repository fallback"
+          echo "Authentication: Google Secret Manager-backed SHA-256 token digest; no repository fallback"
           echo "Canonical cache: rolling 60 calendar days of M1 for the 16 website assets; 160-bar overlap every 300 seconds"
           echo "Maximum 24/7 M1 observations per asset: 86,400; session-limited instruments retain fewer bars over the same 60-day clock window"
           echo "Storage: time FIFO first; 200 MB envelope / 190 MB payload hard ceiling / 175 MB capacity FIFO target"
