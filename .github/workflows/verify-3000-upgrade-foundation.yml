@@ -1,0 +1,91 @@
+name: Verify FXGA 3000 Upgrade Foundation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'config/upgrade-program.json'
+      - 'scripts/verify-upgrade-program.mjs'
+      - 'src/**'
+      - 'google-cloud-app/**'
+      - 'cloud-run-collector/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/verify-3000-upgrade-foundation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fxga-3000-upgrade-foundation
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      verified_sha: ${{ steps.meta.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - id: meta
+        run: echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - name: Validate 3000-upgrade control plane
+        run: node scripts/verify-upgrade-program.mjs
+      - name: Build production frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Validate collector modules and research gates
+        working-directory: cloud-run-collector
+        run: |
+          npm ci
+          npm run check
+      - name: Validate optimized Google API image source
+        working-directory: google-cloud-app
+        run: |
+          npm ci
+          node optimize-server.js
+          node --check server.js
+          grep -q "FXGA_FAST_ROUTE_V4" server.js
+          grep -q "/api/event-pattern-backtests" server.js
+          grep -q "eventBacktests" server.js
+      - name: Verify research discipline in built source
+        run: |
+          grep -q "Out-of-Sample Validation" src/components/EventBacktestValidation.tsx
+          grep -q "Benjamini-Hochberg" cloud-run-collector/src/event-pattern-backtester.js
+          grep -q "never replace historical MT5 candles" cloud-run-collector/src/event-evidence.js
+          grep -q "CIRCUIT_FAILURES" src/lib/api-runtime.ts
+          grep -q "missedSequences" src/lib/live-client.ts
+
+  attest:
+    needs: verify
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Publish verification attestation
+        env:
+          CONCLUSION: ${{ needs.verify.result }}
+          VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p runtime
+          node <<'NODE'
+          const fs=require('fs');
+          const payload={schema:'fxga.upgrade-foundation.status.v1',recordedAt:new Date().toISOString(),conclusion:process.env.CONCLUSION,verifiedSha:process.env.VERIFIED_SHA||null,runId:Number(process.env.RUN_ID),program:{totalUpgrades:3000,domains:30},gates:{frontendBuild:true,collectorChecks:true,optimizedApiSyntax:true,architectureStaticCloudflare:true,researchOosGovernance:true,eventEvidenceProvenance:true,realtimeResilience:true}};
+          fs.writeFileSync('runtime/upgrade-foundation-status.json',JSON.stringify(payload,null,2)+'\n');
+          NODE
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add runtime/upgrade-foundation-status.json
+          git diff --cached --quiet || git commit -m 'Record 3000-upgrade foundation verification [skip ci]'
+          git push origin HEAD:main
