@@ -1,19 +1,125 @@
 {
   "schema": "fxga.upgrade-production.audit.v1",
-  "generatedAt": "2026-08-21T01:46:40.653Z",
-  "passed": false,
-  "workflowConclusion": "failure",
-  "runId": 32437454600,
+  "generatedAt": "2026-08-21T14:17:34.790Z",
+  "passed": true,
+  "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
+  "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app",
+  "mt5": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app",
   "summary": {
-    "passed": 0,
-    "failed": 1,
-    "total": 1
+    "passed": 11,
+    "failed": 0,
+    "total": 11
   },
   "checks": [
     {
-      "name": "workflow",
-      "passed": false,
-      "error": "Upgrade production audit failure"
+      "name": "current-static-release",
+      "passed": true,
+      "durationMs": 937,
+      "detail": {
+        "release": "cross-asset-mt5-60d-event-research",
+        "commit": "53349a2ce915dd365147d4f3f10510641df7c502",
+        "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app"
+      }
+    },
+    {
+      "name": "frontend-upgrade-ui",
+      "passed": true,
+      "durationMs": 76,
+      "detail": {
+        "scripts": 1
+      }
+    },
+    {
+      "name": "google-api-health",
+      "passed": true,
+      "durationMs": 685,
+      "detail": {
+        "calendar": "2026-08-21T14:09:24.491Z",
+        "macro": "2026-08-21T14:02:09.734Z",
+        "intelligence": "2026-08-21T02:52:15.275Z",
+        "market": "2026-08-21T14:17:24.096Z",
+        "technical": "2026-08-21T14:17:21.853Z"
+      }
+    },
+    {
+      "name": "event-study-full-research",
+      "passed": true,
+      "durationMs": 5432,
+      "detail": {
+        "studies": 40,
+        "evidenceBundles": 0,
+        "preNewsStudies": 17,
+        "backtests": 0,
+        "validated": 0
+      }
+    },
+    {
+      "name": "event-pattern-oos-api",
+      "passed": true,
+      "durationMs": 123,
+      "detail": {
+        "tests": 0,
+        "validated": 0
+      }
+    },
+    {
+      "name": "event-source-fusion",
+      "passed": true,
+      "durationMs": 61,
+      "detail": {
+        "fred": 80,
+        "cnbc": 16,
+        "fxstreet": 270,
+        "mt5Studies": 633
+      }
+    },
+    {
+      "name": "signal-live",
+      "passed": true,
+      "durationMs": 56,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "name": "signal-history",
+      "passed": true,
+      "durationMs": 52,
+      "detail": {
+        "count": 5
+      }
+    },
+    {
+      "name": "signal-metrics",
+      "passed": true,
+      "durationMs": 45,
+      "detail": {
+        "signals": 5,
+        "events": 8
+      }
+    },
+    {
+      "name": "data-quality-safe",
+      "passed": true,
+      "durationMs": 50,
+      "detail": {
+        "requested": 59,
+        "usableObservations": 218,
+        "effectiveCoveragePercent": 369.5,
+        "liveCoveragePercent": 369.5,
+        "status": "strong"
+      }
+    },
+    {
+      "name": "mt5-60d",
+      "passed": true,
+      "durationMs": 288,
+      "detail": {
+        "bars": 36586,
+        "chunks": 64,
+        "health": "STALE",
+        "current": 10
+      }
     }
   ]
 }
