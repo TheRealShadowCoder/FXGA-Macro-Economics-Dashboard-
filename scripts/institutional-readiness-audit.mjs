@@ -20,6 +20,7 @@ async function json(url,{attempts=3,timeoutMs=30_000}={}){
 
 const result=(name,ready,detail,blocking=true)=>({name,ready:Boolean(ready),blocking,detail});
 const finite=value=>Number.isFinite(Number(value));
+const ageMinutes=value=>{const t=Date.parse(value||'');return Number.isFinite(t)?Math.max(0,Math.round((Date.now()-t)/60_000)):Infinity;};
 function fxMarketExpectedOpen(now=new Date()){
   const day=now.getUTCDay(),hour=now.getUTCHours();
   if(day===6)return false;
@@ -40,28 +41,33 @@ if(backend){
   try{
     const health=await json(`${backend}/api/health`);
     dimensions.push(result('service-health',health.ok===true&&health.compute==='Google Cloud Run'&&health.state==='Google Cloud Firestore'&&health.cloudflareProcessing===false,{updatedAt:health.updatedAt||null,compute:health.compute,state:health.state}));
-  }catch(error){dimensions.push(result('service-health',false,{error:String(error?.message||error)}));}
+    const intelligenceAge=ageMinutes(health?.updatedAt?.intelligence),macroAge=ageMinutes(health?.updatedAt?.macro),marketAge=ageMinutes(health?.updatedAt?.market);
+    dimensions.push(result('intelligence-freshness',intelligenceAge<=30&&macroAge<=180&&marketAge<=30,{intelligenceAgeMinutes:intelligenceAge,macroAgeMinutes:macroAge,marketAgeMinutes:marketAge,thresholds:{intelligence:30,macro:180,market:30}}));
+  }catch(error){dimensions.push(result('service-health',false,{error:String(error?.message||error)}));dimensions.push(result('intelligence-freshness',false,{error:String(error?.message||error)}));}
 
   try{
     const quality=await json(`${backend}/api/data-quality`);
-    const coverage=Number(quality?.macro?.coverage?.effectiveCoveragePercent);
-    const unresolved=Number(quality?.macro?.failures?.unresolved??0);
-    dimensions.push(result('macro-data-health',Number.isFinite(coverage)&&coverage>=75&&unresolved<=Math.max(10,Number(quality?.macro?.coverage?.requested||0)*0.25),{coveragePercent:coverage,unresolved,status:quality?.macro?.coverage?.status||null}));
+    const coverage=Number(quality?.macro?.coverage?.effectiveCoveragePercent),liveCoverage=Number(quality?.macro?.coverage?.liveCoveragePercent),requested=Number(quality?.macro?.coverage?.requested||0),unresolved=Number(quality?.macro?.failures?.unresolved??0);
+    const bounded=Number.isFinite(coverage)&&coverage>=0&&coverage<=100&&(!Number.isFinite(liveCoverage)||(liveCoverage>=0&&liveCoverage<=100));
+    const sufficientlyComplete=coverage>=75&&unresolved<=Math.max(10,requested*0.25);
+    dimensions.push(result('macro-data-health',bounded&&sufficientlyComplete,{coveragePercent:coverage,liveCoveragePercent:Number.isFinite(liveCoverage)?liveCoverage:null,requested,unresolved,status:quality?.macro?.coverage?.status||null,boundedPercentages:Boolean(quality?.macro?.coverage?.boundedPercentages)}));
   }catch(error){dimensions.push(result('macro-data-health',false,{error:String(error?.message||error)}));}
 
   try{
     const global=await json(`${backend}/api/global-macro`);
     const targets=Array.isArray(global.targetEconomies)?global.targetEconomies:[];
-    const populated=targets.filter(id=>Number(global?.counts?.[id]||0)>0);
-    dimensions.push(result('global-economy-data',targets.length>=21&&populated.length>=Math.min(16,targets.length),{targets:targets.length,populated:populated.length,mode:global.mode||null,hardCodedPublicEconomyList:global?.policy?.hardCodedPublicEconomyList??null}));
+    const populated=targets.filter(id=>Number(global?.counts?.[id]||0)>0),coverage=Number(global?.coverage?.effectiveCoveragePercent);
+    const coverageValid=!Number.isFinite(coverage)||(coverage>=0&&coverage<=100);
+    dimensions.push(result('global-economy-data',targets.length>=21&&populated.length>=Math.min(16,targets.length)&&coverageValid,{targets:targets.length,populated:populated.length,mode:global.mode||null,coveragePercent:Number.isFinite(coverage)?coverage:null,hardCodedPublicEconomyList:global?.policy?.hardCodedPublicEconomyList??null}));
   }catch(error){dimensions.push(result('global-economy-data',false,{error:String(error?.message||error)}));}
 
   try{
     const economy=await json(`${backend}/api/economy-analysis`);
     const rows=Array.isArray(economy?.economies)?economy.economies:[];
     const ids=new Set(rows.map(row=>row.id));
-    const structurallyValid=rows.filter(row=>Array.isArray(row.dimensions)&&row.dimensions.length===5&&row.dimensions.every(d=>finite(d.score))&&finite(row.confidence)&&finite(row.currencyScore));
-    dimensions.push(result('global-economy-model',rows.length>=21&&ids.size===rows.length&&structurallyValid.length===rows.length,{economies:rows.length,unique:ids.size,structurallyValid:structurallyValid.length,generatedAt:economy?.generatedAt||null}));
+    const structurallyValid=rows.filter(row=>Array.isArray(row.dimensions)&&row.dimensions.length===5&&row.dimensions.every(d=>finite(d.score))&&finite(row.confidence)&&Number(row.confidence)>=0&&Number(row.confidence)<=100&&finite(row.currencyScore));
+    const modelAge=ageMinutes(economy?.generatedAt);
+    dimensions.push(result('global-economy-model',rows.length>=21&&ids.size===rows.length&&structurallyValid.length===rows.length&&modelAge<=30,{economies:rows.length,unique:ids.size,structurallyValid:structurallyValid.length,generatedAt:economy?.generatedAt||null,ageMinutes:modelAge}));
   }catch(error){dimensions.push(result('global-economy-model',false,{error:String(error?.message||error)}));}
 
   try{
@@ -89,17 +95,18 @@ try{
   const config=await json(`${site}/mt5-cloud.json?readiness=${Date.now()}`);
   mt5=String(config.baseUrl||'').replace(/\/$/,'');
   if(!mt5.startsWith('https://'))throw new Error('MT5 endpoint missing');
-  const [status,current]=await Promise.all([json(`${mt5}/api/mt5/price-cache/status`),json(`${mt5}/api/mt5/prices?symbol=EURUSD&timeframe=M1&limit=10`)]);
+  const [status,current,health]=await Promise.all([json(`${mt5}/api/mt5/price-cache/status`),json(`${mt5}/api/mt5/prices?symbol=EURUSD&timeframe=M1&limit=10`),json(`${mt5}/api/mt5/health`)]);
   const dbState=String(status?.databaseHealth?.state||'UNKNOWN').toUpperCase();
   const newest=Number(current?.newestMs||0),ageMs=newest?Date.now()-newest:Infinity,marketOpen=fxMarketExpectedOpen();
   const freshnessReady=marketOpen?ageMs<=20*60_000:true;
-  dimensions.push(result('mt5-data-readiness',status.retentionDays===60&&status.allowedSymbols?.length===16&&dbState!=='STALE'&&freshnessReady,{databaseHealth:dbState,totalBars:Number(status.totalBars||0),assetsExpected:Number(status?.databaseHealth?.assetsExpected||0),newestEURUSD:newest||null,ageMinutes:Number.isFinite(ageMs)?Math.round(ageMs/60_000):null,marketExpectedOpen:marketOpen}));
+  const secretBacked=health?.authentication?.configured===true&&String(health?.authentication?.mode||'').includes('sha256-token');
+  dimensions.push(result('mt5-data-readiness',status.retentionDays===60&&status.allowedSymbols?.length===16&&dbState!=='STALE'&&freshnessReady&&secretBacked,{databaseHealth:dbState,totalBars:Number(status.totalBars||0),assetsExpected:Number(status?.databaseHealth?.assetsExpected||0),newestEURUSD:newest||null,ageMinutes:Number.isFinite(ageMs)?Math.round(ageMs/60_000):null,marketExpectedOpen:marketOpen,secretBackedAuthentication:secretBacked}));
 }catch(error){dimensions.push(result('mt5-data-readiness',false,{error:String(error?.message||error)}));}
 
 const blocking=dimensions.filter(row=>row.blocking);
 const institutionalReady=blocking.every(row=>row.ready);
 const report={
-  schema:'fxga.institutional.readiness.v1',
+  schema:'fxga.institutional.readiness.v2',
   generatedAt:new Date().toISOString(),
   institutionalReady,
   tradeModelReady:dimensions.find(row=>row.name==='trade-model-readiness')?.ready??false,
@@ -108,7 +115,7 @@ const report={
   mt5:mt5||null,
   summary:{ready:dimensions.filter(row=>row.ready).length,notReady:dimensions.filter(row=>!row.ready).length,blockingFailures:blocking.filter(row=>!row.ready).length,total:dimensions.length},
   dimensions,
-  interpretation:{institutionalReady:'Core infrastructure, evidence, global macro and MT5 readiness. This is not a regulatory certification.',tradeModelReady:'At least one event-pattern candidate has passed the configured OOS promotion gates. It is never a profitability guarantee.'},
+  interpretation:{institutionalReady:'Core infrastructure, bounded/fresh evidence, global macro and MT5 readiness. This is not a regulatory certification.',tradeModelReady:'At least one event-pattern candidate has passed the configured OOS promotion gates. It is never a profitability guarantee.',confidence:'UI confidence values are evidence-quality scores until empirical calibration proves probability reliability.'},
 };
 fs.mkdirSync('runtime',{recursive:true});
 fs.writeFileSync('runtime/institutional-readiness.json',JSON.stringify(report,null,2)+'\n');
