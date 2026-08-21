@@ -1,0 +1,154 @@
+name: Refresh FRED Coverage After Collector Deploy
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ['Deploy FXGA Google Cloud Collector']
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  SERVICE: fxga-macro-collector
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+
+jobs:
+  refresh-fred-coverage:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: config
+        name: Resolve Google Cloud authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - id: service
+        name: Resolve private collector service
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          test -n "$SERVICE_URL" || { echo '::error::Collector URL is missing'; exit 1; }
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+
+      - id: invoke
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service.outputs.url }}
+          id_token_include_email: true
+
+      - name: Wait for FRED coverage repair to settle
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 18); do
+            curl --max-time 60 -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state" > /tmp/state.json || true
+            READY=$(node - <<'NODE'
+          const fs=require('fs');
+          try{
+            const state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8'));
+            const repair=state?.fredUniverse?.payload?.coverageRepair;
+            process.stdout.write(repair?.schema==='fxga.fred.coverage-repair.v1'?'yes':'no');
+          }catch{process.stdout.write('no');}
+          NODE
+            )
+            if [ "$READY" = yes ]; then
+              echo "FRED coverage repair state is ready on attempt $attempt."
+              break
+            fi
+            echo "Waiting for FRED coverage repair state ($attempt/18)..."
+            sleep 10
+          done
+
+      - name: Force full FRED macro refresh
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          STATUS=$(curl --max-time 900 -sS -o /tmp/full-macro.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{"mode":"full","reason":"fred-coverage-repair"}' \
+            "$SERVICE_URL/macro-sync?mode=full")
+          echo "Full macro refresh HTTP $STATUS"
+          test "$STATUS" -ge 200 -a "$STATUS" -lt 300 || { head -c 3000 /tmp/full-macro.json; exit 1; }
+          cat /tmp/full-macro.json
+
+      - name: Verify FRED coverage and remaining gaps
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          curl --max-time 90 -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state" > /tmp/state.json
+          node <<'NODE'
+          const fs=require('fs');
+          const state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8'));
+          const macro=state?.macro?.payload||{};
+          const universe=state?.fredUniverse?.payload||{};
+          const repair=universe.coverageRepair||{};
+          const quality=macro.coverageQuality||{};
+          const diagnostics=macro.failureDiagnostics||{};
+          const usable=Number(quality.usableObservations||macro.observations?.length||0);
+          const effective=Number(quality.effectiveCoveragePercent||0);
+          const categoryCoverage=Number(repair.coveragePercent||0);
+          if(repair.schema!=='fxga.fred.coverage-repair.v1')throw new Error('FRED coverage repair metadata is missing');
+          if(usable<100)throw new Error(`Usable macro observations too low after FRED repair: ${usable}`);
+          if(effective<90)throw new Error(`Effective FRED macro coverage below 90% after repair: ${effective}%`);
+          if(categoryCoverage<90)throw new Error(`Required FRED category coverage below 90%: ${categoryCoverage}%`);
+          const report={
+            generatedAt:macro.generatedAt,
+            fredSeries:Array.isArray(universe.series)?universe.series.length:0,
+            categoriesRequired:repair.categoriesRequired,
+            categoriesCovered:repair.categoriesCovered,
+            categoriesMissing:repair.categoriesMissing,
+            categoryCoveragePercent:repair.coveragePercent,
+            repairsApplied:repair.repairCount,
+            unresolvedRepairTargets:repair.unresolvedCount,
+            requested:quality.requested,
+            liveFetched:quality.liveFetched,
+            usableObservations:usable,
+            unresolvedObservations:quality.unresolved,
+            effectiveCoveragePercent:effective,
+            liveCoveragePercent:quality.liveCoveragePercent,
+            failureTypes:diagnostics.byType||{},
+            failureEconomies:diagnostics.byEconomy||{},
+            failureCategories:diagnostics.byCategory||{},
+          };
+          console.log('FRED COVERAGE VERIFIED',JSON.stringify(report,null,2));
+          const lines=[
+            '# FRED Coverage Repair', '',
+            `* FRED series in persisted universe: ${report.fredSeries}`,
+            `* Required category lanes: ${report.categoriesCovered}/${report.categoriesRequired} (${report.categoryCoveragePercent}%)`,
+            `* Repair operations applied: ${report.repairsApplied}`,
+            `* Remaining repair targets: ${report.unresolvedRepairTargets}`,
+            `* Usable macro observations: ${report.usableObservations}`,
+            `* Effective macro coverage: ${report.effectiveCoveragePercent}%`,
+            `* Live macro coverage: ${report.liveCoveragePercent}%`,
+            `* Unresolved observations: ${report.unresolvedObservations}`,
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join('\n')+'\n');
+          NODE
