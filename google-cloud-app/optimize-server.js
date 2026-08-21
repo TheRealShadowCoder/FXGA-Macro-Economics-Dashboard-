@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 
 const file = new URL('./server.js', import.meta.url);
 let source = await readFile(file, 'utf8');
-const injectedMarker = 'FXGA_FAST_ROUTE_V5';
+const injectedMarker = 'FXGA_FAST_ROUTE_V6';
 const markerCandidates = ['\nconst s=await liteState()', '\n  const s=await liteState()'];
 const marker = markerCandidates.find((candidate) => source.includes(candidate));
 
@@ -23,7 +23,7 @@ if (!source.includes('backtestResearch:research.backtestResearch??null')) {
 
 if (!source.includes(injectedMarker)) {
   const fastRoutes = `
-// FXGA_FAST_ROUTE_V5
+// FXGA_FAST_ROUTE_V6
 // Latency-sensitive routes return before generic liteState fan-out. This keeps
 // Cloud Run cold starts bounded and restores exact browser/API payload contracts.
 if(url.pathname==='/api/dashboard'){
@@ -41,6 +41,23 @@ if(url.pathname==='/api/analysis'||url.pathname==='/api/economy-analysis'||url.p
   if(url.pathname==='/api/analysis')return intel.macroAnalysis?sendJson(res,200,intel.macroAnalysis,'public, max-age=5'):apiError(res,503,'Analysis snapshot is not initialized');
   if(url.pathname==='/api/economy-analysis')return intel.economyAnalysis?sendJson(res,200,intel.economyAnalysis,'public, max-age=5'):apiError(res,503,'Economy analysis is not initialized');
   return intel.releaseImpact?sendJson(res,200,intel.releaseImpact,'public, max-age=5'):apiError(res,503,'Release impact is not initialized');
+}
+if(url.pathname==='/api/data-quality'){
+  const [macroState,marketState,technicalState,calendarState]=await Promise.all([readState('macro'),readState('market'),readState('technical'),readState('calendar')]);
+  const observations=(Array.isArray(macroState?.payload?.observations)?macroState.payload.observations:[]).map(normalizeObservation);
+  const existing=macroState?.payload?.coverageQuality??{};
+  const requested=Math.max(observations.length,Number(existing.requested??macroState?.payload?.requested??macroState?.payload?.universeSummary?.total??observations.length??0),1);
+  const liveFetched=Math.max(0,Math.min(requested,Number(existing.liveFetched??macroState?.payload?.liveFetched??macroState?.payload?.fetchedNow??0)));
+  const usable=Math.max(0,Math.min(requested,Number(existing.usableObservations??observations.length)));
+  const retained=Math.max(0,Math.min(usable,Number(existing.retainedLastKnownGood??macroState?.payload?.staleRetained??observations.filter(x=>x.staleFallback).length)));
+  const effectivePct=Math.max(0,Math.min(100,requested?usable/requested*100:0));
+  const livePct=Math.max(0,Math.min(100,requested?liveFetched/requested*100:0));
+  const unresolved=Math.max(0,requested-usable),diag=macroState?.payload?.failureDiagnostics??{};
+  const coverage={...existing,requested,liveFetched,retainedLastKnownGood:retained,usableObservations:usable,unresolved,liveCoveragePercent:Number(livePct.toFixed(1)),effectiveCoveragePercent:Number(effectivePct.toFixed(1)),status:effectivePct>=90?'strong':effectivePct>=75?'acceptable':'degraded',boundedPercentages:true};
+  const marketAssets=Array.isArray(marketState?.payload?.assets)?marketState.payload.assets:[];
+  const technical=technicalState?.payload??{counts:{},assets:{}};
+  const events=Array.isArray(calendarState?.payload?.events)?calendarState.payload.events:[];
+  return sendJson(res,200,{generatedAt:macroState?.payload?.generatedAt??macroState?.updatedAt??null,macro:{coverage,failures:{total:Number(diag.total??macroState?.payload?.failures?.length??0),retryable:Number(diag.retryable??0),nonRetryable:Number(diag.nonRetryable??0),unresolved,byType:diag.byType??{},byEconomy:diag.byEconomy??{},byCategory:diag.byCategory??{},series:(Array.isArray(macroState?.payload?.failures)?macroState.payload.failures:[]).slice(0,40)}},market:{assets:marketAssets.length,priced:marketAssets.filter(x=>typeof x.price==='number'&&Number.isFinite(x.price)).length,stale:marketAssets.filter(x=>x.stale).length},technical:{assets:Object.keys(technical.assets??{}).length,confirmed:Number(technical.counts?.confirmed??0),warming:Number(technical.counts?.warming??0)},calendar:{events:events.length,sourceHealth:calendarState?.payload?.sourceHealth??{}},publicPolicy:'Service health and evidence health are separate. Coverage percentages are bounded to 0-100 and unavailable evidence is never synthesized.'},'public, max-age=5');
 }
 if(url.pathname==='/api/global-macro'){
   const macroState=await readState('macro');
@@ -60,7 +77,7 @@ if(url.pathname==='/api/global-macro'){
     if(!assigned||tags.includes('GLOBAL'))global.push(row);
   }
   const counts=Object.fromEntries(targetEconomies.map(id=>[id,economies[id].length]));
-  const coverage=macroState?.payload?.coverageQuality??null;
+  const rawCoverage=macroState?.payload?.coverageQuality??{},requested=Math.max(observations.length,Number(rawCoverage.requested??macroState?.payload?.requested??observations.length),1),usable=Math.min(requested,Number(rawCoverage.usableObservations??observations.length)),coverage={...rawCoverage,requested,usableObservations:usable,effectiveCoveragePercent:Number(Math.max(0,Math.min(100,requested?usable/requested*100:0)).toFixed(1)),boundedPercentages:true};
   return sendJson(res,200,{generatedAt:macroState?.payload?.generatedAt??macroState?.updatedAt??null,mode:'google-cloud-direct-dynamic-economies',targetEconomies,totalObservations:observations.length,counts,economies,global,coverage,policy:{canonicalEconomyAuthority:'persisted macro evidence',hardCodedPublicEconomyList:false,missingData:'Unavailable evidence remains unavailable; no observations are synthesized.'}},'public, max-age=10');
 }
 if(url.pathname==='/api/news'){
@@ -122,4 +139,4 @@ if(url.pathname==='/api/event-pattern-backtests'){
 }
 
 await writeFile(file, source, 'utf8');
-console.log('Injected FXGA fast routes v5, dynamic global macro, macro catalog, event-study source fusion and OOS backtest API');
+console.log('Injected FXGA fast routes v6, bounded data quality, dynamic global macro, macro catalog, event-study source fusion and OOS backtest API');
