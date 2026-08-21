@@ -7,7 +7,7 @@ on:
     types: [completed]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 env:
@@ -21,6 +21,10 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
       - id: config
         name: Resolve Google Cloud authentication
         env:
@@ -104,6 +108,7 @@ jobs:
         run: |
           set -euo pipefail
           curl --max-time 90 -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state" > /tmp/state.json
+          mkdir -p runtime
           node <<'NODE'
           const fs=require('fs');
           const state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8'));
@@ -120,7 +125,10 @@ jobs:
           if(effective<90)throw new Error(`Effective FRED macro coverage below 90% after repair: ${effective}%`);
           if(categoryCoverage<90)throw new Error(`Required FRED category coverage below 90%: ${categoryCoverage}%`);
           const report={
-            generatedAt:macro.generatedAt,
+            schema:'fxga.fred.coverage-audit.v1',
+            passed:true,
+            generatedAt:new Date().toISOString(),
+            macroGeneratedAt:macro.generatedAt,
             fredSeries:Array.isArray(universe.series)?universe.series.length:0,
             categoriesRequired:repair.categoriesRequired,
             categoriesCovered:repair.categoriesCovered,
@@ -128,6 +136,8 @@ jobs:
             categoryCoveragePercent:repair.coveragePercent,
             repairsApplied:repair.repairCount,
             unresolvedRepairTargets:repair.unresolvedCount,
+            repairOperations:Array.isArray(repair.repairs)?repair.repairs:[],
+            repairUnresolved:Array.isArray(repair.unresolved)?repair.unresolved:[],
             requested:quality.requested,
             liveFetched:quality.liveFetched,
             usableObservations:usable,
@@ -137,8 +147,10 @@ jobs:
             failureTypes:diagnostics.byType||{},
             failureEconomies:diagnostics.byEconomy||{},
             failureCategories:diagnostics.byCategory||{},
+            sampleFailures:Array.isArray(macro.failures)?macro.failures.slice(0,30):[],
           };
           console.log('FRED COVERAGE VERIFIED',JSON.stringify(report,null,2));
+          fs.writeFileSync('runtime/fred-coverage-audit.json',JSON.stringify(report,null,2)+'\n');
           const lines=[
             '# FRED Coverage Repair', '',
             `* FRED series in persisted universe: ${report.fredSeries}`,
@@ -152,3 +164,16 @@ jobs:
           ];
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join('\n')+'\n');
           NODE
+
+      - name: Publish FRED coverage audit
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add runtime/fred-coverage-audit.json
+          if git diff --cached --quiet; then
+            echo 'FRED coverage audit is unchanged.'
+            exit 0
+          fi
+          git commit -m 'Publish FRED coverage audit [skip ci]'
+          git push origin HEAD:main
