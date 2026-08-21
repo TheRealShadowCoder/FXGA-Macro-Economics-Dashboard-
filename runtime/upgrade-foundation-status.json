@@ -1,0 +1,20 @@
+{
+  "schema": "fxga.upgrade-foundation.status.v1",
+  "recordedAt": "2026-08-21T01:37:52.786Z",
+  "conclusion": "failure",
+  "verifiedSha": null,
+  "runId": 32436967599,
+  "program": {
+    "totalUpgrades": 3000,
+    "domains": 30
+  },
+  "gates": {
+    "frontendBuild": true,
+    "collectorChecks": true,
+    "optimizedApiSyntax": true,
+    "architectureStaticCloudflare": true,
+    "researchOosGovernance": true,
+    "eventEvidenceProvenance": true,
+    "realtimeResilience": true
+  }
+}
