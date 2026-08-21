@@ -89,6 +89,15 @@ async function mergedState(){
     return research;
   }
 }
+function intelligenceSummary(value){
+  if(!value||typeof value!=='object')return null;
+  return {
+    observations:Number(value.observations||0),
+    coverage:value.coverage??null,
+    audit:value.audit??null,
+    operationalHealth:value.operationalHealth??null,
+  };
+}
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url||'/','http://localhost');
   try{
@@ -110,19 +119,30 @@ const server=http.createServer(async(req,res)=>{
     }
     if(req.method==='POST'&&url.pathname==='/macro-sync'&&String(url.searchParams.get('mode')||'').toLowerCase()==='full'){
       await bodyOf(req);
+      // Institutional failure boundary: primary macro collection is authoritative and must
+      // not be rolled back or reported as failed merely because a downstream research layer
+      // has a defect. Publish the macro refresh, then attempt intelligence as an independent
+      // stage with explicit degraded diagnostics.
       const macro=await syncFullMacroFromUniverse();
-      const intelligence=await refreshSuperEconomist({forceNews:true});
-      return sendJson(res,200,{...macro,intelligence:{observations:intelligence.observations,coverage:intelligence.coverage,audit:intelligence.audit}});
+      let intelligence=null,intelligenceDegraded=null;
+      try{
+        intelligence=intelligenceSummary(await refreshSuperEconomist({forceNews:true}));
+      }catch(error){
+        const message=String(error?.message||error).slice(0,500);
+        intelligenceDegraded={stage:'post-macro-intelligence-refresh',message,macroRefreshSucceeded:true,at:new Date().toISOString()};
+        console.error('Post-macro intelligence refresh failed after successful FRED sync:',error?.stack||error);
+      }
+      return sendJson(res,200,{...macro,intelligence,intelligenceDegraded});
     }
     const status=await proxy(req,res,url);
     if(status>=200&&status<300&&req.method==='POST'&&['/bootstrap','/release-check','/macro-sync'].includes(url.pathname)){
       const forceNews=url.pathname==='/bootstrap';
       // Release-aligned market persistence is awaited inside releaseCheck itself.
       // Avoid a duplicate background market-sync after the HTTP response is sent.
-      refreshSuperEconomist({forceNews}).then(x=>console.log('Intelligence refresh',JSON.stringify({trigger:url.pathname,...x}))).catch(e=>console.error('Intelligence refresh failed',e));
+      refreshSuperEconomist({forceNews}).then(x=>console.log('Intelligence refresh',JSON.stringify({trigger:url.pathname,...x}))).catch(e=>console.error('Intelligence refresh failed',e?.stack||e));
     }
   }catch(error){
-    console.error(error);
+    console.error(error?.stack||error);
     if(!res.headersSent)sendJson(res,500,{error:String(error?.message||error).slice(0,1000)});
     else res.end();
   }
