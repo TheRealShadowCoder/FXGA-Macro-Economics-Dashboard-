@@ -1,15 +1,15 @@
 {
-  "schema": "fxga.institutional.readiness.v2",
-  "generatedAt": "2026-08-21T14:26:40.609Z",
+  "schema": "fxga.institutional.readiness.v3",
+  "generatedAt": "2026-08-21T14:32:33.909Z",
   "institutionalReady": false,
   "tradeModelReady": false,
   "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
   "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app",
   "mt5": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app",
   "summary": {
-    "ready": 6,
-    "notReady": 5,
-    "blockingFailures": 4,
+    "ready": 5,
+    "notReady": 6,
+    "blockingFailures": 5,
     "total": 11
   },
   "dimensions": [
@@ -32,8 +32,8 @@
           "calendar": "2026-08-21T14:09:24.491Z",
           "macro": "2026-08-21T14:02:09.734Z",
           "intelligence": "2026-08-21T02:52:15.275Z",
-          "market": "2026-08-21T14:26:21.118Z",
-          "technical": "2026-08-21T14:26:25.848Z"
+          "market": "2026-08-21T14:30:22.417Z",
+          "technical": "2026-08-21T14:30:25.331Z"
         },
         "compute": "Google Cloud Run",
         "state": "Google Cloud Firestore"
@@ -44,9 +44,9 @@
       "ready": false,
       "blocking": true,
       "detail": {
-        "intelligenceAgeMinutes": 694,
-        "macroAgeMinutes": 24,
-        "marketAgeMinutes": 0,
+        "intelligenceAgeMinutes": 700,
+        "macroAgeMinutes": 30,
+        "marketAgeMinutes": 2,
         "thresholds": {
           "intelligence": 30,
           "macro": 180,
@@ -56,15 +56,17 @@
     },
     {
       "name": "macro-data-health",
-      "ready": true,
+      "ready": false,
       "blocking": true,
       "detail": {
         "coveragePercent": 100,
         "liveCoveragePercent": 0,
+        "minimumLiveCoveragePercent": 25,
         "requested": 218,
         "unresolved": 0,
         "status": "strong",
-        "boundedPercentages": true
+        "boundedPercentages": true,
+        "lastKnownGoodAllowed": true
       }
     },
     {
@@ -88,7 +90,7 @@
         "unique": 5,
         "structurallyValid": 5,
         "generatedAt": "2026-08-21T02:52:03.999Z",
-        "ageMinutes": 695
+        "ageMinutes": 700
       }
     },
     {
@@ -141,7 +143,7 @@
         "totalBars": 36586,
         "assetsExpected": 16,
         "newestEURUSD": 1787274060000,
-        "ageMinutes": 806,
+        "ageMinutes": 812,
         "marketExpectedOpen": true,
         "secretBackedAuthentication": true
       }
@@ -150,6 +152,7 @@
   "interpretation": {
     "institutionalReady": "Core infrastructure, bounded/fresh evidence, global macro and MT5 readiness. This is not a regulatory certification.",
     "tradeModelReady": "At least one event-pattern candidate has passed the configured OOS promotion gates. It is never a profitability guarantee.",
-    "confidence": "UI confidence values are evidence-quality scores until empirical calibration proves probability reliability."
+    "confidence": "UI confidence values are evidence-quality scores until empirical calibration proves probability reliability.",
+    "lastKnownGood": "Last-known-good data preserves continuity but cannot by itself satisfy institutional live-data readiness."
   }
 }
