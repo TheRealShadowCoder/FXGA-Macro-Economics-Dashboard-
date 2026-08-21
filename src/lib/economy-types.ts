@@ -1,14 +1,16 @@
 import type { MacroObservation } from './types';
 
-export type EconomyId = 'USA' | 'EUROPE' | 'UK' | 'SOUTH_AFRICA' | 'JAPAN';
+// Economy IDs are data-driven so the backend can add economies without
+// requiring another frontend type release.
+export type EconomyId = string;
 
 export interface GlobalMacroPayload {
   generatedAt: string | null;
   mode: string;
   targetEconomies: EconomyId[];
   totalObservations: number;
-  counts: Record<EconomyId, number>;
-  economies: Record<EconomyId, MacroObservation[]>;
+  counts: Record<string, number>;
+  economies: Record<string, MacroObservation[]>;
   global: MacroObservation[];
   structuralUsAnalysis?: unknown;
 }
