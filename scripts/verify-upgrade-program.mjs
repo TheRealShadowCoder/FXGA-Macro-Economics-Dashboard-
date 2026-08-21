@@ -3,11 +3,15 @@ import fs from 'node:fs';
 const required = [
   'config/upgrade-program.json',
   'src/lib/api-runtime.ts',
+  'src/lib/live-client.ts',
+  'src/components/EventBacktestValidation.tsx',
   'cloud-run-collector/src/fred-coverage-resolver.js',
   'cloud-run-collector/src/research-statistics.js',
   'cloud-run-collector/src/event-evidence.js',
   'cloud-run-collector/src/event-pattern-profiler.js',
+  'cloud-run-collector/src/event-pattern-backtester.js',
   'cloud-run-collector/src/event-study-backfill.js',
+  'google-cloud-app/optimize-server.js',
   'wrangler.jsonc',
 ];
 for (const path of required) if (!fs.existsSync(path)) throw new Error(`3000-upgrade foundation missing ${path}`);
@@ -25,8 +29,16 @@ if(/"main"\s*:/.test(wrangler))throw new Error('Cloudflare must remain static-on
 for(const forbidden of ['kv_namespaces','r2_buckets','d1_databases','durable_objects','queues','services'])if(wrangler.includes(`"${forbidden}"`))throw new Error(`Cloudflare application binding forbidden: ${forbidden}`);
 const api=fs.readFileSync('src/lib/api-runtime.ts','utf8');
 for(const needle of ['inFlight','CIRCUIT_FAILURES','apiRuntimeSummary','readLkg','MAX_CONCURRENT'])if(!api.includes(needle))throw new Error(`API runtime resilience gate missing ${needle}`);
+const live=fs.readFileSync('src/lib/live-client.ts','utf8');
+for(const needle of ['missedSequences','HEARTBEAT_MS','STALE_MS','subscribeLive','subscribeLiveState'])if(!live.includes(needle))throw new Error(`Realtime resilience gate missing ${needle}`);
 const profiler=fs.readFileSync('cloud-run-collector/src/event-pattern-profiler.js','utf8');
 for(const needle of ['meanMove95Low','temporalStability','outOfSampleRequired','multipleTestingControlRequired'])if(!profiler.includes(needle))throw new Error(`Research-governance gate missing ${needle}`);
+const backtester=fs.readFileSync('cloud-run-collector/src/event-pattern-backtester.js','utf8');
+for(const needle of ['holdoutFraction','Benjamini-Hochberg','costBps','promotionEligible','qValue'])if(!backtester.includes(needle))throw new Error(`OOS backtest gate missing ${needle}`);
 const evidence=fs.readFileSync('cloud-run-collector/src/event-evidence.js','utf8');
 for(const needle of ['FRED','CNBC','MetaTrader 5 canonical M1','never replace historical MT5 candles'])if(!evidence.includes(needle))throw new Error(`Event evidence provenance gate missing ${needle}`);
-console.log(JSON.stringify({ok:true,schema:program.schema,totalUpgrades:program.totalUpgrades,domains:program.domains,staticCloudflare:true,foundations:program.implementation.foundationBatch.capabilities.length},null,2));
+const optimizer=fs.readFileSync('google-cloud-app/optimize-server.js','utf8');
+for(const needle of ['/api/event-pattern-backtests','eventBacktests','validatedOnly'])if(!optimizer.includes(needle))throw new Error(`Public OOS API gate missing ${needle}`);
+const eventUi=fs.readFileSync('src/components/EventBacktestValidation.tsx','utf8');
+for(const needle of ['Out-of-Sample Validation','q-value','cost assumption','validated candidate'])if(!eventUi.includes(needle))throw new Error(`Event validation UI gate missing ${needle}`);
+console.log(JSON.stringify({ok:true,schema:program.schema,totalUpgrades:program.totalUpgrades,domains:program.domains,staticCloudflare:true,foundations:program.implementation.foundationBatch.capabilities.length,oosValidation:true,realtimeResilience:true,eventEvidence:true},null,2));
