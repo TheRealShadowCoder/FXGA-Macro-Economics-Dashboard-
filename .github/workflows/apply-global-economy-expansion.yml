@@ -40,3 +40,29 @@ jobs:
           git add cloud-run-collector/src/global-fred.js cloud-run-collector/src/super-economist-core.js
           git diff --cached --quiet || git commit -m 'Expand global macro engine to 21 economies'
           git push origin HEAD:main
+
+  attest-failure:
+    if: ${{ failure() }}
+    needs: expand
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Record failure
+        run: |
+          mkdir -p runtime
+          cat > runtime/global-economy-expansion-status.json <<EOF
+          {
+            "schema": "fxga.global-economy-expansion.status.v1",
+            "conclusion": "failure",
+            "runId": "${GITHUB_RUN_ID}",
+            "triggerSha": "${GITHUB_SHA}",
+            "recordedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add runtime/global-economy-expansion-status.json
+          git commit -m 'Record global economy expansion failure [skip ci]'
+          git push origin HEAD:main
