@@ -1,7 +1,7 @@
 {
   "schema": "fxga.any-economy-resolver.status.v1",
   "conclusion": "failure",
-  "runId": "32441706062",
-  "triggerSha": "f9745372ffe5101487771cc994ca553e830a17a3",
-  "recordedAt": "2026-08-21T02:58:45Z"
+  "runId": "32441788521",
+  "triggerSha": "1b94352981c790a3765dd3770a85af6ab5209374",
+  "recordedAt": "2026-08-21T03:00:21Z"
 }
