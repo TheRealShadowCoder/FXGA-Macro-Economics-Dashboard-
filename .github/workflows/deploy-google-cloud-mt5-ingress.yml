@@ -23,7 +23,7 @@ env:
   GCP_REGION: us-central1
   DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
   RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
-  FXGA_MT5_TOKEN_SHA256: 649e0eee73a3441f9d869991dd2295eb9544725b86936a227e6fcc1c2631630d
+  PUBLIC_ORIGIN: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
 
 jobs:
   deploy:
@@ -42,6 +42,7 @@ jobs:
           node --check price-cache.js
           node --check mt5-smc-engine.js
           node --check server.js
+          ! grep -Eq "FXGA_MT5_TOKEN_SHA256\|\|'[a-f0-9]{64}'" server.js || { echo '::error::Repository-static MT5 credential fallback detected'; exit 1; }
 
       - id: config
         name: Resolve Google authentication
@@ -75,7 +76,11 @@ jobs:
 
       - id: deploy
         name: Deploy public authenticated MT5 ingress
+        env:
+          MT5_TOKEN_SHA256: ${{ secrets.FXGA_MT5_TOKEN_SHA256 }}
         run: |
+          test -n "$MT5_TOKEN_SHA256" || { echo '::error::GitHub secret FXGA_MT5_TOKEN_SHA256 is required; no repository fallback is permitted'; exit 1; }
+          printf '%s' "$MT5_TOKEN_SHA256" | grep -Eq '^[A-Fa-f0-9]{64}$' || { echo '::error::FXGA_MT5_TOKEN_SHA256 must be a 64-character SHA-256 hex digest'; exit 1; }
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
             --region "$GCP_REGION" \
@@ -88,7 +93,7 @@ jobs:
             --min 0 \
             --max 2 \
             --timeout 30 \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_MT5_TOKEN_SHA256=$FXGA_MT5_TOKEN_SHA256,FXGA_ARCHITECTURE=google-cloud-direct"
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_MT5_TOKEN_SHA256=$MT5_TOKEN_SHA256,FXGA_PUBLIC_ORIGIN=$PUBLIC_ORIGIN,FXGA_ARCHITECTURE=google-cloud-direct"
           MT5_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           test -n "$MT5_URL" || { echo '::error::MT5 Cloud Run URL missing'; exit 1; }
           echo "MT5_URL=$MT5_URL" >> "$GITHUB_ENV"
@@ -101,6 +106,7 @@ jobs:
           const fs=require('fs');
           const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
           if(!h.ok||h.source!=='MetaTrader5'||h.schema!=='fxga.smc.signal.v3'||h.cloudflareProcessing!==false) process.exit(1);
+          if(h.authentication?.configured!==true||h.authentication?.mode!=='sha256-token-secret') throw new Error('Secret-backed MT5 authentication contract missing');
           if(h.priceCache?.schema!=='fxga.mt5.price-cache.v2'||h.priceCache?.cacheEnvelopeBytes!==200000000||h.priceCache?.payloadHardBytes!==190000000) process.exit(1);
           if(h.priceCache?.initialBarsPerAsset!==86400||h.priceCache?.incrementalBarsPerSync!==160||h.priceCache?.syncSeconds!==300) process.exit(1);
           if(!Array.isArray(h.priceCache?.allowedSymbols)||h.priceCache.allowedSymbols.length!==16) process.exit(1);
@@ -164,6 +170,7 @@ jobs:
               evictionTargetBytes:175000000,
               policy:'rolling 60-day canonical M1 + gzip + timestamp dedupe + time FIFO + capacity FIFO + integrity diagnostics + deterministic higher-timeframe reconstruction'
             },
+            authentication:{mode:'sha256-token-secret',repositoryFallback:false},
             updatedAt:new Date().toISOString(),
             cloudflareProcessing:false
           };
@@ -187,6 +194,7 @@ jobs:
           echo "MT5 price ingest: $MT5_URL/api/mt5/price-cache"
           echo "MT5 price query: $MT5_URL/api/mt5/prices"
           echo "MT5 SMC snapshot: $MT5_URL/api/mt5/smc-snapshot"
+          echo "Authentication: secret-backed SHA-256 token digest; no repository fallback"
           echo "Canonical cache: rolling 60 calendar days of M1 for the 16 website assets; 160-bar overlap every 300 seconds"
           echo "Maximum 24/7 M1 observations per asset: 86,400; session-limited instruments retain fewer bars over the same 60-day clock window"
           echo "Storage: time FIFO first; 200 MB envelope / 190 MB payload hard ceiling / 175 MB capacity FIFO target"
