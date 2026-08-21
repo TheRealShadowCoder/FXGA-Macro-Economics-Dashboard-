@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/audit-production-and-publish.yml'
       - 'scripts/production-audit.mjs'
+      - 'scripts/institutional-readiness-audit.mjs'
   workflow_run:
     workflows:
       - 'Deploy FXGA Cloudflare Static Website'
@@ -25,7 +26,7 @@ jobs:
   audit:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       SITE_URL: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
     steps:
@@ -36,32 +37,50 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Validate audit harness
-        run: node --check scripts/production-audit.mjs
+      - name: Validate audit harnesses
+        run: |
+          node --check scripts/production-audit.mjs
+          node --check scripts/institutional-readiness-audit.mjs
 
-      - name: Run production audit
+      - name: Run production contract audit
         id: audit
         continue-on-error: true
         run: |
           rm -f runtime/production-audit.json
           node scripts/production-audit.mjs
 
-      - name: Publish audit report
+      - name: Run institutional readiness audit
+        id: readiness
+        continue-on-error: true
+        run: |
+          rm -f runtime/institutional-readiness.json
+          node scripts/institutional-readiness-audit.mjs
+
+      - name: Publish audit reports
         if: always()
         run: |
           mkdir -p runtime
-          test -f runtime/production-audit.json || printf '%s\n' '{"schema":"fxga.production.audit.v2","passed":false,"generatedAt":"unknown","summary":{"passed":0,"failed":1,"total":1},"checks":[{"name":"audit-runner","passed":false,"error":"report was not generated"}]}' > runtime/production-audit.json
+          test -f runtime/production-audit.json || printf '%s\n' '{"schema":"fxga.production.audit.v3","passed":false,"generatedAt":"unknown","summary":{"passed":0,"failed":1,"total":1},"checks":[{"name":"audit-runner","passed":false,"error":"report was not generated"}]}' > runtime/production-audit.json
+          test -f runtime/institutional-readiness.json || printf '%s\n' '{"schema":"fxga.institutional.readiness.v1","institutionalReady":false,"generatedAt":"unknown","summary":{"ready":0,"notReady":1,"blockingFailures":1,"total":1},"dimensions":[{"name":"readiness-runner","ready":false,"blocking":true,"detail":{"error":"report was not generated"}}]}' > runtime/institutional-readiness.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add runtime/production-audit.json
+          git add runtime/production-audit.json runtime/institutional-readiness.json
           if git diff --cached --quiet; then
-            echo 'Audit report unchanged.'
+            echo 'Audit reports unchanged.'
           else
-            git commit -m "Publish FXGA production audit result [skip ci]"
+            git commit -m "Publish FXGA production and institutional readiness audits [skip ci]"
             git push origin HEAD:main
           fi
 
-      - name: Fail workflow if audit failed
+      - name: Fail workflow if a blocking audit failed
         if: always()
         run: |
-          node -e "const r=JSON.parse(require('fs').readFileSync('runtime/production-audit.json','utf8'));if(!r.passed){console.error(JSON.stringify(r,null,2));process.exit(1)}"
+          node <<'NODE'
+          const fs=require('fs');
+          const production=JSON.parse(fs.readFileSync('runtime/production-audit.json','utf8'));
+          const readiness=JSON.parse(fs.readFileSync('runtime/institutional-readiness.json','utf8'));
+          let failed=false;
+          if(!production.passed){console.error('Production contract audit failed');failed=true;}
+          if(!readiness.institutionalReady){console.error('Institutional readiness has blocking failures');failed=true;}
+          if(failed){console.error(JSON.stringify({production:production.summary,readiness:readiness.summary},null,2));process.exit(1);}
+          NODE
