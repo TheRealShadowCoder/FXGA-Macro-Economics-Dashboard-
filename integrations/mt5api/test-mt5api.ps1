@@ -9,7 +9,9 @@ $mt5SecretPath = Join-Path $root "secrets\mt5api-key.dpapi"
 $fxgaSecretPath = Join-Path $root "secrets\fxga-token.dpapi"
 
 function Get-DpapiPlain([string]$Path) {
-    $secure = Get-Content $Path -Raw | ConvertTo-SecureString
+    $encrypted = (Get-Content $Path -Raw).Trim()
+    if ([string]::IsNullOrWhiteSpace($encrypted)) { throw "Encrypted DPAPI secret file is empty: $Path" }
+    $secure = ConvertTo-SecureString -String $encrypted
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
