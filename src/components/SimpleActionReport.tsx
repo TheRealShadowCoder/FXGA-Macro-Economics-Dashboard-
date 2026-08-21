@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { DashboardPayload, MacroAnalysisPayload, MacroDimension, SessionSignalsPayload, SessionTradeSignal, TechnicalGateStatus } from '../lib/types';
 import './SimpleActionReport.css';
+import './SimpleEconomicContext.css';
 
 type EnhancedSignal=SessionTradeSignal&{conviction?:number;convictionLabel?:string;executionGate?:string;technicalGate?:TechnicalGateStatus;technicalConfidence?:number;technicalModel?:string|null;technicalReason?:string;components?:{structuralDivergence:number;policyDivergence:number;releaseDivergence:number}};
 type ActionTone='wait'|'watch'|'ready';
