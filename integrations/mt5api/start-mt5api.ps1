@@ -10,7 +10,9 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 if (-not (Test-Path $python)) { throw "MT5API Python environment not found: $python" }
 if (-not (Test-Path $secretPath)) { throw "MT5API encrypted API key not found: $secretPath" }
 
-$secure = Get-Content $secretPath -Raw | ConvertTo-SecureString
+$encrypted = (Get-Content $secretPath -Raw).Trim()
+if ([string]::IsNullOrWhiteSpace($encrypted)) { throw "MT5API encrypted API key file is empty: $secretPath" }
+$secure = ConvertTo-SecureString -String $encrypted
 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try {
     $env:MT5API_SECRET_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
