@@ -1,7 +1,7 @@
 {
   "schema": "fxga.event-research.refresh.v1",
-  "generatedAt": "2026-08-21T14:13:47.162Z",
+  "generatedAt": "2026-08-21T14:21:20.106Z",
   "conclusion": "skipped",
-  "runId": 32490995335,
+  "runId": 32491678160,
   "error": "Event research rebuild skipped"
 }
