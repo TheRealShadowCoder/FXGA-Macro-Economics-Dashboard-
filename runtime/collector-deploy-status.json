@@ -1,9 +1,9 @@
 {
   "schema": "fxga.collector.deploy-status.v1",
-  "recordedAt": "2026-08-21T01:40:00.909Z",
+  "recordedAt": "2026-08-21T01:40:24.760Z",
   "conclusion": "cancelled",
-  "runId": 32436989226,
-  "runUrl": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32436989226",
-  "headSha": "f7f37dfe00626b9aa41cea4aa3d61ada815be180",
+  "runId": 32437085499,
+  "runUrl": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32437085499",
+  "headSha": "02e1ca74ab35e3b267363aa1281ab9fa5b5a45f5",
   "event": "push"
 }
