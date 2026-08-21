@@ -1,0 +1,64 @@
+{
+  "schema": "fxga.upgrade-program.v1",
+  "totalUpgrades": 3000,
+  "domains": 30,
+  "itemsPerDomain": 100,
+  "policy": {
+    "cloudflareRole": "static-host-only",
+    "compute": "Google Cloud Run",
+    "state": "Google Cloud Firestore",
+    "macroAuthority": "FRED with validated fallback repair",
+    "historicalPriceAuthority": "MetaTrader 5 canonical M1",
+    "marketContext": "CNBC and delegated market providers",
+    "researchRule": "descriptive until explicit out-of-sample, multiple-testing and cost robustness validation",
+    "syntheticMissingData": false
+  },
+  "domainsIndex": [
+    {"id":1,"range":"U0001-U0100","name":"Data Acquisition & Source Redundancy"},
+    {"id":2,"range":"U0101-U0200","name":"FRED Macro Coverage & Self-Healing"},
+    {"id":3,"range":"U0201-U0300","name":"Economic Calendar & Release Normalization"},
+    {"id":4,"range":"U0301-U0400","name":"MT5 Broker Data Acquisition"},
+    {"id":5,"range":"U0401-U0500","name":"Cross-Asset Price Engine"},
+    {"id":6,"range":"U0501-U0600","name":"Event Study – Pre-News Price Action"},
+    {"id":7,"range":"U0601-U0700","name":"Event Study – Post-News Reaction"},
+    {"id":8,"range":"U0701-U0800","name":"Event Pattern Profiling"},
+    {"id":9,"range":"U0801-U0900","name":"Backtesting Engine"},
+    {"id":10,"range":"U0901-U1000","name":"Live Signal Intelligence"},
+    {"id":11,"range":"U1001-U1100","name":"Elliott Wave Research Engine"},
+    {"id":12,"range":"U1101-U1200","name":"SMC / ICT / Order-Flow Research"},
+    {"id":13,"range":"U1201-U1300","name":"Technical Analysis Engine"},
+    {"id":14,"range":"U1301-U1400","name":"Macro Econometrics"},
+    {"id":15,"range":"U1401-U1500","name":"Macro Regime Detection"},
+    {"id":16,"range":"U1501-U1600","name":"Statistical Edge Discovery"},
+    {"id":17,"range":"U1601-U1700","name":"Machine Learning Research"},
+    {"id":18,"range":"U1701-U1800","name":"Portfolio & Risk Analytics"},
+    {"id":19,"range":"U1801-U1900","name":"Data Quality & Provenance"},
+    {"id":20,"range":"U1901-U2000","name":"Storage & Data Engineering"},
+    {"id":21,"range":"U2001-U2100","name":"Backend API Architecture"},
+    {"id":22,"range":"U2101-U2200","name":"Realtime & Streaming"},
+    {"id":23,"range":"U2201-U2300","name":"Frontend UX & Information Architecture"},
+    {"id":24,"range":"U2301-U2400","name":"Mobile & Responsive Experience"},
+    {"id":25,"range":"U2401-U2500","name":"Visualization & Charting"},
+    {"id":26,"range":"U2501-U2600","name":"Performance & Cost Optimization"},
+    {"id":27,"range":"U2601-U2700","name":"Security, IAM & Secrets"},
+    {"id":28,"range":"U2701-U2800","name":"Observability & Operations"},
+    {"id":29,"range":"U2801-U2900","name":"CI/CD, Testing & Release Governance"},
+    {"id":30,"range":"U2901-U3000","name":"Research Governance, Explainability & Documentation"}
+  ],
+  "implementation": {
+    "mode": "incremental production batches",
+    "rule": "An upgrade is complete only when code/config is wired into production behavior and covered by a verification gate; documentation-only changes do not count as implementation.",
+    "foundationBatch": {
+      "status": "active",
+      "capabilities": [
+        "resilient browser API runtime",
+        "FRED self-healing coverage resolver",
+        "60-day MT5 event-price research",
+        "FRED/CNBC/FXStreet/MT5 event evidence provenance",
+        "robust event-pattern statistics with uncertainty",
+        "explicit out-of-sample research governance",
+        "production deployment and audit attestations"
+      ]
+    }
+  }
+}
