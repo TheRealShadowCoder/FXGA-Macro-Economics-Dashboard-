@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
@@ -58,3 +58,34 @@ jobs:
           }
           console.log('Expanded global economy contract passed:',JSON.stringify({targets:global.targetEconomies.length,populated:analysis.economies.length,observations:analysis.observationCount}));
           NODE
+
+  attest:
+    if: always()
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Publish verification result
+        env:
+          RESULT: ${{ needs.verify.result }}
+        run: |
+          mkdir -p runtime
+          cat > runtime/global-economy-verification.json <<EOF
+          {
+            "schema": "fxga.global-economy.verification.v1",
+            "conclusion": "${RESULT}",
+            "runId": "${GITHUB_RUN_ID}",
+            "triggerSha": "${GITHUB_SHA}",
+            "recordedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "baselineTargetEconomies": 21,
+            "dynamicFrontend": true,
+            "educationalReport": true
+          }
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add runtime/global-economy-verification.json
+          git diff --cached --quiet || git commit -m 'Record global economy verification [skip ci]'
+          git push origin HEAD:main
