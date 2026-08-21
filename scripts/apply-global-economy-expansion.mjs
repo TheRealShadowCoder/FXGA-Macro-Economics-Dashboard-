@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+// Trigger the already-installed verified expansion workflow.
 
 function replaceOne(source,before,after,label){const count=source.split(before).length-1;if(count!==1)throw new Error(`${label}: expected one match, found ${count}`);return source.replace(before,after);}
 
