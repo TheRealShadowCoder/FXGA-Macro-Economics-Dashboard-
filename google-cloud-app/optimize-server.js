@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 
 const file = new URL('./server.js', import.meta.url);
 let source = await readFile(file, 'utf8');
-const injectedMarker = 'FXGA_FAST_ROUTE_V4';
+const injectedMarker = 'FXGA_FAST_ROUTE_V5';
 const markerCandidates = ['\nconst s=await liteState()', '\n  const s=await liteState()'];
 const marker = markerCandidates.find((candidate) => source.includes(candidate));
 
@@ -23,7 +23,7 @@ if (!source.includes('backtestResearch:research.backtestResearch??null')) {
 
 if (!source.includes(injectedMarker)) {
   const fastRoutes = `
-// FXGA_FAST_ROUTE_V4
+// FXGA_FAST_ROUTE_V5
 // Latency-sensitive routes return before generic liteState fan-out. This keeps
 // Cloud Run cold starts bounded and restores exact browser/API payload contracts.
 if(url.pathname==='/api/dashboard'){
@@ -41,6 +41,27 @@ if(url.pathname==='/api/analysis'||url.pathname==='/api/economy-analysis'||url.p
   if(url.pathname==='/api/analysis')return intel.macroAnalysis?sendJson(res,200,intel.macroAnalysis,'public, max-age=5'):apiError(res,503,'Analysis snapshot is not initialized');
   if(url.pathname==='/api/economy-analysis')return intel.economyAnalysis?sendJson(res,200,intel.economyAnalysis,'public, max-age=5'):apiError(res,503,'Economy analysis is not initialized');
   return intel.releaseImpact?sendJson(res,200,intel.releaseImpact,'public, max-age=5'):apiError(res,503,'Release impact is not initialized');
+}
+if(url.pathname==='/api/global-macro'){
+  const macroState=await readState('macro');
+  const observations=(Array.isArray(macroState?.payload?.observations)?macroState.payload.observations:[]).map(normalizeObservation);
+  const declared=Array.isArray(macroState?.payload?.targetEconomies)?macroState.payload.targetEconomies.map(x=>String(x||'').trim().toUpperCase()).filter(Boolean):[];
+  const inferred=[];
+  for(const row of observations){
+    const tags=Array.isArray(row.economies)&&row.economies.length?row.economies:[row.economy];
+    for(const raw of tags){const id=String(raw||'').trim().toUpperCase();if(id&&id!=='GLOBAL')inferred.push(id);}
+  }
+  const targetEconomies=[...new Set([...declared,...inferred])].sort();
+  const economies=Object.fromEntries(targetEconomies.map(id=>[id,[]])),global=[];
+  for(const row of observations){
+    const tags=(Array.isArray(row.economies)&&row.economies.length?row.economies:[row.economy||'GLOBAL']).map(x=>String(x||'').toUpperCase());
+    let assigned=false;
+    for(const id of targetEconomies)if(tags.includes(id)){economies[id].push(row);assigned=true;}
+    if(!assigned||tags.includes('GLOBAL'))global.push(row);
+  }
+  const counts=Object.fromEntries(targetEconomies.map(id=>[id,economies[id].length]));
+  const coverage=macroState?.payload?.coverageQuality??null;
+  return sendJson(res,200,{generatedAt:macroState?.payload?.generatedAt??macroState?.updatedAt??null,mode:'google-cloud-direct-dynamic-economies',targetEconomies,totalObservations:observations.length,counts,economies,global,coverage,policy:{canonicalEconomyAuthority:'persisted macro evidence',hardCodedPublicEconomyList:false,missingData:'Unavailable evidence remains unavailable; no observations are synthesized.'}},'public, max-age=10');
 }
 if(url.pathname==='/api/news'){
   const news=(await readState('news'))?.payload;
@@ -101,4 +122,4 @@ if(url.pathname==='/api/event-pattern-backtests'){
 }
 
 await writeFile(file, source, 'utf8');
-console.log('Injected FXGA fast routes v4, macro catalog, event-study source fusion and OOS backtest API');
+console.log('Injected FXGA fast routes v5, dynamic global macro, macro catalog, event-study source fusion and OOS backtest API');
