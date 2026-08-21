@@ -11,7 +11,9 @@ $logDir = Join-Path $root "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 function Get-DpapiPlain([string]$Path) {
-    $secure = Get-Content $Path -Raw | ConvertTo-SecureString
+    $encrypted = (Get-Content $Path -Raw).Trim()
+    if ([string]::IsNullOrWhiteSpace($encrypted)) { throw "Encrypted DPAPI secret file is empty: $Path" }
+    $secure = ConvertTo-SecureString -String $encrypted
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
