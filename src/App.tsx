@@ -9,6 +9,7 @@ import { TradingViewSignalIntelligence } from './components/TradingViewSignalInt
 import { EventStudyPanel } from './components/EventStudyPanel';
 import { SourceNetworkView } from './components/SourceNetworkView';
 import { SimpleActionReport } from './components/SimpleActionReport';
+import { EconomicContextReport } from './components/EconomicContextReport';
 import { fetchAcquisitionCatalog, fetchDashboard, fetchFredCatalog, fetchFredCategory, fetchMacroAnalysis, fetchSessionSignals } from './lib/api';
 import type {
   AcquisitionCatalogPayload,
@@ -22,11 +23,12 @@ import type {
   SessionSignalsPayload,
 } from './lib/types';
 
-type View = 'action-report' | 'overview' | 'markets' | 'analysis' | 'research' | 'signals' | 'tradingview' | 'calendar' | 'indicators' | 'universe' | 'acquisition' | 'news' | 'sources';
+type View = 'action-report' | 'economic-context' | 'overview' | 'markets' | 'analysis' | 'research' | 'signals' | 'tradingview' | 'calendar' | 'indicators' | 'universe' | 'acquisition' | 'news' | 'sources';
 type LiveStatus = 'connecting' | 'connected' | 'offline';
 
 const NAV: Array<{ id: View; label: string }> = [
   { id: 'action-report', label: 'Action Report' },
+  { id: 'economic-context', label: 'Economic Context' },
   { id: 'overview', label: 'Macro Dashboard' },
   { id: 'markets', label: 'Cross Asset Prices' },
   { id: 'analysis', label: 'Macro Analysis' },
@@ -182,7 +184,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if ((view !== 'analysis' && view !== 'action-report') || analysis || analysisLoading) return;
+    if ((view !== 'analysis' && view !== 'action-report' && view !== 'economic-context') || analysis || analysisLoading) return;
     let cancelled = false;
     setAnalysisLoading(true); setAnalysisError('');
     void fetchMacroAnalysis()
@@ -281,6 +283,7 @@ export default function App() {
 
   const refreshCurrent = () => {
     if (view === 'action-report') { setAnalysisLoading(false); setSignalsLoading(false); setAnalysis(null); setSignals(null); void load(); }
+    else if (view === 'economic-context') { setAnalysisLoading(false); setAnalysis(null); void load(); }
     else if (view === 'analysis') { setAnalysisLoading(false); setAnalysis(null); }
     else if (view === 'signals') { setSignalsLoading(false); setSignals(null); }
     else if (view === 'acquisition') { setAcquisitionLoading(false); setAcquisitionCatalog(null); }
@@ -307,6 +310,7 @@ export default function App() {
         {loading && !data ? <div className="loading-panel">Connecting to macro sources…</div> : null}
 
         {data && view === 'action-report' && <SimpleActionReport dashboard={data} analysis={analysis} signals={signals} loading={analysisLoading || signalsLoading} error={analysisError || signalsError} />}
+        {data && view === 'economic-context' && <EconomicContextReport dashboard={data} analysis={analysis} loading={analysisLoading} error={analysisError} />}
 
         {data && view === 'overview' && (
           <>
