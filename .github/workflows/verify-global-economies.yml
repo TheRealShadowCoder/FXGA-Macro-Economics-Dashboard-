@@ -1,8 +1,16 @@
 name: Verify FXGA Google Global Economies
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloud-run-collector/src/global-fred.js'
+      - 'cloud-run-collector/src/super-economist-core.js'
+      - 'src/components/EconomicContextReport.tsx'
+      - 'src/lib/economy-types.ts'
+      - '.github/workflows/verify-global-economies.yml'
   workflow_run:
-    workflows: ["Deploy FXGA Cloud Run Collector"]
+    workflows: ["Deploy FXGA Google Cloud Collector"]
     types: [completed]
   workflow_dispatch:
 
@@ -11,7 +19,7 @@ permissions:
 
 jobs:
   verify:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
