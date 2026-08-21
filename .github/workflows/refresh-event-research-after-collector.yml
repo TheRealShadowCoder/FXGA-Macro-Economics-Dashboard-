@@ -1,0 +1,77 @@
+name: Refresh FXGA Event Research After Collector Deploy
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ['Deploy FXGA Google Cloud Collector']
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  SERVICE: fxga-macro-collector
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+
+jobs:
+  rebuild:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: config
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: service
+        run: |
+          gcloud config set project "$GCP_PROJECT_ID"
+          SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          test -n "$SERVICE_URL"
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "SERVICE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+      - id: invoke
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service.outputs.url }}
+          id_token_include_email: true
+      - name: Rebuild 60-day evidence, profiles and OOS tests
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          STATUS=$(curl --max-time 900 -sS -o /tmp/event-research.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"days":60,"maxEvents":600,"force":true}' "$SERVICE_URL/event-study-backfill")
+          echo "event research HTTP $STATUS"
+          test "$STATUS" -ge 200 -a "$STATUS" -lt 300 || { head -c 4000 /tmp/event-research.json; exit 1; }
+          cat /tmp/event-research.json | head -c 10000
+      - name: Verify rebuilt research contracts
+        env:
+          TOKEN: ${{ steps.invoke.outputs.id_token }}
+        run: |
+          curl --max-time 90 -fsS -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/state" > /tmp/state.json
+          node <<'NODE'
+          const fs=require('fs');const state=JSON.parse(fs.readFileSync('/tmp/state.json','utf8')),research=state?.eventStudies?.payload||{},pattern=research.patternResearch||{},backtest=research.backtestResearch||{};
+          if(Number(research.studyCount||0)<1)throw new Error('No event studies after rebuild');
+          if(!Array.isArray(research.preNewsWindows)||research.preNewsWindows.length!==9)throw new Error('Pre-news windows incomplete');
+          if(!Array.isArray(research.horizons)||research.horizons.length!==9)throw new Error('Post-release horizons incomplete');
+          if(!pattern.researchGovernance?.outOfSampleRequired)throw new Error('Pattern OOS governance missing');
+          if(!backtest.schema?.startsWith('fxga.event-pattern-backtest.'))throw new Error('OOS backtest state missing');
+          console.log(JSON.stringify({studyCount:research.studyCount,profiles:pattern.profiles,recurringProfiles:pattern.recurringProfiles,tests:backtest.tests,validatedCandidates:backtest.validatedCandidates},null,2));
+          NODE
