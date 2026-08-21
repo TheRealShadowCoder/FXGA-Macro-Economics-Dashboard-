@@ -1,10 +1,10 @@
 {
   "schema": "fxga.production.audit.v3",
   "passed": true,
-  "generatedAt": "2026-08-21T02:24:46.995Z",
+  "generatedAt": "2026-08-21T02:44:01.137Z",
   "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
   "release": "cross-asset-mt5-60d-event-research",
-  "releaseCommit": "00bbaa0adc4615bfe6f584c404b52f7eddde0576",
+  "releaseCommit": "53349a2ce915dd365147d4f3f10510641df7c502",
   "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app",
   "mt5": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app",
   "summary": {
@@ -16,106 +16,106 @@
     {
       "name": "cloudflare-root",
       "passed": true,
-      "durationMs": 470,
+      "durationMs": 577,
       "detail": "React shell present"
     },
     {
       "name": "release-marker",
       "passed": true,
-      "durationMs": 111,
+      "durationMs": 168,
       "detail": {
-        "commit": "00bbaa0adc4615bfe6f584c404b52f7eddde0576",
+        "commit": "53349a2ce915dd365147d4f3f10510641df7c502",
         "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app"
       }
     },
     {
       "name": "frontend-current-bundle",
       "passed": true,
-      "durationMs": 119,
+      "durationMs": 167,
       "detail": "1 script bundle(s)"
     },
     {
       "name": "cloudflare-static-only",
       "passed": true,
-      "durationMs": 63,
+      "durationMs": 123,
       "detail": "static only"
     },
     {
       "name": "google-health",
       "passed": true,
-      "durationMs": 1001,
+      "durationMs": 334,
       "detail": {
         "calendar": "2026-08-21T00:33:00.852Z",
         "macro": "2026-08-21T02:01:41.331Z",
-        "intelligence": "2026-08-21T02:22:34.414Z",
-        "market": "2026-08-21T02:22:26.621Z",
-        "technical": "2026-08-21T02:22:40.589Z"
+        "intelligence": "2026-08-21T02:42:11.126Z",
+        "market": "2026-08-21T02:43:45.580Z",
+        "technical": "2026-08-21T02:43:41.999Z"
       }
     },
     {
       "name": "dashboard",
       "passed": true,
-      "durationMs": 195,
+      "durationMs": 524,
       "detail": "contract OK"
     },
     {
       "name": "analysis",
       "passed": true,
-      "durationMs": 2691,
+      "durationMs": 68,
       "detail": "contract OK"
     },
     {
       "name": "economy-analysis",
       "passed": true,
-      "durationMs": 2208,
+      "durationMs": 90,
       "detail": "contract OK"
     },
     {
       "name": "release-impact",
       "passed": true,
-      "durationMs": 52,
+      "durationMs": 66,
       "detail": "contract OK"
     },
     {
       "name": "research",
       "passed": true,
-      "durationMs": 140,
+      "durationMs": 352,
       "detail": "contract OK"
     },
     {
       "name": "session-signals",
       "passed": true,
-      "durationMs": 564,
+      "durationMs": 1991,
       "detail": "contract OK"
     },
     {
       "name": "market-prices",
       "passed": true,
-      "durationMs": 247,
+      "durationMs": 129,
       "detail": "contract OK"
     },
     {
       "name": "technical",
       "passed": true,
-      "durationMs": 159,
+      "durationMs": 330,
       "detail": "contract OK"
     },
     {
       "name": "calendar",
       "passed": true,
-      "durationMs": 51,
+      "durationMs": 407,
       "detail": "contract OK"
     },
     {
       "name": "calendar-history",
       "passed": true,
-      "durationMs": 678,
+      "durationMs": 533,
       "detail": "contract OK"
     },
     {
       "name": "event-studies",
       "passed": true,
-      "durationMs": 1264,
+      "durationMs": 1765,
       "detail": {
         "studies": 20,
         "measurements": 1944
@@ -124,73 +124,73 @@
     {
       "name": "event-patterns",
       "passed": true,
-      "durationMs": 405,
+      "durationMs": 320,
       "detail": "contract OK"
     },
     {
       "name": "data-quality",
       "passed": true,
-      "durationMs": 167,
+      "durationMs": 61,
       "detail": "contract OK"
     },
     {
       "name": "global-macro",
       "passed": true,
-      "durationMs": 345,
+      "durationMs": 235,
       "detail": "contract OK"
     },
     {
       "name": "fred-catalog",
       "passed": true,
-      "durationMs": 119,
+      "durationMs": 166,
       "detail": "contract OK"
     },
     {
       "name": "acquisition-catalog",
       "passed": true,
-      "durationMs": 42,
+      "durationMs": 66,
       "detail": "contract OK"
     },
     {
       "name": "super-economist",
       "passed": true,
-      "durationMs": 397,
+      "durationMs": 826,
       "detail": "contract OK"
     },
     {
       "name": "news",
       "passed": true,
-      "durationMs": 69,
+      "durationMs": 84,
       "detail": "contract OK"
     },
     {
       "name": "sources",
       "passed": true,
-      "durationMs": 87,
+      "durationMs": 60,
       "detail": "contract OK"
     },
     {
       "name": "tradingview-live",
       "passed": true,
-      "durationMs": 124,
+      "durationMs": 101,
       "detail": "contract OK"
     },
     {
       "name": "tradingview-history",
       "passed": true,
-      "durationMs": 54,
+      "durationMs": 62,
       "detail": "contract OK"
     },
     {
       "name": "tradingview-metrics",
       "passed": true,
-      "durationMs": 109,
+      "durationMs": 62,
       "detail": "contract OK"
     },
     {
       "name": "event-study-source-fusion",
       "passed": true,
-      "durationMs": 118,
+      "durationMs": 97,
       "detail": {
         "fred": 80,
         "cnbc": 16,
@@ -201,7 +201,7 @@
     {
       "name": "firestore-telemetry-safe-fallback",
       "passed": true,
-      "durationMs": 388,
+      "durationMs": 189,
       "detail": {
         "mode": "firestore-ledger-fallback",
         "events": 8,
@@ -211,13 +211,13 @@
     {
       "name": "mt5-config",
       "passed": true,
-      "durationMs": 107,
+      "durationMs": 72,
       "detail": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app"
     },
     {
       "name": "mt5-health",
       "passed": true,
-      "durationMs": 110,
+      "durationMs": 76,
       "detail": {
         "endpoint": "/api/mt5/price-cache",
         "query": "/api/mt5/prices",
@@ -267,7 +267,7 @@
     {
       "name": "mt5-status",
       "passed": true,
-      "durationMs": 162,
+      "durationMs": 280,
       "detail": {
         "bars": 36586,
         "chunks": 64,
@@ -277,7 +277,7 @@
     {
       "name": "mt5-current-query",
       "passed": true,
-      "durationMs": 90,
+      "durationMs": 175,
       "detail": {
         "count": 10,
         "newestMs": 1787274060000
@@ -286,17 +286,17 @@
     {
       "name": "mt5-range-query",
       "passed": true,
-      "durationMs": 135,
+      "durationMs": 185,
       "detail": {
-        "count": 681,
-        "oldestMs": 1787192700000,
+        "count": 662,
+        "oldestMs": 1787193840000,
         "newestMs": 1787274060000
       }
     },
     {
       "name": "mt5-future-reversed-normalization",
       "passed": true,
-      "durationMs": 76,
+      "durationMs": 123,
       "detail": {
         "count": 0
       }
@@ -304,7 +304,7 @@
     {
       "name": "mt5-smc",
       "passed": true,
-      "durationMs": 3074,
+      "durationMs": 3981,
       "detail": {
         "assets": 16,
         "confirmed": 0,
