@@ -1,0 +1,72 @@
+name: Verify dceoy MT5API Integration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'integrations/mt5api/**'
+      - '.github/workflows/verify-mt5api-integration.yml'
+  pull_request:
+    paths:
+      - 'integrations/mt5api/**'
+      - '.github/workflows/verify-mt5api-integration.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_SHA: ea2ed8fdf53e2a765a50e24b7f74700e03b3e378
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Compile bridge
+        run: python -m py_compile integrations/mt5api/fxga_mt5api_bridge.py
+
+      - name: Run deterministic bridge tests
+        run: python -m unittest discover -s integrations/mt5api/tests -p 'test_*.py' -v
+
+      - name: Validate configuration JSON
+        run: python -m json.tool integrations/mt5api/config.example.json >/dev/null
+
+      - name: Parse PowerShell setup scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $files=@(
+            'integrations/mt5api/install-windows.ps1',
+            'integrations/mt5api/start-mt5api.ps1',
+            'integrations/mt5api/start-fxga-bridge.ps1',
+            'integrations/mt5api/test-mt5api.ps1'
+          )
+          foreach($file in $files){
+            $tokens=$null; $errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file),[ref]$tokens,[ref]$errors) | Out-Null
+            if($errors.Count){ $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }; exit 1 }
+          }
+
+      - name: Verify pinned upstream commit exists
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/fxga-mt5api-upstream
+          git init -q /tmp/fxga-mt5api-upstream
+          git -C /tmp/fxga-mt5api-upstream fetch -q --depth 1 https://github.com/dceoy/mt5api.git "$UPSTREAM_SHA"
+          test "$(git -C /tmp/fxga-mt5api-upstream rev-parse FETCH_HEAD)" = "$UPSTREAM_SHA"
+
+      - name: Integration policy check
+        run: |
+          set -euo pipefail
+          grep -q '127.0.0.1' integrations/mt5api/start-mt5api.ps1
+          grep -q 'FXGA_MT5_TOKEN' integrations/mt5api/fxga_mt5api_bridge.py
+          grep -q 'producer.*dceoy/mt5api' integrations/mt5api/fxga_mt5api_bridge.py
+          if grep -RniE '(password\s*=|api[_-]?key\s*=|token\s*=)[[:space:]]*["'"'][^"'"']{12,}' integrations/mt5api --exclude='*.md'; then
+            echo 'Potential plaintext secret detected in mt5api integration.' >&2
+            exit 1
+          fi
