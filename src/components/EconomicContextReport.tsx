@@ -3,6 +3,7 @@ import { fetchEconomyAnalysis } from '../lib/api';
 import type { DashboardPayload, MacroAnalysisPayload } from '../lib/types';
 import type { EconomyAnalysisPayload, EconomyDimension, EconomyMacroState } from '../lib/economy-types';
 import './EconomicContextReport.css';
+import './EconomicContextGlobal.css';
 
 type Props={dashboard:DashboardPayload;analysis:MacroAnalysisPayload|null;loading:boolean;error?:string};
 type Tone='positive'|'negative'|'neutral'|'caution';
@@ -11,7 +12,7 @@ type Selection='ALL'|string;
 const signed=(value:number)=>`${value>0?'+':''}${value.toFixed(1)}`;
 const scoreTone=(score:number):Tone=>score>=20?'positive':score<=-20?'negative':Math.abs(score)>=10?'caution':'neutral';
 const plainScore=(score:number)=>score>=40?'Very strong':score>=20?'Strong / improving':score>=8?'Mildly supportive':score<=-40?'Very weak':score<=-20?'Weak / deteriorating':score<=-8?'Mildly restrictive':'Balanced / mixed';
-const dimensionHelp:Record<string,{question:string,means:string,high:string,low:string}>={
+const dimensionHelp:Record<string,{question:string;means:string;high:string;low:string}>={
   growth:{question:'Is the economy expanding or slowing?',means:'Growth tracks production, spending, business activity and demand.',high:'Strong growth usually supports earnings, employment and the local currency, but can keep rates higher.',low:'Weak growth raises slowdown or recession risk and can eventually push a central bank toward easier policy.'},
   inflation:{question:'Are prices getting hotter or cooling?',means:'Inflation measures how quickly the cost of goods and services is changing.',high:'Persistent inflation can keep interest rates high and make central banks more hawkish.',low:'Cooling inflation gives a central bank more freedom to cut rates if growth is weak.'},
   labour:{question:'Are jobs and wages healthy?',means:'Labour data shows whether people are finding work, earning income and supporting consumption.',high:'A strong labour market supports household demand but can also keep wage inflation sticky.',low:'Rapid labour weakness is one of the clearest warnings that an economy may be slowing.'},
