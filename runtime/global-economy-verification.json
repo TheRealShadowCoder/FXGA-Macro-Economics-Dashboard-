@@ -1,9 +1,9 @@
 {
   "schema": "fxga.global-economy.verification.v1",
   "conclusion": "skipped",
-  "runId": "32490967932",
-  "triggerSha": "3dd369288933fdebb69dce2c02e01d8da38d5b1c",
-  "recordedAt": "2026-08-21T14:13:28Z",
+  "runId": "32491016927",
+  "triggerSha": "251f33ed78f59630558d1e2558ec24a04bf3d2ee",
+  "recordedAt": "2026-08-21T14:14:01Z",
   "baselineTargetEconomies": 21,
   "dynamicFrontend": true,
   "educationalReport": true
