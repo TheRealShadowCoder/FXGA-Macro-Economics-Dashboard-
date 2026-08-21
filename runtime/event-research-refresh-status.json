@@ -1,7 +1,12 @@
 {
   "schema": "fxga.event-research.refresh.v1",
-  "generatedAt": "2026-08-21T01:53:07.422Z",
-  "conclusion": "failure",
-  "runId": 32437643842,
-  "error": "Event research rebuild failure"
+  "generatedAt": "2026-08-21T03:08:04.056Z",
+  "studyCount": 633,
+  "preNewsWindows": 9,
+  "horizons": 9,
+  "profiles": 196,
+  "recurringProfiles": 16,
+  "tests": 0,
+  "validatedCandidates": 0,
+  "backtestSchema": "fxga.event-pattern-backtest.v2"
 }
