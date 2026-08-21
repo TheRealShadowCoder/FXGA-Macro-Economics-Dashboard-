@@ -1,9 +1,9 @@
 {
   "schema": "fxga.upgrade-foundation.status.v1",
-  "recordedAt": "2026-08-21T02:42:01.104Z",
+  "recordedAt": "2026-08-21T02:42:34.578Z",
   "conclusion": "cancelled",
   "verifiedSha": null,
-  "runId": 32440716481,
+  "runId": 32440737909,
   "program": {
     "totalUpgrades": 3000,
     "domains": 30
