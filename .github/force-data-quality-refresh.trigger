@@ -1,2 +1,2 @@
-refresh=2026-08-17T20:36:00Z
-reason=Force complete 180-series macro refresh through v4.7 Firestore 9, verify classified data quality, last-known-good behavior, effective coverage and public macro-quality contract.
+refresh=2026-08-21T00:15:00Z
+reason=Force full production macro refresh before FRED coverage repair. Identify unresolved series, economies and categories, verify last-known-good retention, then use FRED targeted fallback for remaining macro gaps.
