@@ -62,11 +62,22 @@ jobs:
 
       - name: Integration policy check
         run: |
-          set -euo pipefail
-          grep -q '127.0.0.1' integrations/mt5api/start-mt5api.ps1
-          grep -q 'FXGA_MT5_TOKEN' integrations/mt5api/fxga_mt5api_bridge.py
-          grep -q 'producer.*dceoy/mt5api' integrations/mt5api/fxga_mt5api_bridge.py
-          if grep -RniE '(password\s*=|api[_-]?key\s*=|token\s*=)[[:space:]]*["'"'][^"'"']{12,}' integrations/mt5api --exclude='*.md'; then
-            echo 'Potential plaintext secret detected in mt5api integration.' >&2
-            exit 1
-          fi
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          root=Path('integrations/mt5api')
+          launcher=(root/'start-mt5api.ps1').read_text(encoding='utf-8')
+          bridge=(root/'fxga_mt5api_bridge.py').read_text(encoding='utf-8')
+          assert '127.0.0.1' in launcher, 'mt5api must stay bound to localhost'
+          assert 'FXGA_MT5_TOKEN' in bridge, 'cloud ingress token must come from environment'
+          assert 'dceoy/mt5api' in bridge, 'producer provenance missing'
+          secret_pattern=re.compile(r'(?i)(password|api[_-]?key|token)\s*=\s*["\'][^"\']{12,}["\']')
+          for path in root.rglob('*'):
+              if not path.is_file() or path.suffix.lower() in {'.md','.json'}:
+                  continue
+              text=path.read_text(encoding='utf-8',errors='ignore')
+              if secret_pattern.search(text):
+                  raise SystemExit(f'Potential plaintext secret detected: {path}')
+          print('mt5api integration policy checks passed')
+          PY
