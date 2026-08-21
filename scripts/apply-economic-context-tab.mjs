@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+// One-time guarded integration for the dedicated Economic Context report tab.
 const path='src/App.tsx';
 let source=fs.readFileSync(path,'utf8');
 function replaceOne(before,after,label){const count=source.split(before).length-1;if(count!==1)throw new Error(`${label}: expected exactly one match, found ${count}`);source=source.replace(before,after);}
