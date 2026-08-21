@@ -1,6 +1,6 @@
 {
   "schema": "fxga.upgrade-production.audit.v1",
-  "generatedAt": "2026-08-21T14:27:18.781Z",
+  "generatedAt": "2026-08-21T14:36:50.547Z",
   "passed": true,
   "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
   "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app",
@@ -14,7 +14,7 @@
     {
       "name": "current-static-release",
       "passed": true,
-      "durationMs": 270,
+      "durationMs": 442,
       "detail": {
         "release": "cross-asset-mt5-60d-event-research",
         "commit": "a6591493c6cf626322fbf3a20e672155ec04eb0c",
@@ -24,7 +24,7 @@
     {
       "name": "frontend-upgrade-ui",
       "passed": true,
-      "durationMs": 134,
+      "durationMs": 70,
       "detail": {
         "scripts": 1
       }
@@ -32,19 +32,19 @@
     {
       "name": "google-api-health",
       "passed": true,
-      "durationMs": 902,
+      "durationMs": 607,
       "detail": {
         "calendar": "2026-08-21T14:09:24.491Z",
         "macro": "2026-08-21T14:02:09.734Z",
         "intelligence": "2026-08-21T02:52:15.275Z",
-        "market": "2026-08-21T14:27:06.108Z",
-        "technical": "2026-08-21T14:27:11.175Z"
+        "market": "2026-08-21T14:36:22.019Z",
+        "technical": "2026-08-21T14:36:26.329Z"
       }
     },
     {
       "name": "event-study-full-research",
       "passed": true,
-      "durationMs": 3696,
+      "durationMs": 1631,
       "detail": {
         "studies": 40,
         "evidenceBundles": 0,
@@ -56,7 +56,7 @@
     {
       "name": "event-pattern-oos-api",
       "passed": true,
-      "durationMs": 104,
+      "durationMs": 121,
       "detail": {
         "tests": 0,
         "validated": 0
@@ -65,7 +65,7 @@
     {
       "name": "event-source-fusion",
       "passed": true,
-      "durationMs": 183,
+      "durationMs": 69,
       "detail": {
         "fred": 80,
         "cnbc": 16,
@@ -76,7 +76,7 @@
     {
       "name": "signal-live",
       "passed": true,
-      "durationMs": 46,
+      "durationMs": 72,
       "detail": {
         "count": 0
       }
@@ -84,7 +84,7 @@
     {
       "name": "signal-history",
       "passed": true,
-      "durationMs": 53,
+      "durationMs": 75,
       "detail": {
         "count": 5
       }
@@ -101,7 +101,7 @@
     {
       "name": "data-quality-safe",
       "passed": true,
-      "durationMs": 60,
+      "durationMs": 59,
       "detail": {
         "requested": 218,
         "liveFetched": 0,
@@ -117,7 +117,7 @@
     {
       "name": "mt5-60d",
       "passed": true,
-      "durationMs": 518,
+      "durationMs": 337,
       "detail": {
         "bars": 36586,
         "chunks": 64,
