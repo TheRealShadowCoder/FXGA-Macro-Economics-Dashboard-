@@ -1,0 +1,53 @@
+name: Apply Any Economy Resolver
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/apply-any-economy-resolver.mjs'
+      - 'cloud-run-collector/src/economy-on-demand.js'
+      - '.github/workflows/apply-any-economy-resolver.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fxga-any-economy-resolver
+  cancel-in-progress: true
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Apply secure resolver integration
+        run: node scripts/apply-any-economy-resolver.mjs
+      - name: Validate private collector
+        working-directory: cloud-run-collector
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm run check
+      - name: Validate optimized public Google API
+        run: |
+          node --check google-cloud-app/optimize-server.js
+          cp google-cloud-app/server.js /tmp/fxga-server.js
+          node google-cloud-app/optimize-server.js
+          node --check google-cloud-app/server.js
+          grep -q '/api/economy-resolve' google-cloud-app/server.js
+          grep -q 'FXGA_COLLECTOR_URL' google-cloud-app/server.js
+          cp /tmp/fxga-server.js google-cloud-app/server.js
+      - name: Build production frontend
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Commit verified resolver integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/launcher-v2.js google-cloud-app/optimize-server.js .github/workflows/deploy-google-cloud-app.yml src/lib/api.ts src/components/EconomicContextReport.tsx src/components/EconomicContextGlobal.css
+          git diff --cached --quiet || git commit -m 'Enable secure FRED reports for any economy'
+          git push origin HEAD:main
