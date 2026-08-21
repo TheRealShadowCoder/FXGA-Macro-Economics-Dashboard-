@@ -6,3 +6,10 @@ dist
 !.env.example
 .DS_Store
 *.log
+
+# Local dceoy/mt5api integration state must never be committed
+integrations/mt5api/config.json
+integrations/mt5api/*.dpapi
+integrations/mt5api/secrets/
+integrations/mt5api/logs/
+integrations/mt5api/.venv/
