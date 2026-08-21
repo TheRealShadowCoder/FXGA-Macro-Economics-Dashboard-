@@ -1,8 +1,8 @@
 {
   "schema": "fxga.fred.coverage-refresh-status.v1",
-  "recordedAt": "2026-08-21T14:31:23.071Z",
+  "recordedAt": "2026-08-21T14:34:18.117Z",
   "conclusion": "skipped",
-  "runId": 32492569259,
-  "runUrl": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32492569259",
-  "headSha": "0329718c16e96fb1d13a332378a14dc742f4647b"
+  "runId": 32492838159,
+  "runUrl": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32492838159",
+  "headSha": "37be58f17d5aa25e878cc7dd77286af8e04d6cf1"
 }
