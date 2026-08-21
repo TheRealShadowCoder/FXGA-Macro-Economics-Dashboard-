@@ -1,0 +1,42 @@
+name: Apply Global Economy Expansion
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/apply-global-economy-expansion.mjs'
+      - '.github/workflows/apply-global-economy-expansion.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fxga-global-economy-expansion
+  cancel-in-progress: true
+
+jobs:
+  expand:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Apply economy expansion
+        run: node scripts/apply-global-economy-expansion.mjs
+      - name: Validate collector syntax
+        run: |
+          node --check cloud-run-collector/src/global-fred.js
+          node --check cloud-run-collector/src/super-economist-core.js
+      - name: Build frontend
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Commit expanded economy engine
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloud-run-collector/src/global-fred.js cloud-run-collector/src/super-economist-core.js
+          git diff --cached --quiet || git commit -m 'Expand global macro engine to 21 economies'
+          git push origin HEAD:main
