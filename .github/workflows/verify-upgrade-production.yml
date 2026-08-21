@@ -1,0 +1,64 @@
+name: Verify FXGA Upgrade Production
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ['Deploy FXGA Cloudflare Static Website']
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Wait briefly for CDN propagation
+        run: sleep 15
+      - name: Verify live upgraded stack
+        run: node scripts/verify-upgrade-production.mjs
+      - name: Upload audit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxga-upgrade-production-audit
+          path: runtime/upgrade-production-audit.json
+          retention-days: 14
+
+  publish:
+    needs: audit
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download audit when available
+        if: ${{ needs.audit.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: fxga-upgrade-production-audit
+          path: runtime
+      - name: Publish live audit status
+        env:
+          CONCLUSION: ${{ needs.audit.result }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p runtime
+          if [ ! -f runtime/upgrade-production-audit.json ]; then
+            node <<'NODE'
+          const fs=require('fs');
+          fs.writeFileSync('runtime/upgrade-production-audit.json',JSON.stringify({schema:'fxga.upgrade-production.audit.v1',generatedAt:new Date().toISOString(),passed:false,workflowConclusion:process.env.CONCLUSION,runId:Number(process.env.RUN_ID),summary:{passed:0,failed:1,total:1},checks:[{name:'workflow',passed:false,error:`Upgrade production audit ${process.env.CONCLUSION}`}]},null,2)+'\n');
+          NODE
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add runtime/upgrade-production-audit.json
+          git diff --cached --quiet || git commit -m 'Publish upgrade production audit [skip ci]'
+          git push origin HEAD:main
