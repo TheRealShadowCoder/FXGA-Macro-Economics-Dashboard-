@@ -1,0 +1,14 @@
+const finite = values => values.filter(Number.isFinite);
+export const mean = values => { const x=finite(values); return x.length ? x.reduce((a,b)=>a+b,0)/x.length : null; };
+export const median = values => quantile(values,.5);
+export function quantile(values,q){const x=finite(values).sort((a,b)=>a-b);if(!x.length)return null;const p=(x.length-1)*Math.min(1,Math.max(0,q)),i=Math.floor(p),f=p-i;return x[i+1]===undefined?x[i]:x[i]+f*(x[i+1]-x[i]);}
+export function trimmedMean(values,trim=.1){const x=finite(values).sort((a,b)=>a-b);if(!x.length)return null;const n=Math.floor(x.length*Math.max(0,Math.min(.45,trim))),y=x.slice(n,x.length-n||undefined);return y.length?mean(y):mean(x);}
+export function stddev(values){const x=finite(values);if(x.length<2)return null;const m=mean(x);return Math.sqrt(x.reduce((s,v)=>s+(v-m)**2,0)/(x.length-1));}
+export function mad(values){const x=finite(values);if(!x.length)return null;const m=median(x);return median(x.map(v=>Math.abs(v-m)));}
+export function iqr(values){const q1=quantile(values,.25),q3=quantile(values,.75);return q1==null||q3==null?null:q3-q1;}
+export function hitRateInterval(successes,total,z=1.96){if(!total)return {low:null,high:null};const p=successes/total,den=1+z*z/total,center=(p+z*z/(2*total))/den,half=z*Math.sqrt((p*(1-p)+z*z/(4*total))/total)/den;return{low:Math.max(0,center-half),high:Math.min(1,center+half)};}
+export function meanInterval(values,z=1.96){const x=finite(values),m=mean(x),s=stddev(x);if(!x.length||m==null)return{mean:null,low:null,high:null,se:null};if(x.length<2||s==null)return{mean:m,low:null,high:null,se:null};const se=s/Math.sqrt(x.length);return{mean:m,low:m-z*se,high:m+z*se,se};}
+export function signEffect(values){const x=finite(values);if(!x.length)return null;const up=x.filter(v=>v>0).length,down=x.filter(v=>v<0).length;return (up-down)/x.length;}
+export function robustSummary(values){const x=finite(values);const interval=meanInterval(x);return{n:x.length,mean:interval.mean,median:median(x),trimmedMean:trimmedMean(x),stddev:stddev(x),mad:mad(x),iqr:iqr(x),q10:quantile(x,.1),q25:quantile(x,.25),q75:quantile(x,.75),q90:quantile(x,.9),mean95Low:interval.low,mean95High:interval.high,signEffect:signEffect(x)};}
+export function sampleGrade(n,{oos=false,stable=false}={}){if(n<3)return'insufficient';if(n<10)return'early';if(n<20)return'developing';if(!oos)return'research-ready-needs-oos';if(!stable)return'oos-needs-stability';return'validated-candidate';}
+export function stabilityScore(chunks=[]){const valid=chunks.map(x=>Number(x)).filter(Number.isFinite);if(valid.length<2)return null;const signs=valid.map(x=>Math.sign(x)).filter(Boolean);if(!signs.length)return 0;const majority=Math.max(signs.filter(x=>x>0).length,signs.filter(x=>x<0).length);const direction=majority/signs.length;const dispersion=stddev(valid),scale=Math.max(Math.abs(mean(valid)||0),1e-9);return Math.max(0,Math.min(1,direction*(1/(1+(dispersion||0)/scale))));}
