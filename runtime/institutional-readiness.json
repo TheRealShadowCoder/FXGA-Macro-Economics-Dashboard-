@@ -1,0 +1,133 @@
+{
+  "schema": "fxga.institutional.readiness.v1",
+  "generatedAt": "2026-08-21T14:16:52.878Z",
+  "institutionalReady": false,
+  "tradeModelReady": false,
+  "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
+  "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app",
+  "mt5": "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app",
+  "summary": {
+    "ready": 6,
+    "notReady": 4,
+    "blockingFailures": 3,
+    "total": 10
+  },
+  "dimensions": [
+    {
+      "name": "release-evidence",
+      "ready": true,
+      "blocking": true,
+      "detail": {
+        "commit": "53349a2ce915dd365147d4f3f10510641df7c502",
+        "release": "cross-asset-mt5-60d-event-research",
+        "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app"
+      }
+    },
+    {
+      "name": "service-health",
+      "ready": true,
+      "blocking": true,
+      "detail": {
+        "updatedAt": {
+          "calendar": "2026-08-21T14:09:24.491Z",
+          "macro": "2026-08-21T14:02:09.734Z",
+          "intelligence": "2026-08-21T02:52:15.275Z",
+          "market": "2026-08-21T14:16:38.694Z",
+          "technical": "2026-08-21T14:16:42.497Z"
+        },
+        "compute": "Google Cloud Run",
+        "state": "Google Cloud Firestore"
+      }
+    },
+    {
+      "name": "macro-data-health",
+      "ready": true,
+      "blocking": true,
+      "detail": {
+        "coveragePercent": 369.5,
+        "unresolved": 0,
+        "status": "strong"
+      }
+    },
+    {
+      "name": "global-economy-data",
+      "ready": false,
+      "blocking": true,
+      "detail": {
+        "targets": 5,
+        "populated": 5,
+        "mode": "google-cloud-direct-dynamic-economies",
+        "hardCodedPublicEconomyList": false
+      }
+    },
+    {
+      "name": "global-economy-model",
+      "ready": false,
+      "blocking": true,
+      "detail": {
+        "economies": 5,
+        "unique": 5,
+        "structurallyValid": 5,
+        "generatedAt": "2026-08-21T02:52:03.999Z"
+      }
+    },
+    {
+      "name": "research-provenance",
+      "ready": true,
+      "blocking": true,
+      "detail": {
+        "fred": 80,
+        "cnbc": 16,
+        "fxstreet": 270,
+        "mt5Studies": 633
+      }
+    },
+    {
+      "name": "public-security-telemetry",
+      "ready": true,
+      "blocking": true,
+      "detail": {
+        "mode": "firestore-ledger-fallback",
+        "signals": 5,
+        "events": 8
+      }
+    },
+    {
+      "name": "research-maturity",
+      "ready": true,
+      "blocking": false,
+      "detail": {
+        "studies": 633,
+        "tests": 0,
+        "validatedCandidates": 0,
+        "status": "descriptive-research-only"
+      }
+    },
+    {
+      "name": "trade-model-readiness",
+      "ready": false,
+      "blocking": false,
+      "detail": {
+        "validatedCandidates": 0,
+        "policy": "Zero validated candidates is an acceptable research result; automated trade promotion remains blocked."
+      }
+    },
+    {
+      "name": "mt5-data-readiness",
+      "ready": false,
+      "blocking": true,
+      "detail": {
+        "databaseHealth": "STALE",
+        "totalBars": 36586,
+        "assetsExpected": 16,
+        "newestEURUSD": 1787274060000,
+        "ageMinutes": 796,
+        "marketExpectedOpen": true
+      }
+    }
+  ],
+  "interpretation": {
+    "institutionalReady": "Core infrastructure, evidence, global macro and MT5 readiness. This is not a regulatory certification.",
+    "tradeModelReady": "At least one event-pattern candidate has passed the configured OOS promotion gates. It is never a profitability guarantee."
+  }
+}
