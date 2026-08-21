@@ -1,12 +1,7 @@
 {
   "schema": "fxga.event-research.refresh.v1",
-  "generatedAt": "2026-08-21T03:08:04.056Z",
-  "studyCount": 633,
-  "preNewsWindows": 9,
-  "horizons": 9,
-  "profiles": 196,
-  "recurringProfiles": 16,
-  "tests": 0,
-  "validatedCandidates": 0,
-  "backtestSchema": "fxga.event-pattern-backtest.v2"
+  "generatedAt": "2026-08-21T14:13:47.162Z",
+  "conclusion": "skipped",
+  "runId": 32490995335,
+  "error": "Event research rebuild skipped"
 }
