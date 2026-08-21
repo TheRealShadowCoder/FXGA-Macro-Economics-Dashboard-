@@ -2,8 +2,11 @@ import fs from 'node:fs';
 
 const required = [
   'config/upgrade-program.json',
+  'src/App.tsx',
   'src/lib/api-runtime.ts',
   'src/lib/live-client.ts',
+  'src/components/SimpleActionReport.tsx',
+  'src/components/SimpleActionReport.css',
   'src/components/EventBacktestValidation.tsx',
   'cloud-run-collector/src/fred-coverage-resolver.js',
   'cloud-run-collector/src/research-statistics.js',
@@ -27,6 +30,10 @@ for(let i=0;i<program.domainsIndex.length;i++){
 const wrangler=fs.readFileSync('wrangler.jsonc','utf8');
 if(/"main"\s*:/.test(wrangler))throw new Error('Cloudflare must remain static-only: wrangler main is forbidden');
 for(const forbidden of ['kv_namespaces','r2_buckets','d1_databases','durable_objects','queues','services'])if(wrangler.includes(`"${forbidden}"`))throw new Error(`Cloudflare application binding forbidden: ${forbidden}`);
+const app=fs.readFileSync('src/App.tsx','utf8');
+for(const needle of ["type View = 'action-report'","{ id: 'action-report', label: 'Action Report' }","useState<View>('action-report')",'<SimpleActionReport'])if(!app.includes(needle))throw new Error(`Simple Action Report shell gate missing ${needle}`);
+const actionUi=fs.readFileSync('src/components/SimpleActionReport.tsx','utf8');
+for(const needle of ['WHAT DO I DO NOW?','WHAT IS HAPPENING?','WHAT SHOULD I DO?','WHAT SHOULD I WATCH?','WHAT WOULD CHANGE THE ANSWER?','WAIT —','PREPARE'])if(!actionUi.includes(needle))throw new Error(`Plain-English Action Report gate missing ${needle}`);
 const api=fs.readFileSync('src/lib/api-runtime.ts','utf8');
 for(const needle of ['inFlight','CIRCUIT_FAILURES','apiRuntimeSummary','readLkg','MAX_CONCURRENT'])if(!api.includes(needle))throw new Error(`API runtime resilience gate missing ${needle}`);
 const live=fs.readFileSync('src/lib/live-client.ts','utf8');
@@ -41,4 +48,4 @@ const optimizer=fs.readFileSync('google-cloud-app/optimize-server.js','utf8');
 for(const needle of ['/api/event-pattern-backtests','eventBacktests','validatedOnly'])if(!optimizer.includes(needle))throw new Error(`Public OOS API gate missing ${needle}`);
 const eventUi=fs.readFileSync('src/components/EventBacktestValidation.tsx','utf8');
 for(const needle of ['Out-of-Sample Validation','q-value','cost assumption','validated candidate'])if(!eventUi.includes(needle))throw new Error(`Event validation UI gate missing ${needle}`);
-console.log(JSON.stringify({ok:true,schema:program.schema,totalUpgrades:program.totalUpgrades,domains:program.domains,staticCloudflare:true,foundations:program.implementation.foundationBatch.capabilities.length,oosValidation:true,realtimeResilience:true,eventEvidence:true},null,2));
+console.log(JSON.stringify({ok:true,schema:program.schema,totalUpgrades:program.totalUpgrades,domains:program.domains,staticCloudflare:true,foundations:program.implementation.foundationBatch.capabilities.length,oosValidation:true,realtimeResilience:true,eventEvidence:true,simpleActionReport:true},null,2));
