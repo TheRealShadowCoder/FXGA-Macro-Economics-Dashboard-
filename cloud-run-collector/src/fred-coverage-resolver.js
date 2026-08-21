@@ -10,6 +10,8 @@ const MAX_REPAIRS=Math.min(32,Math.max(4,Number(process.env.FRED_COVERAGE_MAX_RE
 const MAX_UNIVERSE=Math.min(320,Math.max(180,Number(process.env.FRED_COVERAGE_MAX_UNIVERSE||240)));
 const TARGET_PER_CATEGORY=Math.min(2,Math.max(1,Number(process.env.FRED_COVERAGE_TARGET_PER_CATEGORY||1)));
 const MAX_SERIES_AGE_DAYS=365*5;
+const SUCCESS_REPAIR_TTL_MS=6*60*60*1000;
+const UNRESOLVED_RETRY_TTL_MS=60*60*1000;
 let nextRequestAt=0;
 
 const ECONOMY_LABEL={
@@ -163,12 +165,22 @@ function coverageCounts(series){
   const counts=new Map();for(const item of series){const key=`${item.economy||'UNKNOWN'}:${item.category||'other'}`;counts.set(key,(counts.get(key)||0)+1);}return counts;
 }
 
-export async function repairFredCoverage({reason='cloud-run-startup'}={}){
+export async function repairFredCoverage({reason='cloud-run-startup',force=false}={}){
   const startedAt=Date.now();
   if(!FRED_API_KEY)return {skipped:true,reason:'FRED_API_KEY not configured'};
   const [universeState,macroState]=await Promise.all([getDoc('fred-universe'),getDoc('macro')]);
   const universe=universeState?.payload;
   if(!Array.isArray(universe?.series)||!universe.series.length)return {skipped:true,reason:'FRED universe not initialized'};
+
+  const previousRepair=universe.coverageRepair;
+  const previousAt=Date.parse(previousRepair?.generatedAt||'');
+  if(!force&&previousRepair?.schema==='fxga.fred.coverage-repair.v1'&&Number.isFinite(previousAt)){
+    const complete=Number(previousRepair.categoriesMissing||0)===0&&Number(previousRepair.unresolvedCount||0)===0;
+    const ttl=complete?SUCCESS_REPAIR_TTL_MS:UNRESOLVED_RETRY_TTL_MS;
+    if(Date.now()-previousAt<ttl){
+      return {...previousRepair,skipped:true,skipReason:'repair-ttl',nextEligibleAt:new Date(previousAt+ttl).toISOString()};
+    }
+  }
 
   let series=[...universe.series],repairs=[],unresolved=[];
   const usedIds=new Set(series.map(item=>item.seriesId).filter(Boolean));
