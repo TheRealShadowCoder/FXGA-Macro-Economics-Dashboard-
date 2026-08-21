@@ -1,7 +1,7 @@
 {
   "name": "fxga-cloud-run-collector",
   "private": true,
-  "version": "4.22.1",
+  "version": "4.22.2",
   "type": "module",
   "fxgaDeploymentProfile": "google-cloud-processing-passive-cloudflare-static-host-v4",
   "engines": {
