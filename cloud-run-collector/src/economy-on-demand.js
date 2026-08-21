@@ -21,28 +21,69 @@ const KNOWN={
   DENMARK:['DKK','Danmarks Nationalbank'],ICELAND:['ISK','Central Bank of Iceland'],RUSSIA:['RUB','Bank of Russia'],UKRAINE:['UAH','National Bank of Ukraine'],
   CHILE:['CLP','Central Bank of Chile'],COLOMBIA:['COP','Bank of the Republic'],PERU:['PEN','Central Reserve Bank of Peru'],URUGUAY:['UYU','Central Bank of Uruguay'],
 };
+const ALIASES={
+  SOUTH_KOREA:['south korea','republic of korea','korea, republic of'],
+  NORTH_KOREA:['north korea','democratic people s republic of korea'],
+  CZECH_REPUBLIC:['czech republic','czechia'],
+  UNITED_ARAB_EMIRATES:['united arab emirates','uae'],
+  HONG_KONG:['hong kong','hong kong sar'],
+  TAIWAN:['taiwan','republic of china'],
+  TURKEY:['turkey','turkiye','türkiye'],
+  RUSSIA:['russia','russian federation'],
+  VIETNAM:['vietnam','viet nam'],
+  BOLIVIA:['bolivia','plurinational state of bolivia'],
+  VENEZUELA:['venezuela','bolivarian republic of venezuela'],
+  TANZANIA:['tanzania','united republic of tanzania'],
+  COTE_D_IVOIRE:["cote d ivoire","côte d'ivoire",'ivory coast'],
+  DEMOCRATIC_REPUBLIC_OF_THE_CONGO:['democratic republic of the congo','dr congo','congo kinshasa'],
+  REPUBLIC_OF_THE_CONGO:['republic of the congo','congo brazzaville'],
+};
 
 const cleanCountry=value=>String(value||'').trim().replace(/\s+/g,' ').slice(0,80);
+const normalizeText=value=>String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
 const economyId=value=>cleanCountry(value).normalize('NFKD').replace(/[^A-Za-z0-9 ]/g,'').trim().replace(/\s+/g,'_').toUpperCase();
 const clamp=(x,lo=-100,hi=100)=>Math.max(lo,Math.min(hi,Number.isFinite(x)?x:0));
 const mean=xs=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
 const std=xs=>{if(xs.length<2)return 0;const m=mean(xs);return Math.sqrt(mean(xs.map(x=>(x-m)**2)));};
+const ageDays=value=>{const t=Date.parse(value||'');return Number.isFinite(t)?Math.max(0,(Date.now()-t)/86_400_000):Infinity;};
+function freshnessLimitDays(frequency=''){
+  const f=String(frequency).toLowerCase();
+  if(/daily/.test(f))return 30;
+  if(/weekly/.test(f))return 75;
+  if(/monthly/.test(f))return 150;
+  if(/quarter/.test(f))return 400;
+  if(/annual/.test(f))return 800;
+  return 240;
+}
+function freshnessScore(date,frequency=''){
+  const limit=freshnessLimitDays(frequency),age=ageDays(date);
+  if(!Number.isFinite(age))return 0;
+  return Math.max(0,Math.min(1,1-age/Math.max(1,limit)));
+}
+function geographyTerms(country,id){
+  const terms=[normalizeText(country),normalizeText(id.replaceAll('_',' ')),...(ALIASES[id]||[]).map(normalizeText)].filter(x=>x.length>=3);
+  return [...new Set(terms)];
+}
+function geographyMatch(series,country,id){
+  const text=normalizeText(`${series?.title||''} ${series?.notes||''} ${series?.source||''}`),terms=geographyTerms(country,id);
+  return terms.some(term=>text.includes(term));
+}
 
 async function fred(path,params={}){
   if(!FRED_API_KEY)throw new Error('FRED_API_KEY is not configured in the private collector');
   const url=new URL(`https://api.stlouisfed.org/fred/${path}`);
   for(const [key,value] of Object.entries({...params,api_key:FRED_API_KEY,file_type:'json'}))if(value!=null)url.searchParams.set(key,String(value));
-  const response=await fetch(url,{headers:{Accept:'application/json','User-Agent':'FXGA-Economy-Resolver/1.0'}});
+  const response=await fetch(url,{headers:{Accept:'application/json','User-Agent':'FXGA-Economy-Resolver/2.0'}});
   if(!response.ok)throw new Error(`FRED ${path} HTTP ${response.status}`);
   return response.json();
 }
 
 async function searchSeries(country,category){
-  const payload=await fred('series/search',{search_text:`${country} ${category.query}`,limit:8,order_by:'popularity',sort_order:'desc'});
+  const payload=await fred('series/search',{search_text:`${country} ${category.query}`,limit:12,order_by:'search_rank'});
   return Array.isArray(payload?.seriess)?payload.seriess:[];
 }
 async function observations(seriesId){
-  const payload=await fred('series/observations',{series_id:seriesId,sort_order:'desc',limit:18});
+  const payload=await fred('series/observations',{series_id:seriesId,sort_order:'desc',limit:24});
   return (Array.isArray(payload?.observations)?payload.observations:[]).map(row=>({date:String(row.date||''),value:Number(row.value)})).filter(row=>row.date&&Number.isFinite(row.value)).reverse();
 }
 function momentum(rows,title,category){
@@ -55,16 +96,22 @@ function momentum(rows,title,category){
 function regime(growth,inflation){if(growth>20&&inflation>20)return'inflationary expansion';if(growth>20&&inflation<=20)return'growth expansion';if(growth<-20&&inflation>20)return'stagflation risk';if(growth<-20&&inflation<-20)return'disinflationary slowdown';return'mixed transition';}
 function meta(id,label){const known=KNOWN[id];return{currency:known?.[0]||'N/A',centralBank:known?.[1]||`${label} central bank / monetary authority`};}
 
-async function resolveCategory(country,category){
-  const candidates=await searchSeries(country,category);
-  for(const series of candidates.slice(0,4)){
+async function resolveCategory(country,id,category){
+  const candidates=(await searchSeries(country,category))
+    .filter(series=>series?.id&&geographyMatch(series,country,id))
+    .filter(series=>ageDays(series.observation_end)<=freshnessLimitDays(series.frequency))
+    .map(series=>({series,rank:60+Math.min(25,Number(series.popularity||0)*.25)+freshnessScore(series.observation_end,series.frequency)*15}))
+    .sort((a,b)=>b.rank-a.rank)
+    .slice(0,6);
+  for(const {series,rank} of candidates){
     const title=String(series.title||series.id||'');
-    if(!title.toLowerCase().includes(country.toLowerCase().split(' ')[0])&&candidates.length>1)continue;
     try{
       const history=await observations(series.id);
       if(history.length<2)continue;
-      const latest=history.at(-1),previous=history.at(-2),score=momentum(history,title,category.id);
-      return{seriesId:String(series.id),title,value:latest.value,date:latest.date,previous:previous.value,change:latest.value-previous.value,units:String(series.units||''),frequency:String(series.frequency||''),categories:[category.id],importance:'high',source:'FRED Economic Data',history,score};
+      const latest=history.at(-1),previous=history.at(-2),freshness=freshnessScore(latest.date,series.frequency);
+      if(freshness<=0)continue;
+      const score=momentum(history,title,category.id),quality=Math.max(0,Math.min(1,.45+.25*Math.min(1,history.length/12)+.30*freshness));
+      return{seriesId:String(series.id),title,value:latest.value,date:latest.date,previous:previous.value,change:latest.value-previous.value,units:String(series.units||''),frequency:String(series.frequency||''),categories:[category.id],importance:'high',source:'FRED Economic Data',history,score,quality:Number(quality.toFixed(4)),freshness:Number(freshness.toFixed(4)),discoveryRank:Number(rank.toFixed(2)),geographyVerified:true};
     }catch{}
   }
   return null;
@@ -80,15 +127,17 @@ export async function resolveEconomyOnDemand(countryInput,{force=false}={}){
     const snap=await ref.get();
     if(snap.exists){const cached=snap.data(),age=Date.now()-Date.parse(cached.updatedAt||0);if(Number.isFinite(age)&&age<CACHE_MS&&cached.state)return{...cached.state,cached:true,cacheAgeMs:age};}
   }
-  const settled=await Promise.all(CATEGORIES.map(async category=>({category,result:await resolveCategory(country,category).catch(()=>null)})));
+  const settled=await Promise.all(CATEGORIES.map(async category=>({category,result:await resolveCategory(country,id,category).catch(()=>null)})));
   const rows=settled.filter(x=>x.result).map(x=>({...x.result,economy:id,economies:[id]}));
-  if(rows.length<2)throw new Error(`FRED does not currently provide enough usable ${country} series to build a reliable economy report`);
+  if(rows.length<2)throw new Error(`FRED does not currently provide enough geographically verified ${country} series to build even a partial economy report`);
   const scoreBy=Object.fromEntries(CATEGORIES.map(c=>[c.id,settled.find(x=>x.category.id===c.id)?.result?.score??0]));
-  const dimensions=CATEGORIES.map(c=>{const result=settled.find(x=>x.category.id===c.id)?.result;return{id:c.id,label:c.label,score:Math.round(scoreBy[c.id]),coverage:result?1:0,contributors:result?[{seriesId:result.seriesId,title:result.title,score:Math.round(result.score),category:c.id}]:[]};});
+  const dimensions=CATEGORIES.map(c=>{const result=settled.find(x=>x.category.id===c.id)?.result;return{id:c.id,label:c.label,score:Math.round(scoreBy[c.id]),coverage:result?1:0,quality:result?.quality??0,freshness:result?.freshness??0,contributors:result?[{seriesId:result.seriesId,title:result.title,score:Math.round(result.score),category:c.id,quality:result.quality,freshness:result.freshness}]:[]};});
+  const covered=dimensions.filter(d=>d.coverage>0).length,missingDimensions=dimensions.filter(d=>!d.coverage).map(d=>d.id),reportStatus=covered>=4?'full':covered>=2?'partial':'unavailable';
+  const coverageRatio=covered/CATEGORIES.length,averageQuality=mean(rows.map(row=>row.quality||0)),averageFreshness=mean(rows.map(row=>row.freshness||0));
   const currencyScore=clamp(0.27*scoreBy.growth+0.22*scoreBy.labour+0.24*scoreBy.policy+0.12*scoreBy.inflation+0.15*scoreBy.financial),r=regime(scoreBy.growth,scoreBy.inflation),m=meta(id,country),policyStance=scoreBy.policy>20?'hawkish':scoreBy.policy<-20?'dovish':'balanced';
-  const confidence=Math.round(Math.min(90,30+(rows.length/5)*45+Math.min(15,rows.reduce((s,row)=>s+Math.min(3,row.history.length/4),0))));
-  const state={id,label:country,currency:m.currency,centralBank:m.centralBank,observationCount:rows.length,confidence,regime:r,policyStance,currencyBias:currencyScore>18?'supportive':currencyScore<-18?'weakening':'mixed',currencyScore:Math.round(currencyScore),dimensions,topSignals:rows.sort((a,b)=>Math.abs(b.score)-Math.abs(a.score)).map(row=>({seriesId:row.seriesId,title:row.title,score:Math.round(row.score),value:row.value,date:row.date})).slice(0,8),summary:`${country}: ${r}; ${policyStance} policy impulse; macro score ${Math.round(currencyScore)}.`,resolvedOnDemand:true,source:'FRED on-demand economy resolver',generatedAt:new Date().toISOString()};
-  await ref.set({updatedAt:new Date().toISOString(),country,id,state,observations:rows},{merge:false});
+  const rawConfidence=Math.round(20+coverageRatio*45+averageQuality*20+averageFreshness*15),confidence=Math.min(reportStatus==='full'?92:55,rawConfidence);
+  const state={id,label:country,currency:m.currency,centralBank:m.centralBank,observationCount:rows.length,confidence,confidenceMeaning:'evidence-quality-score-not-calibrated-probability',coverageRatio:Number(coverageRatio.toFixed(3)),reportStatus,missingDimensions,averageEvidenceQuality:Number(averageQuality.toFixed(3)),averageFreshness:Number(averageFreshness.toFixed(3)),regime:r,policyStance,currencyBias:currencyScore>18?'supportive':currencyScore<-18?'weakening':'mixed',currencyScore:Math.round(currencyScore),dimensions,topSignals:rows.sort((a,b)=>Math.abs(b.score)-Math.abs(a.score)).map(row=>({seriesId:row.seriesId,title:row.title,score:Math.round(row.score),value:row.value,date:row.date,quality:row.quality,freshness:row.freshness})).slice(0,8),summary:`${country}: ${reportStatus==='partial'?'partial evidence; ':''}${r}; ${policyStance} policy impulse; macro score ${Math.round(currencyScore)}.`,resolvedOnDemand:true,source:'FRED on-demand economy resolver',sourcePolicy:'Geography verified; frequency-aware freshness; no synthetic observations.',generatedAt:new Date().toISOString()};
+  await ref.set({updatedAt:new Date().toISOString(),country,id,state,observations:rows,resolverVersion:'2.0'},{merge:false});
   return state;
 }
 
