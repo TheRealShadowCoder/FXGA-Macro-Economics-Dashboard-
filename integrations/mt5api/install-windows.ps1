@@ -37,10 +37,16 @@ function New-RandomSecret([int]$Bytes = 32) {
     }
 }
 
+function Write-Utf8NoBom([string]$Path, [string]$Value) {
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Value, $encoding)
+}
+
 function Save-DpapiSecureString([Security.SecureString]$Secure, [string]$Path) {
     $dir = Split-Path -Parent $Path
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $Secure | ConvertFrom-SecureString | Set-Content -Encoding UTF8 $Path
+    $encrypted = $Secure | ConvertFrom-SecureString
+    Write-Utf8NoBom $Path $encrypted
 }
 
 if ($env:OS -ne "Windows_NT") {
@@ -116,11 +122,18 @@ $venvPython = Join-Path $venv "Scripts\python.exe"
 Write-Step "Installing FXGA bridge files"
 Copy-Item -Force $sourceBridge (Join-Path $runtime "fxga_mt5api_bridge.py")
 $configPath = Join-Path $runtime "config.json"
-if (-not (Test-Path $configPath)) {
+if (Test-Path $configPath) {
+    try {
+        $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+    } catch {
+        throw "Existing MT5API config.json is invalid: $($_.Exception.Message)"
+    }
+} else {
     $cfg = Get-Content $sourceConfig -Raw | ConvertFrom-Json
-    $cfg.fxga_ingress_url = $FxgaIngressUrl.TrimEnd("/")
-    $cfg | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 $configPath
 }
+$cfg.fxga_ingress_url = $FxgaIngressUrl.TrimEnd("/")
+$configJson = $cfg | ConvertTo-Json -Depth 10
+Write-Utf8NoBom $configPath $configJson
 
 $mt5ApiSecretPath = Join-Path $secrets "mt5api-key.dpapi"
 if (-not (Test-Path $mt5ApiSecretPath)) {
