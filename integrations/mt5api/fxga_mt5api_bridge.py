@@ -73,7 +73,8 @@ def _strip_url(value: str) -> str:
 
 
 def load_config(path: Path) -> Config:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    # utf-8-sig accepts both BOM-free UTF-8 and Windows PowerShell 5.1 UTF-8 BOM files.
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
     candidates = dict(DEFAULT_SYMBOL_CANDIDATES)
     for key, values in (raw.get("symbol_candidates") or {}).items():
         canonical = str(key).upper()
