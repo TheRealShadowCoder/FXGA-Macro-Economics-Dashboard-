@@ -25,7 +25,12 @@ $env:MT5API_PORT = "8000"
 $env:MT5API_LOG_LEVEL = "info"
 $env:MT5API_ROUTER_PREFIX = ""
 
-$log = Join-Path $logDir "mt5api.log"
-"[$(Get-Date -Format o)] starting dceoy/mt5api on 127.0.0.1:8000" | Add-Content $log
-& $python -m mt5api *>> $log
-exit $LASTEXITCODE
+$stdoutLog = Join-Path $logDir "mt5api.stdout.log"
+$stderrLog = Join-Path $logDir "mt5api.stderr.log"
+"[$(Get-Date -Format o)] starting dceoy/mt5api on 127.0.0.1:8000" | Add-Content $stdoutLog
+
+# Windows PowerShell 5.1 turns normal native stderr output into NativeCommandError
+# records when using *>>. mt5api legitimately writes structured INFO logs to stderr,
+# so run it through Start-Process and capture the native streams directly.
+$process = Start-Process -FilePath $python -ArgumentList @("-m", "mt5api") -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+exit $process.ExitCode
