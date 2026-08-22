@@ -1,5 +1,7 @@
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -14,6 +16,22 @@ spec.loader.exec_module(bridge)
 class BridgeTests(unittest.TestCase):
     def test_parse_iso_time(self):
         self.assertEqual(bridge.parse_time_ms("2026-08-21T12:00:00Z"), 1787313600000)
+
+    def test_load_config_accepts_windows_utf8_bom(self):
+        payload = {
+            "mt5api_base_url": "http://127.0.0.1:8000",
+            "fxga_ingress_url": "https://example.run.app",
+            "sync_interval_seconds": 300,
+            "request_timeout_seconds": 30,
+            "symbol_candidates": {"EURUSD": ["EURUSD"]},
+            "symbol_map": {},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            path.write_text(json.dumps(payload), encoding="utf-8-sig")
+            config = bridge.load_config(path)
+        self.assertEqual(config.mt5api_base_url, "http://127.0.0.1:8000")
+        self.assertEqual(config.fxga_ingress_url, "https://example.run.app")
 
     def test_normalize_rate_row(self):
         row = {
