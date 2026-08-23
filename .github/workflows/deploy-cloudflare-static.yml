@@ -143,6 +143,7 @@ jobs:
               'pattern-profiling',
               'cold-start-aware-api-client',
               'live-signal-intelligence',
+              'smc2000-indicator-signals',
               'sticky-cross-asset-tabs'
             ]
           };
@@ -158,6 +159,7 @@ jobs:
           grep -R -F "Event Study & Backtesting" dist >/dev/null || { echo '::error::Compiled frontend is missing Event Study & Backtesting'; exit 1; }
           grep -R -F "Price action before and after every economic release" dist >/dev/null || { echo '::error::Compiled frontend is missing the pre/post-news event-price research workspace'; exit 1; }
           grep -R -F "Live Signal Intelligence" dist >/dev/null || { echo '::error::Compiled frontend is missing Live Signal Intelligence navigation'; exit 1; }
+          grep -R -F "FXGA SMC2000 Indicator Signals" dist >/dev/null || { echo '::error::Compiled frontend is missing the FXGA SMC2000 Indicator Signals workspace'; exit 1; }
           test -f dist/fxga-build.json || { echo '::error::Release marker was not copied into the static build'; exit 1; }
 
           node <<'NODE'
@@ -165,7 +167,7 @@ jobs:
           const marker=JSON.parse(fs.readFileSync('dist/fxga-build.json','utf8'));
           if(marker.commit!==process.env.RELEASE_SHA)throw new Error(`Build marker commit mismatch: ${marker.commit}`);
           if(marker.release!==process.env.RELEASE_NAME)throw new Error(`Unexpected release marker: ${marker.release}`);
-          for(const feature of ['60-day-canonical-m1','event-price-research','pre-news-price-action','cold-start-aware-api-client']){
+          for(const feature of ['60-day-canonical-m1','event-price-research','pre-news-price-action','cold-start-aware-api-client','smc2000-indicator-signals']){
             if(!marker.features?.includes(feature))throw new Error(`Release marker missing ${feature}`);
           }
           console.log('VERIFIED BEFORE DEPLOY:',marker);
