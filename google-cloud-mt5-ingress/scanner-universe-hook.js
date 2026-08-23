@@ -8,7 +8,6 @@ const PUBLIC_ORIGIN = String(process.env.FXGA_PUBLIC_ORIGIN || 'https://fxga-mac
 const SCANNER_STREAM = 'fxga_smc2000_mt5_multi_asset';
 const UNIVERSE_SCHEMA = 'fxga.mt5.scanner-universe.v1';
 const MAX_UNIVERSE_SYMBOLS = 5000;
-const MAX_SIGNAL_ROWS = 5000;
 const MAX_BODY_BYTES = 2_000_000;
 const db = new Firestore({ projectId: PROJECT_ID, ignoreUndefinedProperties: true });
 const universeRef = db.collection('fxga_mt5_scanner_state').doc('broker_universe');
@@ -117,9 +116,7 @@ async function readUniverse(res) {
 }
 
 async function readScannerSignals(url, res) {
-  const requested = Math.max(1, Number(url.searchParams.get('limit') || MAX_SIGNAL_ROWS));
-  const limit = Math.min(MAX_SIGNAL_ROWS, requested);
-  const snap = await signals.where('stream', '==', SCANNER_STREAM).limit(limit).get();
+  const snap = await signals.where('stream', '==', SCANNER_STREAM).get();
   let rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
   const symbol = clean(url.searchParams.get('symbol'), 128).toUpperCase();
   const side = clean(url.searchParams.get('side'), 16).toUpperCase();
@@ -128,12 +125,15 @@ async function readScannerSignals(url, res) {
   if (side) rows = rows.filter(row => String(row.side || '').toUpperCase() === side);
   if (status) rows = rows.filter(row => String(row.status || row.lastEvent || '').toUpperCase() === status);
   rows.sort((a, b) => Date.parse(b.updatedAt || b.signalTime || 0) - Date.parse(a.updatedAt || a.signalTime || 0));
+  const requestedLimit = Number(url.searchParams.get('limit') || 0);
+  const completeCount = rows.length;
+  if (Number.isFinite(requestedLimit) && requestedLimit > 0) rows = rows.slice(0, Math.max(1, Math.trunc(requestedLimit)));
   return sendJson(res, 200, {
     generatedAt: new Date().toISOString(),
     stream: SCANNER_STREAM,
     count: rows.length,
-    queryLimit: limit,
-    completeWithinLimit: snap.size < limit,
+    totalMatched: completeCount,
+    complete: requestedLimit <= 0 || rows.length === completeCount,
     signals: rows,
   }, 'no-store');
 }
