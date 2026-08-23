@@ -15,10 +15,37 @@ function Get-DpapiPlain([string]$Path) {
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
+function Test-Mt5ApiListening {
+    return $null -ne (Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1)
+}
+
 $configPath = Join-Path $InstallRoot 'runtime\config.json'
 $secretPath = Join-Path $InstallRoot 'secrets\mt5api-key.dpapi'
+$startScript = Join-Path $InstallRoot 'runtime\start-mt5api.ps1'
+$stderrLog = Join-Path $InstallRoot 'logs\mt5api.stderr.log'
 if (-not (Test-Path $configPath)) { throw "FXGA MT5 config not found: $configPath" }
 if (-not (Test-Path $secretPath)) { throw "MT5API secret not found: $secretPath" }
+if (-not (Test-Path $startScript)) { throw "MT5API launcher not found: $startScript" }
+
+if (-not (Test-Mt5ApiListening)) {
+    Write-Host "`nMT5API is not listening on 127.0.0.1:8000. Starting it now..." -ForegroundColor Yellow
+    Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$startScript`"") | Out-Null
+
+    $ready = $false
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Seconds 1
+        if (Test-Mt5ApiListening) { $ready = $true; break }
+    }
+    if (-not $ready) {
+        Write-Host "MT5API failed to open port 8000." -ForegroundColor Red
+        if (Test-Path $stderrLog) {
+            Write-Host "`nLast MT5API stderr lines:" -ForegroundColor Yellow
+            Get-Content $stderrLog -Tail 80
+        }
+        throw "Unable to start local dceoy/mt5api service. Keep MetaTrader 5 open and logged into Deriv, then retry."
+    }
+    Write-Host "MT5API is listening on 127.0.0.1:8000." -ForegroundColor Green
+}
 
 $key = Get-DpapiPlain $secretPath
 $headers = @{ 'X-API-Key' = $key }
@@ -76,7 +103,8 @@ $config.symbol_map = [pscustomobject]$newMap
 $json = $config | ConvertTo-Json -Depth 20
 [IO.File]::WriteAllText($configPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 
-Write-Host "`nVerified Deriv MT5 mappings:" -ForegroundColor Green
+Write-Host "`nDeriv MT5 symbols exposed by terminal: $($available.Count)" -ForegroundColor Cyan
+Write-Host "Verified Deriv MT5 mappings:" -ForegroundColor Green
 $verified.GetEnumerator() | ForEach-Object { Write-Host ("  {0,-8} -> {1}" -f $_.Key,$_.Value) }
 if ($missing.Count) {
     Write-Host "`nNot found on this Deriv MT5 account:" -ForegroundColor Yellow
