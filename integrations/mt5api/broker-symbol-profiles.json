@@ -1,0 +1,136 @@
+{
+  "schema": "fxga.mt5.broker-symbol-profiles.v1",
+  "policy": {
+    "matching": "exact-terminal-symbol-only",
+    "caseInsensitive": true,
+    "preferSpotOrCash": true,
+    "rejectAmbiguous": true,
+    "notes": [
+      "Profiles generate candidates only. A mapping is written only when the exact symbol is exposed by the connected MT5 terminal.",
+      "US2Y and US10Y remain unmapped unless a broker exposes the actual yield instrument; bond futures are not treated as Treasury yields.",
+      "Cash/spot indices and energies are preferred over dated/futures contracts for continuous macro event studies."
+    ]
+  },
+  "brokers": {
+    "Deriv": {
+      "serverHints": ["Deriv"],
+      "accountTypes": {"all": {"suffixes": [""]}},
+      "cryptoPrefixes": [""],
+      "symbols": {
+        "DXY": ["DXYUSD"],
+        "EURUSD": ["EURUSD"],
+        "GBPUSD": ["GBPUSD"],
+        "USDJPY": ["USDJPY"],
+        "USDZAR": ["USDZAR"],
+        "US2Y": [],
+        "US10Y": [],
+        "SPX": ["US SP 500"],
+        "NASDAQ": ["US Tech 100"],
+        "DJI": ["Wall Street 30"],
+        "VIX": ["VIXUSD"],
+        "GOLD": ["XAUUSD"],
+        "WTI": ["US Oil"],
+        "BRENT": ["UK Brent Oil"],
+        "BTCUSD": ["BTCUSD"],
+        "ETHUSD": ["ETHUSD"]
+      }
+    },
+    "XM": {
+      "serverHints": ["XM", "XMGlobal", "XMTrading", "Trading Point"],
+      "accountTypes": {
+        "standard": {"suffixes": [""]},
+        "micro": {"suffixes": ["micro"]},
+        "ultra_low_standard": {"suffixes": ["#"]},
+        "ultra_low_micro": {"suffixes": ["m#"]},
+        "zero": {"suffixes": ["."]}
+      },
+      "cryptoPrefixes": [""],
+      "symbols": {
+        "DXY": ["USDX"],
+        "EURUSD": ["EURUSD"],
+        "GBPUSD": ["GBPUSD"],
+        "USDJPY": ["USDJPY"],
+        "USDZAR": ["USDZAR"],
+        "US2Y": [],
+        "US10Y": [],
+        "SPX": ["US500Cash", "US500"],
+        "NASDAQ": ["US100Cash", "US100"],
+        "DJI": ["US30Cash", "US30"],
+        "VIX": ["VIX"],
+        "GOLD": ["GOLD", "XAUUSD"],
+        "WTI": ["OILCash", "OIL"],
+        "BRENT": ["BRENTCash", "BRENT"],
+        "BTCUSD": ["BTCUSD"],
+        "ETHUSD": ["ETHUSD"]
+      }
+    },
+    "Exness": {
+      "serverHints": ["Exness"],
+      "accountTypes": {
+        "standard": {"suffixes": ["m"]},
+        "standard_cent": {"suffixes": ["c"]},
+        "pro": {"suffixes": [""]},
+        "zero": {"suffixes": [""]},
+        "raw_spread": {"suffixes": [""]}
+      },
+      "cryptoPrefixes": [""],
+      "symbols": {
+        "DXY": [],
+        "EURUSD": ["EURUSD"],
+        "GBPUSD": ["GBPUSD"],
+        "USDJPY": ["USDJPY"],
+        "USDZAR": ["USDZAR"],
+        "US2Y": [],
+        "US10Y": [],
+        "SPX": ["US500"],
+        "NASDAQ": ["USTEC"],
+        "DJI": ["US30"],
+        "VIX": [],
+        "GOLD": ["XAUUSD"],
+        "WTI": ["USOIL"],
+        "BRENT": ["UKOIL"],
+        "BTCUSD": ["BTCUSD"],
+        "ETHUSD": ["ETHUSD"]
+      }
+    },
+    "HFM": {
+      "aliases": ["HotForex", "HF Markets"],
+      "serverHints": ["HFM", "HotForex", "HFMarkets", "HF Markets"],
+      "accountTypes": {
+        "premium": {"suffixes": [""]},
+        "infinityx": {"suffixes": ["x"]},
+        "cent": {"suffixes": ["c"]},
+        "zero": {"suffixes": ["b"]},
+        "pro": {"suffixes": ["r"]},
+        "premium_pro": {"suffixes": [".V"]}
+      },
+      "cryptoPrefixes": ["#", ""],
+      "symbols": {
+        "DXY": ["USDIndex"],
+        "EURUSD": ["EURUSD"],
+        "GBPUSD": ["GBPUSD"],
+        "USDJPY": ["USDJPY"],
+        "USDZAR": ["USDZAR"],
+        "US2Y": [],
+        "US10Y": [],
+        "SPX": ["USA500", "US500.F"],
+        "NASDAQ": ["USA100", "US100.F"],
+        "DJI": ["USA30", "US30.F"],
+        "VIX": ["VIX.F"],
+        "GOLD": ["XAUUSD"],
+        "WTI": ["USOIL.S", "USOIL"],
+        "BRENT": ["UKOIL.S", "UKOIL"],
+        "BTCUSD": ["BTCUSD"],
+        "ETHUSD": ["ETHUSD"]
+      },
+      "semanticWarnings": {
+        "VIX": "VIX.F is a futures proxy, not the cash VIX index.",
+        "SPX": "USA500 is preferred to US500.F when both are available.",
+        "NASDAQ": "USA100 is preferred to US100.F when both are available.",
+        "DJI": "USA30 is preferred to US30.F when both are available.",
+        "WTI": "USOIL.S is preferred to USOIL when both are available.",
+        "BRENT": "UKOIL.S is preferred to UKOIL when both are available."
+      }
+    }
+  }
+}
