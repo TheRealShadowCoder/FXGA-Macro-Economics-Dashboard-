@@ -48,7 +48,8 @@ class BrokerProfileTests(unittest.TestCase):
         self.assertEqual(brokers["XM"]["accountTypes"]["ultra_low_standard"]["suffixes"], ["#"])
         self.assertEqual(brokers["Exness"]["accountTypes"]["standard"]["suffixes"], ["m"])
         self.assertEqual(brokers["Exness"]["accountTypes"]["standard_cent"]["suffixes"], ["c"])
-        self.assertEqual(brokers["HFM"]["accountTypes"]["zero"]["suffixes"], ["b"])
+        self.assertIn("b", brokers["HFM"]["accountTypes"]["zero"]["suffixes"])
+        self.assertIn("r", brokers["HFM"]["accountTypes"]["zero"]["suffixes"])
         self.assertEqual(brokers["HFM"]["accountTypes"]["pro"]["suffixes"], ["r"])
 
 
