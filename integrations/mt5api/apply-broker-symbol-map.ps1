@@ -144,6 +144,14 @@ foreach ($prop in $config.symbol_map.PSObject.Properties) {
 }
 foreach ($canonical in $verified.Keys) { $newMap[$canonical] = $verified[$canonical] }
 $config.symbol_map = [pscustomobject]$newMap
+
+# Replace generic fallback candidates with this broker/account's exact generated names.
+# This prevents the bridge from interpreting unrelated prefix matches such as SPXS.US or US10YR.F as canonical assets.
+$scopedCandidates = [ordered]@{}
+foreach ($canonical in $managed) { $scopedCandidates[$canonical] = @($candidateAudit[$canonical]) }
+if ($config.PSObject.Properties.Name -contains 'symbol_candidates') { $config.symbol_candidates = [pscustomobject]$scopedCandidates }
+else { $config | Add-Member -NotePropertyName symbol_candidates -NotePropertyValue ([pscustomobject]$scopedCandidates) }
+
 if ($config.PSObject.Properties.Name -contains 'broker_profile') { $config.broker_profile = $Broker }
 else { $config | Add-Member -NotePropertyName broker_profile -NotePropertyValue $Broker }
 $accountLabel = if ($AccountType) { $AccountType } else { 'auto-from-terminal-exact-symbols' }
