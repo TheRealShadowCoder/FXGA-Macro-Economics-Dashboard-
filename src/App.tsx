@@ -6,6 +6,7 @@ import { ResearchView } from './components/ResearchView';
 import { MetricCard } from './components/MetricCard';
 import { SignalsView } from './components/SignalsView';
 import { TradingViewSignalIntelligence } from './components/TradingViewSignalIntelligence';
+import { SMC2000IndicatorSignals } from './components/SMC2000IndicatorSignals';
 import { EventStudyPanel } from './components/EventStudyPanel';
 import { SourceNetworkView } from './components/SourceNetworkView';
 import { SimpleActionReport } from './components/SimpleActionReport';
@@ -23,7 +24,7 @@ import type {
   SessionSignalsPayload,
 } from './lib/types';
 
-type View = 'action-report' | 'economic-context' | 'overview' | 'markets' | 'analysis' | 'research' | 'signals' | 'tradingview' | 'calendar' | 'indicators' | 'universe' | 'acquisition' | 'news' | 'sources';
+type View = 'action-report' | 'economic-context' | 'overview' | 'markets' | 'analysis' | 'research' | 'signals' | 'tradingview' | 'smc2000' | 'calendar' | 'indicators' | 'universe' | 'acquisition' | 'news' | 'sources';
 type LiveStatus = 'connecting' | 'connected' | 'offline';
 
 const NAV: Array<{ id: View; label: string }> = [
@@ -35,6 +36,7 @@ const NAV: Array<{ id: View; label: string }> = [
   { id: 'research', label: 'Research & Risk' },
   { id: 'signals', label: 'Currency Outlook' },
   { id: 'tradingview', label: 'Live Signal Intelligence' },
+  { id: 'smc2000', label: 'FXGA SMC2000 Signals' },
   { id: 'calendar', label: 'Economic Calendar' },
   { id: 'indicators', label: 'Core Indicators' },
   { id: 'universe', label: 'Macro Data Library' },
@@ -332,6 +334,7 @@ export default function App() {
         {view === 'research' && <ResearchView />}
         {view === 'signals' && <SignalsView data={signals} loading={signalsLoading} error={signalsError} />}
         {view === 'tradingview' && <TradingViewSignalIntelligence />}
+        {view === 'smc2000' && <SMC2000IndicatorSignals />}
 
         {data && view === 'calendar' && (
           <>
