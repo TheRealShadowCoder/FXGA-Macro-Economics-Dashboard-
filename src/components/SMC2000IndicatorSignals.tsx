@@ -60,6 +60,7 @@ type Signal = {
   };
 };
 
+type TradePlan = NonNullable<Signal['tradePlan']>;
 type SignalList = { generatedAt?: string; count?: number; signals: Signal[] };
 type SignalEvent = { id: string; eventId?: string; event: string; receivedAt: string; payload?: Record<string, unknown> };
 type SignalDetail = { signal: Signal; events: SignalEvent[] };
@@ -172,6 +173,7 @@ export function SMC2000IndicatorSignals() {
   const [symbol, setSymbol] = useState('ALL');
 
   const load = async () => {
+    setLoading(true);
     try {
       const [live, history] = await Promise.all([
         getJson<SignalList>('/api/tradingview/signals/live?limit=120'),
@@ -243,7 +245,7 @@ export function SMC2000IndicatorSignals() {
   const rawMethod = record(raw.smc_method);
   const rawEvidence = record(raw.evidence);
   const rawValidation = record(raw.validation);
-  const plan = selected?.tradePlan ?? {};
+  const plan: TradePlan = selected?.tradePlan ?? {};
   const score = numeric(rawSignal.score) ?? (selected ? canonicalScore(selected) : 0);
   const directionalEdge = numeric(rawSignal.directional_edge);
   const independentCategories = numeric(rawSignal.independent_categories);
