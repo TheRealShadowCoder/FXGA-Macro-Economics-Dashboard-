@@ -71,6 +71,7 @@ function normalizeSymbol(row) {
     marginCurrency: clean(row?.margin_currency, 32),
     tradeMode: finite(row?.trade_mode),
     digits: finite(row?.digits),
+    scannerIncluded: row?.scanner_included === true,
     status: clean(row?.status, 64),
     lastScanMs: finite(row?.last_scan_ms),
     scans: finite(row?.scans) ?? 0,
@@ -100,18 +101,37 @@ async function ingestUniverse(req, res) {
     generatedAtMs: finite(payload?.generated_at_ms),
     receivedAt: now,
     terminalTotal: finite(payload?.total_symbols) ?? unique.length,
-    scanUniverseTotal: finite(payload?.scan_symbols) ?? unique.length,
+    scanUniverseTotal: finite(payload?.scan_symbols) ?? unique.filter(row => row.scannerIncluded).length,
     symbolCount: unique.length,
+    scannerIncludedCount: unique.filter(row => row.scannerIncluded).length,
     truncated: rawSymbols.length > MAX_UNIVERSE_SYMBOLS,
     symbols: unique,
   };
   await universeRef.set(document, { merge: false });
-  return sendJson(res, 200, { ok: true, receivedAt: now, symbolCount: unique.length, terminalTotal: document.terminalTotal, scanUniverseTotal: document.scanUniverseTotal });
+  return sendJson(res, 200, {
+    ok: true,
+    receivedAt: now,
+    symbolCount: unique.length,
+    terminalTotal: document.terminalTotal,
+    scanUniverseTotal: document.scanUniverseTotal,
+    scannerIncludedCount: document.scannerIncludedCount,
+  });
 }
 
 async function readUniverse(res) {
   const snap = await universeRef.get();
-  if (!snap.exists) return sendJson(res, 200, { schema: UNIVERSE_SCHEMA, source: 'MetaTrader5', engine: 'FXGA_SMC2000', stream: SCANNER_STREAM, symbolCount: 0, terminalTotal: 0, scanUniverseTotal: 0, symbols: [], status: 'WAITING_FOR_MT5_UNIVERSE_SNAPSHOT' }, 'no-store');
+  if (!snap.exists) return sendJson(res, 200, {
+    schema: UNIVERSE_SCHEMA,
+    source: 'MetaTrader5',
+    engine: 'FXGA_SMC2000',
+    stream: SCANNER_STREAM,
+    symbolCount: 0,
+    terminalTotal: 0,
+    scanUniverseTotal: 0,
+    scannerIncludedCount: 0,
+    symbols: [],
+    status: 'WAITING_FOR_MT5_UNIVERSE_SNAPSHOT',
+  }, 'no-store');
   return sendJson(res, 200, snap.data(), 'no-store');
 }
 
