@@ -36,7 +36,7 @@ const NAV: Array<{ id: View; label: string }> = [
   { id: 'research', label: 'Research & Risk' },
   { id: 'signals', label: 'Currency Outlook' },
   { id: 'tradingview', label: 'Live Signal Intelligence' },
-  { id: 'smc2000', label: 'FXGA SMC2000 Signals' },
+  { id: 'smc2000', label: 'SMC Setups' },
   { id: 'calendar', label: 'Economic Calendar' },
   { id: 'indicators', label: 'Core Indicators' },
   { id: 'universe', label: 'Macro Data Library' },
