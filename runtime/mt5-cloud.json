@@ -39,6 +39,10 @@
     "evictionTargetBytes": 175000000,
     "policy": "rolling 60-day canonical M1 + gzip + timestamp dedupe + time FIFO + capacity FIFO + integrity diagnostics + deterministic higher-timeframe reconstruction"
   },
-  "updatedAt": "2026-08-20T23:04:01.752Z",
+  "authentication": {
+    "mode": "google-secret-manager-backed-sha256-token",
+    "repositoryFallback": false
+  },
+  "updatedAt": "2026-08-23T21:54:28.562Z",
   "cloudflareProcessing": false
 }
