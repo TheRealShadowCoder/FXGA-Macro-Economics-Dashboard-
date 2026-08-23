@@ -30,11 +30,13 @@ jobs:
       - name: Compile bridge
         run: python -m py_compile integrations/mt5api/fxga_mt5api_bridge.py
 
-      - name: Run deterministic bridge tests
+      - name: Run deterministic bridge and broker-profile tests
         run: python -m unittest discover -s integrations/mt5api/tests -p 'test_*.py' -v
 
       - name: Validate configuration JSON
-        run: python -m json.tool integrations/mt5api/config.example.json >/dev/null
+        run: |
+          python -m json.tool integrations/mt5api/config.example.json >/dev/null
+          python -m json.tool integrations/mt5api/broker-symbol-profiles.json >/dev/null
 
       - name: Parse PowerShell setup scripts
         shell: pwsh
@@ -44,7 +46,9 @@ jobs:
             'integrations/mt5api/install-windows.ps1',
             'integrations/mt5api/start-mt5api.ps1',
             'integrations/mt5api/start-fxga-bridge.ps1',
-            'integrations/mt5api/test-mt5api.ps1'
+            'integrations/mt5api/test-mt5api.ps1',
+            'integrations/mt5api/apply-deriv-symbol-map.ps1',
+            'integrations/mt5api/apply-broker-symbol-map.ps1'
           )
           foreach($file in $files){
             $tokens=$null; $errors=$null
@@ -64,14 +68,20 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import json
           import re
 
           root=Path('integrations/mt5api')
           launcher=(root/'start-mt5api.ps1').read_text(encoding='utf-8')
           bridge=(root/'fxga_mt5api_bridge.py').read_text(encoding='utf-8')
+          profiles=json.loads((root/'broker-symbol-profiles.json').read_text(encoding='utf-8'))
           assert '127.0.0.1' in launcher, 'mt5api must stay bound to localhost'
           assert 'FXGA_MT5_TOKEN' in bridge, 'cloud ingress token must come from environment'
           assert 'dceoy/mt5api' in bridge, 'producer provenance missing'
+          assert profiles.get('policy',{}).get('matching') == 'exact-terminal-symbol-only'
+          forbidden={'SPXS.US','DOW.N'}
+          aliases={str(a).upper() for p in profiles['brokers'].values() for vals in p['symbols'].values() for a in vals}
+          assert forbidden.isdisjoint(aliases), f'known false broker aliases present: {forbidden & aliases}'
           secret_pattern=re.compile(r'(?i)(password|api[_-]?key|token)\s*=\s*["\'][^"\']{12,}["\']')
           for path in root.rglob('*'):
               if not path.is_file() or path.suffix.lower() in {'.md','.json'}:
