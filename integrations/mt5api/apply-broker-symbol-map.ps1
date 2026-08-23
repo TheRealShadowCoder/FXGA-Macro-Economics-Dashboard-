@@ -61,8 +61,9 @@ if (-not (Test-Path $profilePath)) { throw "Broker symbol profiles not found: $p
 Ensure-LocalMt5Api $InstallRoot
 
 $profiles = Get-Content $profilePath -Raw | ConvertFrom-Json
-$profile = $profiles.brokers.$Broker
-if ($null -eq $profile) { throw "Unknown broker profile: $Broker" }
+$profileProperty = $profiles.brokers.PSObject.Properties[$Broker]
+if ($null -eq $profileProperty) { throw "Unknown broker profile: $Broker" }
+$profile = $profileProperty.Value
 
 $accountTypes = @($profile.accountTypes.PSObject.Properties.Name)
 if ($AccountType) {
@@ -80,13 +81,14 @@ $response = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/symbols?group=*' -Head
 $rows = @($response.data)
 $available = @($rows | ForEach-Object {
     if ($_ -is [string]) { $_ }
-    elseif ($null -ne $_.name) { [string]$_.name }
-    elseif ($null -ne $_.symbol) { [string]$_.symbol }
+    elseif ($_.PSObject.Properties.Name -contains 'name' -and $null -ne $_.name) { [string]$_.name }
+    elseif ($_.PSObject.Properties.Name -contains 'symbol' -and $null -ne $_.symbol) { [string]$_.symbol }
 } | Where-Object { $_ })
 $availableLookup = @{}
 foreach ($symbol in $available) { $availableLookup[$symbol.ToUpperInvariant()] = $symbol }
 
-$cryptoPrefixes = @($profile.cryptoPrefixes)
+$cryptoPrefixesProperty = $profile.PSObject.Properties['cryptoPrefixes']
+$cryptoPrefixes = if ($null -ne $cryptoPrefixesProperty) { @($cryptoPrefixesProperty.Value) } else { @('') }
 if (-not $cryptoPrefixes.Count) { $cryptoPrefixes = @('') }
 $cryptoCanonicals = @('BTCUSD','ETHUSD')
 $verified = [ordered]@{}
@@ -134,7 +136,10 @@ foreach ($prop in $profile.symbols.PSObject.Properties) {
 }
 
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
-if ($null -eq $config.symbol_map) { $config | Add-Member -NotePropertyName symbol_map -NotePropertyValue ([pscustomobject]@{}) }
+if (-not ($config.PSObject.Properties.Name -contains 'symbol_map') -or $null -eq $config.symbol_map) {
+    if ($config.PSObject.Properties.Name -contains 'symbol_map') { $config.symbol_map = [pscustomobject]@{} }
+    else { $config | Add-Member -NotePropertyName symbol_map -NotePropertyValue ([pscustomobject]@{}) }
+}
 
 # Remove stale mappings for every canonical asset managed by this profile, then add only exact verified matches.
 $managed = @($profile.symbols.PSObject.Properties.Name)
@@ -180,10 +185,11 @@ if ($missing.Count) {
     $lines.Add('Not found/unsupported on this terminal:')
     foreach ($canonical in $missing) { $lines.Add("  $canonical") }
 }
-if ($null -ne $profile.semanticWarnings) {
+$semanticWarningsProperty = $profile.PSObject.Properties['semanticWarnings']
+if ($null -ne $semanticWarningsProperty -and $null -ne $semanticWarningsProperty.Value) {
     $lines.Add('')
     $lines.Add('Semantic notes:')
-    foreach ($warning in $profile.semanticWarnings.PSObject.Properties) {
+    foreach ($warning in $semanticWarningsProperty.Value.PSObject.Properties) {
         if ($verified.Contains($warning.Name)) { $lines.Add("  $($warning.Name): $($warning.Value)") }
     }
 }
@@ -192,10 +198,10 @@ $lines.Add('Policy: exact terminal symbol matches only; ambiguous matches are re
 $lines.Add('US2Y/US10Y are not mapped to bond futures because Treasury note/future price is not the Treasury yield series.')
 $lines.Add("Updated config: $configPath")
 
-$lines | ForEach-Object { Write-Host $_ }
+$lines | ForEach-Object { Write-Output $_ }
 if ($OutputPath) {
     $parent = Split-Path -Parent $OutputPath
     if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
     [IO.File]::WriteAllLines($OutputPath, $lines, [Text.UTF8Encoding]::new($false))
-    Write-Host "Saved report: $OutputPath" -ForegroundColor Green
+    Write-Output "Saved report: $OutputPath"
 }
