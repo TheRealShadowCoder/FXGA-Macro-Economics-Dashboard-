@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import './SMC2000IndicatorSignals.css';
+import './SMC2000BrokerWideScanner.css';
 
 type Side = 'BUY' | 'SELL' | 'WAIT';
 type Signal = {
@@ -18,6 +19,17 @@ type Signal = {
   methodFamily?: string | null;
   methodScore?: number | null;
   exactMatches?: number | null;
+  archetypeId?: number | null;
+  archetypeCode?: string | null;
+  archetypeName?: string | null;
+  scannerMode?: string | null;
+  scannerScope?: string | null;
+  brokerSymbol?: string | null;
+  brokerCompany?: string | null;
+  brokerServer?: string | null;
+  scannerUniverseTotal?: number | null;
+  scannerAvailableTotal?: number | null;
+  scannerAll50Evaluated?: boolean;
   signalTime?: string | null;
   updatedAt: string;
   lastEvent?: string;
@@ -65,11 +77,12 @@ type SignalList = { generatedAt?: string; count?: number; signals: Signal[] };
 type SignalEvent = { id: string; eventId?: string; event: string; receivedAt: string; payload?: Record<string, unknown> };
 type SignalDetail = { signal: Signal; events: SignalEvent[] };
 type Archetype = { id: number | null; code: string; name: string };
-
 type FilterSide = 'ALL' | 'BUY' | 'SELL';
 type FilterStatus = 'ALL' | 'ACTIVE' | 'COMPLETED' | 'INVALIDATED';
+type FilterSource = 'ALL' | 'BROKER_WIDE' | 'CHART';
 
 const MT5_STREAM = 'fxga_smc2000_mt5';
+const SCANNER_STREAM = 'fxga_smc2000_mt5_multi_asset';
 const ACTIVE = new Set(['PENDING_ENTRY', 'ACTIVE_FILLED']);
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -100,7 +113,13 @@ function isSMC2000(signal: Signal) {
   const stream = String(signal.stream ?? '').toLowerCase();
   return String(signal.engine ?? '').toUpperCase() === 'FXGA_SMC2000'
     && (source.includes('MT5') || source.includes('METATRADER'))
-    && (!stream || stream === MT5_STREAM || stream.includes('smc2000'));
+    && (!stream || stream === MT5_STREAM || stream === SCANNER_STREAM || stream.includes('smc2000'));
+}
+
+function isBrokerWide(signal: Signal) {
+  return String(signal.stream ?? '').toLowerCase() === SCANNER_STREAM
+    || String(signal.scannerMode ?? '').toUpperCase() === 'BROKER_WIDE'
+    || String(signal.scannerScope ?? '').toUpperCase() === 'ALL_BROKER_SYMBOLS';
 }
 
 function canonicalScore(signal: Signal) {
@@ -121,13 +140,22 @@ function hierarchyValue(signal: Signal, key: 'h4' | 'm15' | 'm1') {
   return '—';
 }
 
-function deriveArchetype(detail: SignalDetail | null): Archetype {
-  if (!detail) return { id: null, code: 'S01–S50', name: 'FXGA SMC2000 archetype' };
+function deriveArchetype(detail: SignalDetail | null, selected?: Signal | null): Archetype {
+  const directId = numeric(selected?.archetypeId);
+  const directCode = text(selected?.archetypeCode);
+  const directName = text(selected?.archetypeName);
+  if (!detail) {
+    return {
+      id: directId == null ? null : Math.trunc(directId),
+      code: directCode || (directId ? `S${String(Math.trunc(directId)).padStart(2, '0')}` : 'S01–S50'),
+      name: directName || 'FXGA SMC2000 archetype',
+    };
+  }
   const event = detail.events.find((row) => row.event === 'SIGNAL_NEW') ?? detail.events[detail.events.length - 1];
   const payload = record(event?.payload);
-  const id = numeric(payload.archetype_id);
-  const code = text(payload.archetype_code) || (id ? `S${String(Math.trunc(id)).padStart(2, '0')}` : 'S01–S50');
-  const name = text(payload.archetype_name) || 'FXGA SMC2000 archetype';
+  const id = numeric(payload.archetype_id) ?? directId;
+  const code = text(payload.archetype_code) || directCode || (id ? `S${String(Math.trunc(id)).padStart(2, '0')}` : 'S01–S50');
+  const name = text(payload.archetype_name) || directName || 'FXGA SMC2000 archetype';
   return { id: id == null ? null : Math.trunc(id), code, name };
 }
 
@@ -145,18 +173,29 @@ function ScoreRing({ score }: { score: number }) {
 function SignalCard({ signal, active, onClick }: { signal: Signal; active: boolean; onClick: () => void }) {
   const score = canonicalScore(signal);
   const status = String(signal.status || signal.lastEvent || 'PENDING_ENTRY');
+  const code = signal.archetypeCode || (signal.archetypeId ? `S${String(Math.trunc(signal.archetypeId)).padStart(2, '0')}` : signal.methodCode || `M${signal.methodId ?? '—'}`);
   return (
     <button className={`smc-signal-card ${signal.side.toLowerCase()} ${active ? 'selected' : ''}`} onClick={onClick}>
       <div className="smc-card-head">
         <span className={`smc-side ${signal.side.toLowerCase()}`}>{signal.side}</span>
-        <div><strong>{signal.symbol}</strong><small>{signal.timeframe || 'M1 execution'} · {signal.methodCode || `M${signal.methodId ?? '—'}`}</small></div>
+        <div><strong>{signal.symbol}</strong><small>{signal.timeframe || 'M1 execution'} · {code}{isBrokerWide(signal) ? ' · BROKER SCAN' : ''}</small></div>
         <time>{age(signal.updatedAt || signal.signalTime)}</time>
       </div>
-      <div className="smc-card-meta"><span>{words(status)}</span><span>{signal.methodFamily || 'SMC2000'}</span></div>
+      <div className="smc-card-meta"><span>{words(status)}</span><span>{signal.archetypeName || signal.methodFamily || 'SMC2000'}</span></div>
       <div className="smc-card-score"><span>{signal.intelligence?.label || 'Indicator signal'}</span><strong>{Math.round(score)}</strong></div>
       <div className="smc-card-bar"><i style={{ width: `${Math.max(0, Math.min(100, score))}%` }} /></div>
     </button>
   );
+}
+
+function BrokerScannerCard({ signal, onClick }: { signal: Signal; onClick: () => void }) {
+  const code = signal.archetypeCode || (signal.archetypeId ? `S${String(Math.trunc(signal.archetypeId)).padStart(2, '0')}` : 'S—');
+  const score = canonicalScore(signal);
+  return <button className={`smc-broker-scan-card ${signal.side.toLowerCase()}`} onClick={onClick}>
+    <div className="smc-broker-scan-top"><span className={`smc-side ${signal.side.toLowerCase()}`}>{signal.side}</span><strong>{signal.symbol}</strong><time>{age(signal.updatedAt || signal.signalTime)}</time></div>
+    <div className="smc-broker-scan-code"><strong>{code}</strong><span>{signal.archetypeName || 'SMC2000 setup'}</span></div>
+    <div className="smc-broker-scan-meta"><span>{signal.brokerSymbol || signal.symbol}</span><span>M{signal.methodId ?? '—'}</span><b>{Math.round(score)}</b></div>
+  </button>;
 }
 
 export function SMC2000IndicatorSignals() {
@@ -170,14 +209,15 @@ export function SMC2000IndicatorSignals() {
   const [query, setQuery] = useState('');
   const [side, setSide] = useState<FilterSide>('ALL');
   const [status, setStatus] = useState<FilterStatus>('ALL');
+  const [source, setSource] = useState<FilterSource>('ALL');
   const [symbol, setSymbol] = useState('ALL');
 
   const load = async () => {
     setLoading(true);
     try {
       const [live, history] = await Promise.all([
-        getJson<SignalList>('/api/tradingview/signals/live?limit=120'),
-        getJson<SignalList>('/api/tradingview/signals?limit=250'),
+        getJson<SignalList>('/api/tradingview/signals/live?limit=250'),
+        getJson<SignalList>('/api/tradingview/signals?limit=500'),
       ]);
       const merged = new Map<string, Signal>();
       [...live.signals, ...history.signals].filter(isSMC2000).forEach((row) => {
@@ -213,9 +253,23 @@ export function SMC2000IndicatorSignals() {
     return () => { cancelled = true; };
   }, [selectedId]);
 
+  const scannerSignals = useMemo(() => signals.filter(isBrokerWide), [signals]);
+  const chartSignals = useMemo(() => signals.filter((row) => !isBrokerWide(row)), [signals]);
   const symbols = useMemo(() => ['ALL', ...new Set(signals.map((row) => row.symbol).filter(Boolean))], [signals]);
 
+  const scannerStats = useMemo(() => {
+    const setupSymbols = new Set(scannerSignals.map((row) => row.symbol).filter(Boolean));
+    const archetypes = new Set(scannerSignals.map((row) => row.archetypeId).filter((value) => value != null));
+    const universe = Math.max(0, ...scannerSignals.map((row) => numeric(row.scannerUniverseTotal) ?? 0));
+    const available = Math.max(0, ...scannerSignals.map((row) => numeric(row.scannerAvailableTotal) ?? 0));
+    const broker = scannerSignals.find((row) => row.brokerCompany)?.brokerCompany || 'Connected MT5 broker';
+    const server = scannerSignals.find((row) => row.brokerServer)?.brokerServer || '';
+    return { setupSymbols: setupSymbols.size, archetypes: archetypes.size, universe, available, broker, server };
+  }, [scannerSignals]);
+
   const visible = useMemo(() => signals.filter((row) => {
+    if (source === 'BROKER_WIDE' && !isBrokerWide(row)) return false;
+    if (source === 'CHART' && isBrokerWide(row)) return false;
     if (symbol !== 'ALL' && row.symbol !== symbol) return false;
     if (side !== 'ALL' && row.side !== side) return false;
     const rowStatus = String(row.status || row.lastEvent || '').toUpperCase();
@@ -223,9 +277,9 @@ export function SMC2000IndicatorSignals() {
     if (status === 'COMPLETED' && rowStatus !== 'COMPLETED' && row.lastEvent !== 'TP3_HIT') return false;
     if (status === 'INVALIDATED' && rowStatus !== 'CANCELLED' && row.lastEvent !== 'INVALIDATED') return false;
     const q = query.trim().toLowerCase();
-    if (q && !`${row.symbol} ${row.methodCode ?? ''} ${row.methodId ?? ''} ${row.methodFamily ?? ''} ${row.side} ${row.status ?? ''}`.toLowerCase().includes(q)) return false;
+    if (q && !`${row.symbol} ${row.brokerSymbol ?? ''} ${row.archetypeCode ?? ''} ${row.archetypeName ?? ''} ${row.methodCode ?? ''} ${row.methodId ?? ''} ${row.methodFamily ?? ''} ${row.side} ${row.status ?? ''}`.toLowerCase().includes(q)) return false;
     return true;
-  }), [signals, symbol, side, status, query]);
+  }), [signals, source, symbol, side, status, query]);
 
   const stats = useMemo(() => {
     const active = signals.filter((row) => ACTIVE.has(String(row.status || '').toUpperCase())).length;
@@ -238,7 +292,7 @@ export function SMC2000IndicatorSignals() {
   }, [signals]);
 
   const selected = signals.find((row) => row.id === selectedId) ?? null;
-  const archetype = deriveArchetype(detail);
+  const archetype = deriveArchetype(detail, selected);
   const raw = signalPayload(detail);
   const rawSignal = record(raw.signal);
   const rawHierarchy = record(raw.timeframe_hierarchy);
@@ -263,47 +317,62 @@ export function SMC2000IndicatorSignals() {
       <section className="smc-hero">
         <div>
           <span className="eyebrow">MetaTrader 5 · FXGA SMC2000 · Google Cloud Live</span>
-          <h2>FXGA SMC2000 Indicator Signals</h2>
-          <p>Dedicated live workspace for the 50 SMC signal archetypes generated by the FXGA all-in-one MT5 engine. Signals shown here are sourced only from the <strong>{MT5_STREAM}</strong> stream.</p>
+          <h2>FXGA SMC2000 Setups</h2>
+          <p>Live S01–S50 setups from both the attached-chart engine and the dedicated broker-wide scanner. The broker-wide stream scans every symbol exposed by the connected MT5 broker and publishes only setups that pass the existing SMC2000 validation and false-signal firewall.</p>
           <div className="smc-health"><i className={error ? 'offline' : 'online'}></i><strong>{error ? 'Feed degraded' : 'Signal feed online'}</strong><span>{lastSync ? `last synchronized ${age(lastSync)}` : 'connecting'}</span></div>
         </div>
         <div className="smc-architecture">
-          <span>50</span><strong>Signal archetypes</strong><small>S01 → S50</small>
+          <span>50</span><strong>Signal archetypes</strong><small>S01 → S50 · all broker symbols</small>
           <b>H4</b><i></i><b>M15</b><i></i><b>M1</b><i></i><b>Cloud</b>
         </div>
       </section>
 
       <section className="smc-kpis">
-        <div><span>Stored signals</span><strong>{signals.length}</strong><small>MT5 / SMC2000 only</small></div>
+        <div><span>Stored signals</span><strong>{signals.length}</strong><small>Chart + broker-wide streams</small></div>
         <div><span>Active setups</span><strong>{stats.active}</strong><small>Pending or filled</small></div>
         <div><span>BUY / SELL</span><strong>{stats.buys} / {stats.sells}</strong><small>Directional distribution</small></div>
         <div><span>Average score</span><strong>{stats.averageScore ? Math.round(stats.averageScore) : '—'}</strong><small>Available source scores</small></div>
         <div><span>Methods observed</span><strong>{stats.methods}</strong><small>of 2,000 SMC methods</small></div>
       </section>
 
+      <section className="smc-broker-scanner-section">
+        <div className="smc-broker-scanner-head">
+          <div><span className="eyebrow">Dedicated section · {SCANNER_STREAM}</span><h3>Broker-Wide Multi-Asset SMC Scanner</h3><p>All accepted S01–S50 setups discovered across the complete symbol universe exposed by the connected MT5 broker. Multiple valid archetypes on the same symbol remain separate setup records.</p></div>
+          <div className="smc-broker-scanner-state"><i className={error ? 'offline' : 'online'}></i><strong>{scannerSignals.length ? 'Scanner receiving setups' : 'Waiting for first accepted setup'}</strong><span>{scannerStats.broker}{scannerStats.server ? ` · ${scannerStats.server}` : ''}</span></div>
+        </div>
+        <div className="smc-broker-scanner-kpis">
+          <div><span>Broker universe</span><strong>{scannerStats.universe || '—'}</strong><small>symbols enumerated by MT5</small></div>
+          <div><span>Available / selected</span><strong>{scannerStats.available || scannerStats.universe || '—'}</strong><small>symbols eligible for scanning</small></div>
+          <div><span>Symbols with setups</span><strong>{scannerStats.setupSymbols}</strong><small>accepted setups observed</small></div>
+          <div><span>Accepted setup records</span><strong>{scannerSignals.length}</strong><small>not collapsed by archetype</small></div>
+          <div><span>Archetypes observed</span><strong>{scannerStats.archetypes}</strong><small>of 50 evaluated per asset</small></div>
+        </div>
+        {scannerSignals.length ? <div className="smc-broker-scan-grid">{scannerSignals.slice(0, 80).map((row) => <BrokerScannerCard key={row.id} signal={row} onClick={() => setSelectedId(row.id)} />)}</div> : <div className="smc-broker-scanner-empty"><strong>Scanner stream is ready.</strong><span>No broker-wide setup has passed the full SMC2000 acceptance rules yet. This section will populate automatically as the EA scans the broker's symbols.</span></div>}
+      </section>
+
       <section className="smc-toolbar">
-        <div className="smc-filter-group"><label>Symbol<select value={symbol} onChange={(event) => setSymbol(event.target.value)}>{symbols.map((item) => <option key={item}>{item}</option>)}</select></label><label>Side<select value={side} onChange={(event) => setSide(event.target.value as FilterSide)}><option>ALL</option><option>BUY</option><option>SELL</option></select></label><label>Status<select value={status} onChange={(event) => setStatus(event.target.value as FilterStatus)}><option>ALL</option><option>ACTIVE</option><option>COMPLETED</option><option>INVALIDATED</option></select></label></div>
-        <div className="smc-search"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search symbol, method, family…" /><button onClick={() => void load()} disabled={loading}>{loading ? 'Syncing…' : 'Refresh feed'}</button></div>
+        <div className="smc-filter-group"><label>Source<select value={source} onChange={(event) => setSource(event.target.value as FilterSource)}><option value="ALL">ALL</option><option value="BROKER_WIDE">BROKER WIDE</option><option value="CHART">CHART</option></select></label><label>Symbol<select value={symbol} onChange={(event) => setSymbol(event.target.value)}>{symbols.map((item) => <option key={item}>{item}</option>)}</select></label><label>Side<select value={side} onChange={(event) => setSide(event.target.value as FilterSide)}><option>ALL</option><option>BUY</option><option>SELL</option></select></label><label>Status<select value={status} onChange={(event) => setStatus(event.target.value as FilterStatus)}><option>ALL</option><option>ACTIVE</option><option>COMPLETED</option><option>INVALIDATED</option></select></label></div>
+        <div className="smc-search"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search broker symbol, setup, method…" /><button onClick={() => void load()} disabled={loading}>{loading ? 'Syncing…' : 'Refresh feed'}</button></div>
       </section>
 
       {error && <div className="smc-error">{error}</div>}
       {loading && !signals.length && <div className="smc-empty">Connecting to the FXGA SMC2000 signal collection…</div>}
-      {!loading && !signals.length && !error && <div className="smc-empty"><strong>Connection is ready.</strong><span>No accepted S01–S50 signal has been stored yet. The first accepted MT5 setup will appear here automatically.</span></div>}
+      {!loading && !signals.length && !error && <div className="smc-empty"><strong>Connection is ready.</strong><span>No accepted S01–S50 signal has been stored yet.</span></div>}
 
       {!!signals.length && <section className="smc-main-grid">
         <div className="smc-feed-panel">
-          <div className="smc-panel-head"><div><span className="eyebrow">Live + historical</span><h3>Indicator signal feed</h3></div><span>{visible.length} records</span></div>
-          <div className="smc-feed-list">{visible.map((row) => <SignalCard key={row.id} signal={row} active={row.id === selectedId} onClick={() => setSelectedId(row.id)} />)}{!visible.length && <div className="smc-mini-empty">No SMC2000 signals match the current filters.</div>}</div>
+          <div className="smc-panel-head"><div><span className="eyebrow">Chart + broker-wide</span><h3>Complete setup feed</h3></div><span>{visible.length} records · {scannerSignals.length} scanner · {chartSignals.length} chart</span></div>
+          <div className="smc-feed-list">{visible.map((row) => <SignalCard key={row.id} signal={row} active={row.id === selectedId} onClick={() => setSelectedId(row.id)} />)}{!visible.length && <div className="smc-mini-empty">No SMC2000 setups match the current filters.</div>}</div>
         </div>
 
         <div className="smc-detail-panel">
-          {!selected ? <div className="smc-empty">Select an FXGA SMC2000 signal.</div> : <>
+          {!selected ? <div className="smc-empty">Select an FXGA SMC2000 setup.</div> : <>
             <div className="smc-detail-head">
-              <div className="smc-detail-title"><span className={`smc-side ${selected.side.toLowerCase()}`}>{selected.side}</span><div><span className="eyebrow">{archetype.code} · {archetype.name}</span><h3>{selected.symbol} · {selected.methodCode || `M${selected.methodId ?? '—'}`}</h3><p>{selected.intelligence?.label || words(selected.lastEvent || selected.status)}</p></div></div>
+              <div className="smc-detail-title"><span className={`smc-side ${selected.side.toLowerCase()}`}>{selected.side}</span><div><span className="eyebrow">{archetype.code} · {archetype.name}</span><h3>{selected.symbol} · {selected.methodCode || `M${selected.methodId ?? '—'}`}</h3><p>{isBrokerWide(selected) ? `Broker-wide scan · ${selected.brokerSymbol || selected.symbol}` : 'Attached-chart engine'} · {selected.intelligence?.label || words(selected.lastEvent || selected.status)}</p></div></div>
               <ScoreRing score={score} />
             </div>
 
-            {detailLoading && <div className="smc-detail-loading">Loading complete signal evidence…</div>}
+            {detailLoading && <div className="smc-detail-loading">Loading complete setup evidence…</div>}
 
             <div className="smc-hierarchy">
               <div><span>H4 Direction</span><strong>{words(hierarchy.h4)}</strong></div>
@@ -325,7 +394,7 @@ export function SMC2000IndicatorSignals() {
               <article><span>Archetype</span><strong>{archetype.code}</strong><p>{archetype.name}</p></article>
               <article><span>SMC method</span><strong>{text(rawMethod.code) || selected.methodCode || `M${selected.methodId ?? '—'}`}</strong><p>{text(rawMethod.family) || selected.methodFamily || 'FXGA SMC2000 method family'}</p></article>
               <article><span>Directional edge</span><strong>{directionalEdge == null ? '—' : directionalEdge.toFixed(1)}</strong><p>{independentCategories == null ? 'Independent evidence pending' : `${Math.trunc(independentCategories)} independent evidence categories`}</p></article>
-              <article><span>Lifecycle</span><strong>{words(selected.status || selected.lastEvent)}</strong><p>Last event: {words(selected.lastEvent)}</p></article>
+              <article><span>Source</span><strong>{isBrokerWide(selected) ? 'BROKER WIDE' : 'CHART'}</strong><p>{selected.brokerCompany || 'MetaTrader 5'} · {selected.brokerSymbol || selected.symbol}</p></article>
             </div>
 
             <div className="smc-evidence-panel">
@@ -340,14 +409,14 @@ export function SMC2000IndicatorSignals() {
             </div>
 
             <div className="smc-event-log">
-              <div className="smc-panel-head"><div><span className="eyebrow">Google Cloud lifecycle</span><h3>Signal events</h3></div><span>{detail?.events.length ?? selected.lifecycle?.barsSinceSignal ?? 0}</span></div>
+              <div className="smc-panel-head"><div><span className="eyebrow">Google Cloud lifecycle</span><h3>Setup events</h3></div><span>{detail?.events.length ?? selected.lifecycle?.barsSinceSignal ?? 0}</span></div>
               <div>{detail?.events?.length ? [...detail.events].reverse().map((event) => <div key={event.id}><i></i><strong>{words(event.event)}</strong><span>{new Date(event.receivedAt).toLocaleString()}</span></div>) : <div className="smc-mini-empty">Awaiting event history.</div>}</div>
             </div>
           </>}
         </div>
       </section>}
 
-      <section className="smc-contract-strip"><div><strong>S01–S50</strong><span>50 detection archetypes</span></div><div><strong>M0001–M2000</strong><span>2,000 SMC method combinations</span></div><div><strong>H4 → M15 → M1</strong><span>Direction · confirmation · execution</span></div><div><strong>Google Cloud</strong><span>Durable signal storage and lifecycle</span></div></section>
+      <section className="smc-contract-strip"><div><strong>S01–S50</strong><span>50 detection archetypes per broker asset</span></div><div><strong>M0001–M2000</strong><span>2,000 SMC method combinations</span></div><div><strong>H4 → M15 → M1</strong><span>Direction · confirmation · execution</span></div><div><strong>Broker-wide → Cloud</strong><span>Every accepted setup stored independently</span></div></section>
     </div>
   );
 }
