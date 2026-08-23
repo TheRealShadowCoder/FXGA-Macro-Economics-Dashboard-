@@ -100,7 +100,7 @@
         "premium": {"suffixes": [""]},
         "infinityx": {"suffixes": ["x"]},
         "cent": {"suffixes": ["c"]},
-        "zero": {"suffixes": ["b"]},
+        "zero": {"suffixes": ["b", "r"]},
         "pro": {"suffixes": ["r"]},
         "premium_pro": {"suffixes": [".V"]}
       },
