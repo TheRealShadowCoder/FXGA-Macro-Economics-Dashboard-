@@ -11,7 +11,7 @@ const GEMINI_FALLBACK_MODEL = String(process.env.GEMINI_FALLBACK_MODEL || 'gemin
 const PUBLIC_ORIGIN = String(process.env.FXGA_PUBLIC_ORIGIN || 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev').replace(/\/$/, '');
 const API_URL = 'https://generativelanguage.googleapis.com/v1/interactions';
 const MAX_CHAT_BYTES = 12_000;
-const LIVE_REPORT_TTL_MS = 3 * 60_000;
+const LIVE_REPORT_TTL_MS = 24 * 60 * 60_000;
 const CHAT_TTL_MS = 10 * 60_000;
 
 const db = new Firestore({ projectId: PROJECT_ID, ignoreUndefinedProperties: true });
@@ -186,7 +186,6 @@ async function buildContext(descriptor, body = {}) {
     liveIntelligenceJournal: true,
     friendlyErrorTranslation: true,
   };
-  context.generatedAt = new Date().toISOString();
   context.evidencePolicy = 'Missing evidence is represented as missing/null and must never be synthesized.';
   return context;
 }
@@ -368,6 +367,7 @@ http.createServer = function fxgaIntelligenceCreateServer(options, requestListen
       promptCount: publicPromptRegistry().length, promptRouting: 'task-aware-md-library', liveReport: true, chatbot: true,
       applicationHourlyCap: null, applicationDailyCap: null, providerQuotaManaged: true,
       fallbackOnPrimaryQuota: GEMINI_FALLBACK_MODEL !== GEMINI_MODEL,
+      cachePolicy: 'evidence-hash-driven; live report reuses identical evidence for up to 24h',
       endpoints: ['/api/gemini/chat','/api/gemini/live-report','/api/gemini/prompts','/api/errors/catalog'],
       timestamp: new Date().toISOString(),
     });
@@ -376,4 +376,4 @@ http.createServer = function fxgaIntelligenceCreateServer(options, requestListen
   return serverOptions === undefined ? originalCreateServer(wrapped) : originalCreateServer(serverOptions, wrapped);
 };
 
-console.log('FXGA intelligence extension loaded', { model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL, promptCount: publicPromptRegistry().length, providerQuotaManaged: true, fallbackOnPrimaryQuota: GEMINI_FALLBACK_MODEL !== GEMINI_MODEL });
+console.log('FXGA intelligence extension loaded', { model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL, promptCount: publicPromptRegistry().length, providerQuotaManaged: true, fallbackOnPrimaryQuota: GEMINI_FALLBACK_MODEL !== GEMINI_MODEL, cachePolicy: 'evidence-driven' });
