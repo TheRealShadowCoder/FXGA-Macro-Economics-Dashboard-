@@ -7,7 +7,8 @@
     "dev": "vite",
     "check:public-copy": "node scripts/check-public-copy.mjs",
     "check:upgrades": "node scripts/verify-upgrade-program.mjs",
-    "build": "npm run check:public-copy && npm run check:upgrades && tsc -b && vite build && node scripts/stamp-live-intelligence.mjs",
+    "check:intelligence": "node scripts/verify-fxga-intelligence.mjs",
+    "build": "npm run check:public-copy && npm run check:upgrades && npm run check:intelligence && tsc -b && vite build && node scripts/stamp-live-intelligence.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
