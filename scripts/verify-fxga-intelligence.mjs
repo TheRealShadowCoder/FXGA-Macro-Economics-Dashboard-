@@ -24,11 +24,12 @@ for (const prompt of FXGA_PROMPTS) {
 for (const file of taskPromptFiles) if (!files.has(file)) throw new Error(`Prompt file is not registered: ${file}`);
 
 const strategyTemplate = requireFile(`${promptDir}/_strategy-execution-template.md`);
+const strategyTemplateLower = strategyTemplate.toLowerCase();
 for (const phrase of [
   'never call any target guaranteed or assured',
-  'Never recommend increasing position size solely because confidence is high',
-  'WAIT_FOR_ENTRY, ACTIVE, PROTECT, PARTIAL, EXIT, INVALIDATED, EXPIRED, or COMPLETED',
-]) if (!strategyTemplate.includes(phrase)) throw new Error(`Strategy execution guardrail missing: ${phrase}`);
+  'never recommend increasing position size solely because confidence is high',
+  'wait_for_entry, active, protect, partial, exit, invalidated, expired, or completed',
+]) if (!strategyTemplateLower.includes(phrase)) throw new Error(`Strategy execution guardrail missing: ${phrase}`);
 
 const requiredStrategyPrompts = [
   'scalp-overview','scalp-buy-entry','scalp-stop-loss','scalp-take-profit','scalp-trade-management-live','scalp-aggressive-risk',
@@ -46,7 +47,8 @@ for (const prompt of realtimePrompts) {
 }
 
 const library = requireFile('google-cloud-app/fxga-prompt-library.js');
-if (!library.includes("shared: 'strategy-execution'")) throw new Error('Strategy prompts do not load the shared execution contract');
+const strategyPack = requireFile('google-cloud-app/fxga-strategy-prompt-pack.js');
+if (!strategyPack.includes("shared: 'strategy-execution'")) throw new Error('Strategy prompts do not load the shared execution contract');
 if (!library.includes("id.includes('trade-management-live')")) throw new Error('Prompt registry does not expose live-management metadata');
 if (!library.includes("'program-chat'") || !library.includes("'meta'")) throw new Error('Program chatbot/system prompts do not receive runtime metadata');
 
@@ -59,7 +61,7 @@ if (/GEMINI_REQUESTS_PER_HOUR|MAX_REQUESTS_PER_HOUR/.test(extension)) throw new 
 if (extension.includes('context.generatedAt = new Date().toISOString()')) throw new Error('Request time must not invalidate the evidence cache hash');
 
 const client = requireFile('src/lib/gemini-client.ts');
-if (!client.includes('category?: string') || !client.includes('realtime?: boolean')) throw new Error('Frontend prompt registry does not expose category/realtime metadata');
+if (!/category\?\s*:\s*string/.test(client) || !/realtime\?\s*:\s*boolean/.test(client)) throw new Error('Frontend prompt registry does not expose category/realtime metadata');
 const dock = requireFile('src/components/GeminiIntelligenceDock.tsx');
 if (!dock.includes('LIVE_TRADE_REFRESH_MS') || !dock.includes("endsWith('trade-management-live')")) throw new Error('In-app real-time trade-management refresh is missing');
 
