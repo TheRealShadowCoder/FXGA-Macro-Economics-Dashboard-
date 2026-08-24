@@ -1,6 +1,6 @@
 {
   "schema": "fxga.institutional.readiness.v3",
-  "generatedAt": "2026-08-23T22:58:27.609Z",
+  "generatedAt": "2026-08-24T22:24:17.456Z",
   "institutionalReady": false,
   "tradeModelReady": false,
   "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
@@ -18,7 +18,7 @@
       "ready": true,
       "blocking": true,
       "detail": {
-        "commit": "073fb64aa4532d13db383e64314848d570ae4ffd",
+        "commit": "c1a26502d326a464fa4c93bc7404143f84a58b87",
         "release": "cross-asset-mt5-60d-event-research",
         "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app"
       }
@@ -29,11 +29,11 @@
       "blocking": true,
       "detail": {
         "updatedAt": {
-          "calendar": "2026-08-23T00:05:15.390Z",
-          "macro": "2026-08-23T22:01:52.828Z",
+          "calendar": "2026-08-24T15:46:28.719Z",
+          "macro": "2026-08-24T22:01:35.478Z",
           "intelligence": "2026-08-21T02:52:15.275Z",
-          "market": "2026-08-23T22:57:28.167Z",
-          "technical": "2026-08-23T22:57:28.166Z"
+          "market": "2026-08-24T22:23:44.170Z",
+          "technical": "2026-08-24T22:23:49.478Z"
         },
         "compute": "Google Cloud Run",
         "state": "Google Cloud Firestore"
@@ -44,8 +44,8 @@
       "ready": false,
       "blocking": true,
       "detail": {
-        "intelligenceAgeMinutes": 4086,
-        "macroAgeMinutes": 57,
+        "intelligenceAgeMinutes": 5492,
+        "macroAgeMinutes": 23,
         "marketAgeMinutes": 1,
         "thresholds": {
           "intelligence": 30,
@@ -90,7 +90,7 @@
         "unique": 5,
         "structurallyValid": 5,
         "generatedAt": "2026-08-21T02:52:03.999Z",
-        "ageMinutes": 4086
+        "ageMinutes": 5492
       }
     },
     {
@@ -100,7 +100,7 @@
       "detail": {
         "fred": 80,
         "cnbc": 16,
-        "fxstreet": 274,
+        "fxstreet": 275,
         "mt5Studies": 648
       }
     },
@@ -143,7 +143,7 @@
         "totalBars": 48657,
         "assetsExpected": 16,
         "newestEURUSD": 1787274060000,
-        "ageMinutes": 4197,
+        "ageMinutes": 5603,
         "marketExpectedOpen": true,
         "secretBackedAuthentication": true
       }
