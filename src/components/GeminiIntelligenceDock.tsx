@@ -39,6 +39,7 @@ function ErrorCard({ value }: { value: FriendlyFxgaError }) {
     <small><b>Retry:</b> {value.retryable ? 'Yes, this can usually be tried again.' : 'No. Fix the input/configuration or wait for the stated quota reset.'}</small>
     {value.retryAfterSeconds != null && <small><b>Retry after:</b> about {value.retryAfterSeconds} seconds</small>}
     <code>{value.code}{value.technical?.httpStatus ? ` · HTTP ${value.technical.httpStatus}` : ''}</code>
+    <a href="/fxga-error-guide.html" target="_blank" rel="noreferrer">Open the full FXGA error guide ↗</a>
   </div>;
 }
 
