@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getGeminiAnalysis, getGeminiHealth, type GeminiAnalysis, type GeminiHealth, type GeminiMode } from '../lib/gemini-client';
+import {
+  askFxga,
+  getGeminiAnalysis,
+  getGeminiHealth,
+  getIntelligenceHealth,
+  getPromptRegistry,
+  type FxgaPromptTask,
+  type GeminiAnalysis,
+  type GeminiChat,
+  type GeminiHealth,
+  type GeminiMode,
+  type IntelligenceHealth,
+  type PromptRegistry,
+} from '../lib/gemini-client';
+import { friendlyErrorFromThrown, type FriendlyFxgaError } from '../lib/fxga-errors';
 import './GeminiIntelligenceDock.css';
 
 const MODES: Array<{ mode: Exclude<GeminiMode, 'smc-signal'>; label: string; description: string }> = [
@@ -17,42 +31,78 @@ function formatTime(value?: string) {
   return new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function ErrorCard({ value }: { value: FriendlyFxgaError }) {
+  return <div className="gemini-error-card">
+    <strong>{value.title}</strong>
+    <p>{value.explanation}</p>
+    <small><b>What to do:</b> {value.whatToDo}</small>
+    <small><b>Retry:</b> {value.retryable ? 'Yes, this can usually be tried again.' : 'No. Fix the input/configuration or wait for the stated quota reset.'}</small>
+    {value.retryAfterSeconds != null && <small><b>Retry after:</b> about {value.retryAfterSeconds} seconds</small>}
+    <code>{value.code}{value.technical?.httpStatus ? ` · HTTP ${value.technical.httpStatus}` : ''}</code>
+  </div>;
+}
+
 export function GeminiIntelligenceDock() {
   const [open, setOpen] = useState(false);
   const [health, setHealth] = useState<GeminiHealth | null>(null);
+  const [intelligenceHealth, setIntelligenceHealth] = useState<IntelligenceHealth | null>(null);
+  const [registry, setRegistry] = useState<PromptRegistry | null>(null);
   const [mode, setMode] = useState<Exclude<GeminiMode, 'smc-signal'>>('action-report');
   const [analysis, setAnalysis] = useState<GeminiAnalysis | null>(null);
+  const [chat, setChat] = useState<GeminiChat | null>(null);
+  const [question, setQuestion] = useState('');
+  const [task, setTask] = useState<'auto' | FxgaPromptTask>('auto');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [error, setError] = useState<FriendlyFxgaError | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    getGeminiHealth(controller.signal).then(setHealth).catch(() => setHealth(null));
+    Promise.all([
+      getGeminiHealth(controller.signal).catch(() => null),
+      getIntelligenceHealth(controller.signal).catch(() => null),
+      getPromptRegistry(controller.signal).catch(() => null),
+    ]).then(([baseHealth, extendedHealth, promptRegistry]) => {
+      setHealth(baseHealth);
+      setIntelligenceHealth(extendedHealth);
+      setRegistry(promptRegistry);
+    });
     return () => controller.abort();
   }, []);
 
   const selected = useMemo(() => MODES.find(item => item.mode === mode) ?? MODES[0], [mode]);
+  const configured = health?.configured ?? intelligenceHealth?.configured ?? false;
 
   async function run(nextMode = mode) {
     setMode(nextMode);
     setLoading(true);
-    setError('');
+    setError(null);
     try {
       const result = await getGeminiAnalysis(nextMode);
       setAnalysis(result);
     } catch (caught) {
       setAnalysis(null);
-      setError(caught instanceof Error ? caught.message : 'Gemini analysis failed');
-    } finally {
-      setLoading(false);
-    }
+      setError(friendlyErrorFromThrown(caught));
+    } finally { setLoading(false); }
+  }
+
+  async function ask() {
+    const clean = question.trim();
+    if (!clean) return;
+    setChatLoading(true);
+    setError(null);
+    try {
+      const result = await askFxga(clean, task === 'auto' ? {} : { task });
+      setChat(result);
+    } catch (caught) {
+      setChat(null);
+      setError(friendlyErrorFromThrown(caught));
+    } finally { setChatLoading(false); }
   }
 
   return <div className={`gemini-dock ${open ? 'open' : ''}`}>
     <button className="gemini-dock-toggle" onClick={() => setOpen(value => !value)} aria-expanded={open}>
-      <span className="gemini-spark">✦</span>
-      <span>Gemini AI</span>
-      <i className={health?.configured ? 'online' : 'offline'}></i>
+      <span className="gemini-spark">✦</span><span>Ask FXGA AI</span><i className={configured ? 'online' : 'offline'}></i>
     </button>
 
     {open && <section className="gemini-dock-panel" aria-label="FXGA Gemini intelligence">
@@ -62,20 +112,39 @@ export function GeminiIntelligenceDock() {
       </header>
 
       <div className="gemini-status">
-        <i className={health?.configured ? 'online' : 'offline'}></i>
-        <span>{health?.configured ? `${health.model} connected` : 'Gemini waiting for server configuration'}</span>
+        <i className={configured ? 'online' : 'offline'}></i>
+        <span>{configured ? `${intelligenceHealth?.model || health?.model || 'Gemini'} connected · ${intelligenceHealth?.promptCount || registry?.prompts.length || 0} task prompts · no FXGA hourly/daily cap` : 'Gemini waiting for server configuration'}</span>
       </div>
 
+      <div className="gemini-chatbox">
+        <div className="gemini-chat-head"><strong>Ask anything about the program</strong><a href="/fxga-intelligence-live.html" target="_blank" rel="noreferrer">Open live intelligence ↗</a></div>
+        <textarea value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) void ask(); }} placeholder="Examples: Where is the strongest measured edge? Why was this setup invalidated? What does the macro regime mean? What is wrong with the data? Forecast the current chart scenarios…" />
+        <div className="gemini-chat-actions">
+          <select value={task} onChange={event => setTask(event.target.value as 'auto' | FxgaPromptTask)} aria-label="FXGA AI task">
+            <option value="auto">Auto-select best advanced prompt</option>
+            {registry?.prompts.filter(item => item.id !== 'live-intelligence-report').map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+          </select>
+          <button onClick={() => void ask()} disabled={chatLoading || !configured || !question.trim()}>{chatLoading ? 'Analyzing…' : 'Ask FXGA'}</button>
+        </div>
+        {chat && <div className="gemini-chat-answer">
+          <div className="gemini-output-meta"><span>{chat.label}</span><span>{chat.model}</span><span>{chat.cached ? 'cached' : 'fresh'}</span><span>{formatTime(chat.createdAt)}</span></div>
+          <div className="gemini-output-text">{chat.answer}</div>
+          <footer>Evidence: {chat.evidenceDomains.join(' · ')} · {chat.policy}</footer>
+        </div>}
+      </div>
+
+      <div className="gemini-mode-title"><strong>One-click intelligence</strong><small>Specialized evidence summaries</small></div>
       <div className="gemini-mode-grid">
-        {MODES.map(item => <button key={item.mode} className={mode === item.mode ? 'active' : ''} onClick={() => void run(item.mode)} disabled={loading || health?.configured === false}>
+        {MODES.map(item => <button key={item.mode} className={mode === item.mode ? 'active' : ''} onClick={() => void run(item.mode)} disabled={loading || !configured}>
           <strong>{item.label}</strong><small>{item.description}</small>
         </button>)}
       </div>
 
+      {error && <ErrorCard value={error} />}
+
       <div className="gemini-output">
         {loading && <div className="gemini-loading"><span></span><p>Reading FXGA evidence and generating explanation…</p></div>}
-        {!loading && error && <div className="gemini-error">{error}</div>}
-        {!loading && !error && !analysis && <div className="gemini-empty"><strong>{selected.label}</strong><p>Select an intelligence mode. Gemini receives structured FXGA evidence from Google Cloud; it does not receive the API key from your browser and does not create trading signals.</p></div>}
+        {!loading && !error && !analysis && <div className="gemini-empty"><strong>{selected.label}</strong><p>Select a one-click intelligence mode, or ask the chatbot anything about the program. The AI receives structured FXGA evidence from Google Cloud and never receives the API key from your browser.</p></div>}
         {!loading && analysis && <>
           <div className="gemini-output-meta"><span>{analysis.label}</span><span>{analysis.model}</span><span>{analysis.cached ? 'cached' : 'fresh'}</span><span>{formatTime(analysis.createdAt)}</span></div>
           <div className="gemini-output-text">{analysis.output}</div>
