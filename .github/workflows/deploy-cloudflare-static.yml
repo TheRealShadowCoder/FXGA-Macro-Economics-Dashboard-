@@ -144,6 +144,8 @@ jobs:
               'cold-start-aware-api-client',
               'live-signal-intelligence',
               'smc2000-indicator-signals',
+              '100-advanced-ai-prompts',
+              'realtime-trade-management',
               'sticky-cross-asset-tabs'
             ]
           };
@@ -159,7 +161,9 @@ jobs:
           grep -R -F "Event Study & Backtesting" dist >/dev/null || { echo '::error::Compiled frontend is missing Event Study & Backtesting'; exit 1; }
           grep -R -F "Price action before and after every economic release" dist >/dev/null || { echo '::error::Compiled frontend is missing the pre/post-news event-price research workspace'; exit 1; }
           grep -R -F "Live Signal Intelligence" dist >/dev/null || { echo '::error::Compiled frontend is missing Live Signal Intelligence navigation'; exit 1; }
-          grep -R -F "FXGA SMC2000 Indicator Signals" dist >/dev/null || { echo '::error::Compiled frontend is missing the FXGA SMC2000 Indicator Signals workspace'; exit 1; }
+          grep -R -F "Ask FXGA AI" dist >/dev/null || { echo '::error::Compiled frontend is missing the FXGA AI chatbot'; exit 1; }
+          test -f dist/fxga-intelligence-live.html || { echo '::error::Compiled frontend is missing the live intelligence journal'; exit 1; }
+          grep -F "Ask anything about FXGA" dist/fxga-intelligence-live.html >/dev/null || { echo '::error::Live intelligence journal is missing its program chatbot'; exit 1; }
           test -f dist/fxga-build.json || { echo '::error::Release marker was not copied into the static build'; exit 1; }
 
           node <<'NODE'
@@ -167,7 +171,7 @@ jobs:
           const marker=JSON.parse(fs.readFileSync('dist/fxga-build.json','utf8'));
           if(marker.commit!==process.env.RELEASE_SHA)throw new Error(`Build marker commit mismatch: ${marker.commit}`);
           if(marker.release!==process.env.RELEASE_NAME)throw new Error(`Unexpected release marker: ${marker.release}`);
-          for(const feature of ['60-day-canonical-m1','event-price-research','pre-news-price-action','cold-start-aware-api-client','smc2000-indicator-signals']){
+          for(const feature of ['60-day-canonical-m1','event-price-research','pre-news-price-action','cold-start-aware-api-client','smc2000-indicator-signals','100-advanced-ai-prompts','realtime-trade-management']){
             if(!marker.features?.includes(feature))throw new Error(`Release marker missing ${feature}`);
           }
           console.log('VERIFIED BEFORE DEPLOY:',marker);
@@ -214,7 +218,7 @@ jobs:
               const markerResponse=await fetch(site+'/fxga-build.json?release='+encodeURIComponent(sha),{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
               if(root.ok&&markerResponse.ok){
                 const candidate=await markerResponse.json();
-                if(candidate.commit===sha&&candidate.release===release&&candidate.features?.includes('cold-start-aware-api-client')){
+                if(candidate.commit===sha&&candidate.release===release&&candidate.features?.includes('100-advanced-ai-prompts')&&candidate.features?.includes('realtime-trade-management')){
                   marker=candidate;
                   break;
                 }
@@ -224,7 +228,7 @@ jobs:
             await sleep(2000);
           }
           if(!root?.ok)throw new Error('Cloudflare static website did not become ready');
-          if(!marker)throw last||new Error('Exact 60-day event-research release marker did not become live');
+          if(!marker)throw last||new Error('Exact 100-prompt intelligence release marker did not become live');
 
           const cloud=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
           const h=await cloud.json();
