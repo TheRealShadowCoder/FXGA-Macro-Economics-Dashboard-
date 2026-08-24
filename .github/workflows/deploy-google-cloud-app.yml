@@ -49,7 +49,8 @@ jobs:
           node --check gemini-hook.js
           node -e "const p=require('./package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies['@google-cloud/monitoring']||!p.dependencies.ws) process.exit(1)"
           ! grep -REn "AQ\.[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}" . --exclude='package-lock.json' || { echo '::error::Possible Gemini/Google credential committed to google-cloud-app'; exit 1; }
-          echo 'API validation complete. Frontend compilation belongs to the Cloudflare workflow.'
+          ! grep -REn "GEMINI_REQUESTS_PER_HOUR|MAX_REQUESTS_PER_HOUR" . --exclude='package-lock.json' || { echo '::error::Artificial Gemini hourly cap detected in Google Cloud application'; exit 1; }
+          echo 'API validation complete. Gemini quota is provider-managed; frontend compilation belongs to the Cloudflare workflow.'
 
       - id: config
         name: Resolve Google authentication
@@ -153,7 +154,7 @@ jobs:
             --min 0 \
             --max 3 \
             --timeout 3600 \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting,FXGA_PUBLIC_ORIGIN=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_FALLBACK_MODEL=$GEMINI_FALLBACK_MODEL,GEMINI_REQUESTS_PER_HOUR=24" \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting,FXGA_PUBLIC_ORIGIN=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_FALLBACK_MODEL=$GEMINI_FALLBACK_MODEL" \
             "${GEMINI_ARGS[@]}"
           APP_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --platform managed --format='value(status.url)')
           test -n "$APP_URL" || { echo '::error::Google Cloud application URL missing after deployment'; exit 1; }
@@ -191,7 +192,10 @@ jobs:
               const gemini=JSON.parse(geminiText);
               if(gemini.keyExposedToBrowser!==false)throw new Error('Gemini health contract must explicitly keep the key server-side');
               if(expectGemini&&!gemini.configured)throw new Error('Gemini secret exists but deployed gateway reports configured=false');
-              console.log('Google Cloud macro API live:',base,'assets=',dashboard.market.length,'monitoringMode=',usage.monitoringMode,'geminiConfigured=',gemini.configured,'geminiModel=',gemini.model);
+              if(gemini.quotaPolicy!=='provider-managed-no-artificial-hourly-or-daily-cap')throw new Error(`Unexpected Gemini quota policy ${gemini.quotaPolicy}`);
+              if(gemini.applicationHourlyCap!==null||gemini.applicationDailyCap!==null)throw new Error('FXGA must not impose artificial Gemini hourly/daily caps');
+              if(gemini.firestoreCaching!==true||gemini.duplicateRequestCoalescing!==true)throw new Error('Gemini quota-conservation controls are missing');
+              console.log('Google Cloud macro API live:',base,'assets=',dashboard.market.length,'monitoringMode=',usage.monitoringMode,'geminiConfigured=',gemini.configured,'geminiModel=',gemini.model,'geminiQuotaPolicy=',gemini.quotaPolicy);
               process.exit(0);
             }catch(error){last=error;await sleep(3000);}
           }
@@ -208,5 +212,7 @@ jobs:
           echo "Gemini health: $APP_URL/api/gemini/health"
           echo "Gemini analysis: $APP_URL/api/gemini/analyze"
           echo "Gemini configured: ${GEMINI_CONFIGURED:-false}"
+          echo "Gemini quota: Google provider/project/model limits only; no FXGA hourly or daily request cap"
+          echo "Gemini quota conservation: Firestore TTL cache + same-instance duplicate request coalescing"
           echo "Frontend bundled into API container: NO"
           echo "Cloudflare application processing: NONE"
