@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>FXGA Live Intelligence Journal</title>
+<style>
+:root{--bg:#060709;--panel:#0c0e12;--panel2:#11141a;--line:rgba(255,255,255,.08);--gold:#d4af37;--gold2:#f0d06b;--text:#f2f3f5;--muted:#9299a6;--good:#54d18c;--bad:#ff8f8f;--warn:#f2c15c}*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:radial-gradient(circle at 80% 0,rgba(212,175,55,.06),transparent 26%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,select,textarea{font:inherit}.shell{width:min(1500px,calc(100% - 28px));margin:0 auto;padding:26px 0 56px}.top{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:6px 0 20px;border-bottom:1px solid var(--line)}.eyebrow{color:var(--gold);font-size:10px;text-transform:uppercase;letter-spacing:.15em}.top h1{font-size:clamp(24px,4vw,42px);line-height:1.05;margin:7px 0 8px;font-weight:680}.top p{max-width:780px;margin:0;color:var(--muted);font-size:12px;line-height:1.6}.badge{border:1px solid rgba(212,175,55,.28);background:rgba(212,175,55,.06);border-radius:999px;padding:9px 12px;font-size:10px;color:var(--gold2);white-space:nowrap}.status-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:18px 0}.status{border:1px solid var(--line);background:var(--panel);border-radius:13px;padding:13px;min-height:82px}.status small{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em}.status strong{display:block;margin-top:7px;font-size:12px;line-height:1.35}.status .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);margin-right:6px}.status .dot.good{background:var(--good);box-shadow:0 0 0 3px rgba(84,209,140,.1)}.status .dot.bad{background:var(--bad)}.layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(360px,.75fr);gap:14px}.panel{border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.018),transparent),var(--panel);border-radius:16px;overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 16px;border-bottom:1px solid var(--line)}.panel-head h2{font-size:14px;margin:0}.panel-head small{color:var(--muted);font-size:9px}.toolbar{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.toolbar button,.chat-actions button{border:1px solid rgba(212,175,55,.3);background:rgba(212,175,55,.07);color:var(--text);border-radius:8px;padding:8px 10px;font-size:10px;cursor:pointer}.toolbar button:hover,.chat-actions button:hover{background:rgba(212,175,55,.12)}.toolbar button:disabled,.chat-actions button:disabled{opacity:.4;cursor:not-allowed}.toggle{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:9px}.toggle input{accent-color:var(--gold)}.report-meta{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px;border-bottom:1px solid var(--line)}.chip{border:1px solid var(--line);border-radius:999px;padding:4px 7px;color:#adb3be;font-size:8px;text-transform:uppercase;letter-spacing:.05em}.report{white-space:pre-wrap;word-break:break-word;padding:18px 18px 28px;margin:0;font:11.5px/1.7 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#e7e9ed;min-height:580px;max-height:calc(100vh - 250px);overflow:auto}.report.loading{color:var(--muted)}.side{display:flex;flex-direction:column;gap:14px}.chat{padding:14px}.chat textarea{width:100%;min-height:112px;resize:vertical;border:1px solid var(--line);background:#080a0e;color:var(--text);border-radius:10px;padding:11px;font-size:11px;line-height:1.55;outline:none}.chat textarea:focus{border-color:rgba(212,175,55,.38)}.chat-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:9px}.chat select{min-width:0;border:1px solid var(--line);background:#0a0d12;color:var(--text);border-radius:8px;padding:8px;font-size:10px}.answer{margin-top:12px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.015);overflow:hidden}.answer-meta{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line)}.answer pre{white-space:pre-wrap;margin:0;padding:12px;font:10.5px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;max-height:420px;overflow:auto}.tasks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:12px}.task{border:1px solid var(--line);background:rgba(255,255,255,.018);border-radius:9px;padding:9px;text-align:left;color:var(--text);cursor:pointer}.task:hover{border-color:rgba(212,175,55,.3)}.task strong{display:block;font-size:10px}.task small{display:block;margin-top:3px;color:var(--muted);font-size:8px;line-height:1.35}.error{margin:12px 14px 14px;border:1px solid rgba(255,120,120,.26);background:rgba(255,80,80,.055);border-radius:10px;padding:11px}.error strong{display:block;color:#ffc3c3;font-size:11px}.error p{margin:5px 0;color:#dfc4c4;font-size:10px;line-height:1.5}.error small{display:block;color:#aeb4bf;font-size:9px;line-height:1.45;margin-top:3px}.hidden{display:none!important}.foot{margin-top:16px;padding:13px 2px;color:#737a86;font-size:9px;line-height:1.6}.foot b{color:#aeb4bf}.spinner{display:inline-block;width:10px;height:10px;border:1.5px solid rgba(255,255,255,.15);border-top-color:var(--gold);border-radius:50%;animation:spin .8s linear infinite;margin-right:6px;vertical-align:-1px}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.status-grid{grid-template-columns:repeat(3,1fr)}.layout{grid-template-columns:1fr}.report{max-height:none;min-height:420px}}@media(max-width:680px){.shell{width:min(100% - 16px,1500px);padding-top:14px}.top{flex-direction:column}.status-grid{grid-template-columns:repeat(2,1fr)}.layout{display:block}.side{margin-top:12px}.chat-actions{grid-template-columns:1fr}.tasks{grid-template-columns:1fr}.report{padding:13px;font-size:10px;min-height:360px}.badge{white-space:normal}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div><div class="eyebrow">FX Global Avengers Trading Academy · Google Cloud Intelligence</div><h1>Live Intelligence Journal</h1><p>A continuously refreshing evidence journal for strategy research, measured performance, edge discovery, stored trade setups, market scenarios, chart forecasts, macro context, data quality and program diagnostics. Forecasts are conditional scenarios; an edge is only labelled validated when the stored evidence supports it.</p></div>
+    <div class="badge">Cloudflare static UI · Google Cloud processing</div>
+  </header>
+
+  <section class="status-grid">
+    <div class="status"><small>Intelligence service</small><strong id="health"><span class="dot"></span>Checking…</strong></div>
+    <div class="status"><small>Primary model</small><strong id="model">—</strong></div>
+    <div class="status"><small>Prompt system</small><strong id="promptCount">—</strong></div>
+    <div class="status"><small>FXGA application cap</small><strong>None · provider quota only</strong></div>
+    <div class="status"><small>Next refresh</small><strong id="countdown">—</strong></div>
+  </section>
+
+  <section class="layout">
+    <article class="panel">
+      <div class="panel-head"><div><h2>Continuous intelligence report</h2><small>Strategy performance · edge research · setups · forecasts · macro · system health</small></div><div class="toolbar"><label class="toggle"><input id="autoRefresh" type="checkbox" checked>Auto refresh</label><button id="refreshBtn">Refresh now</button></div></div>
+      <div id="reportMeta" class="report-meta"><span class="chip">Waiting for Google Cloud evidence</span></div>
+      <pre id="report" class="report loading"><span class="spinner"></span>Loading the current FXGA evidence journal…</pre>
+      <div id="reportError" class="error hidden"></div>
+    </article>
+
+    <aside class="side">
+      <section class="panel">
+        <div class="panel-head"><div><h2>Ask anything about FXGA</h2><small>Automatic advanced-prompt routing</small></div></div>
+        <div class="chat">
+          <textarea id="question" placeholder="Examples: Where is the strongest measured edge? Explain the current strategy performance. Why was a setup invalidated? Forecast the chart scenarios. What does the next economic release change? Is any data stale? What does error 429 mean?"></textarea>
+          <div class="chat-actions"><select id="task"><option value="">Auto-select the best prompt</option></select><button id="askBtn">Ask FXGA</button></div>
+          <div id="chatError" class="error hidden"></div>
+          <div id="answer" class="answer hidden"><div id="answerMeta" class="answer-meta"></div><pre id="answerText"></pre></div>
+        </div>
+      </section>
+
+      <section class="panel"><div class="panel-head"><div><h2>Advanced task prompts</h2><small>Each task receives only its relevant evidence domains</small></div></div><div id="tasks" class="tasks"></div></section>
+    </aside>
+  </section>
+
+  <footer class="foot"><b>Evidence policy:</b> Missing information is not invented. Historical patterns are not automatically treated as profitable. Strategy performance and statistical edges require measured outcome and validation evidence. The browser never receives the Gemini API key. This page is static; all analysis requests go directly to the discovered Google Cloud Run API.</footer>
+</main>
+<script>
+(() => {
+  'use strict';
+  const STAMPED='__FXGA_GOOGLE_CLOUD_API_BASE__';
+  const queryApi=new URLSearchParams(location.search).get('api');
+  const API_BASE=(STAMPED.startsWith('https://')?STAMPED:(queryApi||'')).replace(/\/+$/,'');
+  const el=id=>document.getElementById(id);
+  const state={prompts:[],refreshSeconds:60,nextRefresh:0,loading:false};
+  const defaultQuestions={
+    'program-chat':'Explain what the FXGA program currently knows and what needs attention.',
+    'strategy-performance':'Analyze the current measured strategy performance. Separate what is validated from what cannot yet be concluded.',
+    'edge-research':'Search the current stored evidence for candidate statistical edges and explain the robustness status of each one.',
+    'trade-setup':'Analyze the current and recent stored trade setups, their evidence, lifecycle state, invalidations and recorded targets.',
+    'chart-forecast':'Analyze the current chart evidence and give conditional base, bullish and bearish forecast scenarios with invalidations.',
+    'technical-analysis':'Explain the current multi-timeframe technical evidence, alignment, conflicts and limitations.',
+    'macro-analysis':'Explain the current macro regime and how the stored evidence conditions market scenarios.',
+    'economic-event':'Analyze the most relevant upcoming or recent economic events and the historical evidence available for them.',
+    'event-study':'Evaluate the current event-study research, sample maturity, historical patterns and validation limitations.',
+    'signal-lifecycle':'Explain the lifecycle of current and recent FXGA signals and what has changed since each signal was generated.',
+    'risk-management':'Explain the stored risk geometry, invalidations and reward/risk evidence for current setups.',
+    'cross-asset':'Analyze the current cross-asset alignments and divergences without assuming unmeasured correlations.',
+    'data-quality':'Audit the current FXGA data quality, freshness, missing evidence and how those issues affect confidence.',
+    'system-health':'Explain the current FXGA system health and distinguish application, database, network and provider issues.',
+    'error-explainer':'Explain the most relevant current error or service limitation in simple language and what should be done.',
+    'scenario-forecast':'Build conditional market scenarios from the current FXGA evidence, including catalysts and invalidations.'
+  };
+
+  function api(path){if(!API_BASE)throw new Error('The Google Cloud API base was not stamped into this static build.');return API_BASE+path}
+  function time(v){const n=Date.parse(v||'');return Number.isFinite(n)?new Date(n).toLocaleString():String(v||'—')}
+  function chip(text){const s=document.createElement('span');s.className='chip';s.textContent=text;return s}
+  function clear(node){while(node.firstChild)node.removeChild(node.firstChild)}
+  function setError(target,friendly){const box=el(target);clear(box);if(!friendly){box.classList.add('hidden');return}box.classList.remove('hidden');const title=document.createElement('strong');title.textContent=friendly.title||friendly.error||'Something went wrong';box.appendChild(title);const p=document.createElement('p');p.textContent=friendly.explanation||friendly.message||'FXGA could not complete the request.';box.appendChild(p);if(friendly.whatToDo){const a=document.createElement('small');a.textContent='What to do: '+friendly.whatToDo;box.appendChild(a)}if(friendly.retryAfterSeconds!=null){const r=document.createElement('small');r.textContent='Retry after: about '+friendly.retryAfterSeconds+' seconds';box.appendChild(r)}if(friendly.code){const c=document.createElement('small');c.textContent='Code: '+friendly.code+(friendly.technical?.httpStatus?' · HTTP '+friendly.technical.httpStatus:'');box.appendChild(c)}}
+  async function jsonFetch(path,options={}){let response;try{response=await fetch(api(path),{cache:'no-store',headers:{Accept:'application/json','Cache-Control':'no-cache',...(options.headers||{})},...options})}catch(error){throw {title:'The browser cannot reach FXGA',explanation:'No normal response was received from Google Cloud.',whatToDo:'Check your connection and FXGA system health, then try again.',code:'network_error'}}let body={};try{body=await response.json()}catch{body={error:'The server returned an unreadable response.'}}if(!response.ok)throw(body.friendlyError||{title:body.error||('HTTP '+response.status),explanation:'FXGA could not complete this request.',whatToDo:'Try again or check system health.',code:'http_'+response.status,technical:{httpStatus:response.status}});return body}
+
+  async function loadHealth(){try{const h=await jsonFetch('/api/gemini/intelligence-health');const health=el('health');clear(health);const dot=document.createElement('span');dot.className='dot '+(h.configured?'good':'bad');health.appendChild(dot);health.append(document.createTextNode(h.configured?'Connected':'Needs configuration'));el('model').textContent=h.model+(h.fallbackModel?' → '+h.fallbackModel+' fallback':'');el('promptCount').textContent=(h.promptCount||0)+' task-specific .md prompts';}catch(error){const health=el('health');clear(health);const dot=document.createElement('span');dot.className='dot bad';health.appendChild(dot);health.append(document.createTextNode(error.title||'Unavailable'));}}
+
+  async function loadPrompts(){try{const data=await jsonFetch('/api/gemini/prompts');state.prompts=(data.prompts||[]).filter(p=>p.id!=='live-intelligence-report');const select=el('task'),tasks=el('tasks');clear(tasks);state.prompts.forEach(p=>{const option=document.createElement('option');option.value=p.id;option.textContent=p.label;select.appendChild(option);const button=document.createElement('button');button.className='task';button.type='button';const strong=document.createElement('strong');strong.textContent=p.label;const small=document.createElement('small');small.textContent=(p.evidenceDomains||[]).join(' · ');button.append(strong,small);button.addEventListener('click',()=>{select.value=p.id;el('question').value=defaultQuestions[p.id]||('Analyze the current '+p.label.toLowerCase()+' evidence.');el('question').focus()});tasks.appendChild(button)});}catch(error){setError('chatError',error)}}
+
+  async function loadReport(force=false){if(state.loading)return;state.loading=true;const btn=el('refreshBtn');btn.disabled=true;setError('reportError',null);const report=el('report');if(!report.textContent.trim()||force)report.classList.add('loading');try{const data=await jsonFetch('/api/gemini/live-report');report.classList.remove('loading');report.textContent=data.report||'No intelligence report was returned.';const meta=el('reportMeta');clear(meta);meta.append(chip(data.model||'model unknown'),chip(data.cached?'cached evidence result':'fresh model result'),chip('updated '+time(data.createdAt)),chip((data.evidenceDomains||[]).length+' evidence domains'));state.refreshSeconds=Math.max(30,Number(data.refreshAfterSeconds)||60);state.nextRefresh=Date.now()+state.refreshSeconds*1000;}catch(error){report.classList.remove('loading');if(!report.textContent.trim())report.textContent='The previous intelligence report is unavailable.';setError('reportError',error);state.nextRefresh=Date.now()+60000;}finally{state.loading=false;btn.disabled=false}}
+
+  async function ask(taskOverride){const question=el('question').value.trim();if(!question)return;const task=taskOverride||el('task').value;const btn=el('askBtn');btn.disabled=true;btn.textContent='Analyzing…';setError('chatError',null);try{const data=await jsonFetch('/api/gemini/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question,...(task?{task}: {})})});const box=el('answer');box.classList.remove('hidden');const meta=el('answerMeta');clear(meta);meta.append(chip(data.label||data.task),chip(data.model||'model'),chip(data.cached?'cached':'fresh'),chip(time(data.createdAt)));el('answerText').textContent=data.answer||'No answer returned.';}catch(error){el('answer').classList.add('hidden');setError('chatError',error)}finally{btn.disabled=false;btn.textContent='Ask FXGA'}}
+
+  el('refreshBtn').addEventListener('click',()=>loadReport(true));el('askBtn').addEventListener('click',()=>ask());el('question').addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();ask()}});
+  setInterval(()=>{const remain=Math.max(0,Math.ceil((state.nextRefresh-Date.now())/1000));el('countdown').textContent=el('autoRefresh').checked?(remain?remain+' seconds':'refreshing…'):'paused';if(el('autoRefresh').checked&&state.nextRefresh&&Date.now()>=state.nextRefresh&&!state.loading)loadReport(false)},1000);
+  Promise.all([loadHealth(),loadPrompts()]).finally(()=>loadReport(false));
+})();
+</script>
+</body>
+</html>
