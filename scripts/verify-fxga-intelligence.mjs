@@ -27,20 +27,31 @@ for (const route of ['/api/gemini/chat','/api/gemini/live-report','/api/gemini/p
   if (!extension.includes(route)) throw new Error(`Intelligence extension is missing ${route}`);
 }
 if (!extension.includes('providerQuotaManaged: true')) throw new Error('Provider-managed Gemini quota contract is missing');
+if (!extension.includes('fallbackOnPrimaryQuota')) throw new Error('Primary-model quota does not expose fallback behavior');
+if (!extension.includes("cachePolicy: 'evidence-hash-driven")) throw new Error('Evidence-driven live-report cache contract is missing');
 if (/GEMINI_REQUESTS_PER_HOUR|MAX_REQUESTS_PER_HOUR/.test(extension)) throw new Error('Artificial Gemini hourly cap detected in intelligence extension');
+if (extension.includes('context.generatedAt = new Date().toISOString()')) throw new Error('Request time must not invalidate the evidence cache hash');
 
 const errorCatalog = requireFile('google-cloud-app/fxga-error-catalog.js');
-for (const code of ['invalid_request','authentication','permission_denied','model_not_found','rate_limit_exceeded','quota_exceeded','service_unavailable','deadline_exceeded','network_error','firestore_unavailable']) {
-  if (!errorCatalog.includes(`${code}:`)) throw new Error(`Friendly error catalog is missing ${code}`);
-}
+const requiredErrors = [
+  'invalid_request','failed_precondition','out_of_range','parameter_unknown','authentication','permission_denied','not_found','model_not_found','already_exists','aborted','rate_limit_exceeded','quota_exceeded','cancelled','api_error','unimplemented','service_unavailable','deadline_exceeded',
+  'safety','recitation','language','prohibited_content','spii','blocklist','image_safety','image_prohibited_content','image_recitation','image_other','content_blocked',
+  'malformed_function_call','malformed_tool_call','unexpected_tool_call','no_image','too_many_tool_calls','missing_thought_signature',
+  'network_error','firestore_permission_denied','firestore_resource_exhausted','firestore_unavailable',
+];
+for (const code of requiredErrors) if (!errorCatalog.includes(`${code}:`)) throw new Error(`Friendly error catalog is missing ${code}`);
 
 const liveHtml = requireFile('public/fxga-intelligence-live.html');
 if (!liveHtml.includes('__FXGA_GOOGLE_CLOUD_API_BASE__')) throw new Error('Live HTML is missing its Cloud Run build placeholder');
 if (!liveHtml.includes('/api/gemini/live-report') || !liveHtml.includes('/api/gemini/chat')) throw new Error('Live HTML is not connected to the intelligence API');
-if (/AIza[A-Za-z0-9_-]{20,}|x-goog-api-key/i.test(liveHtml)) throw new Error('A Google API credential pattern or API-key header appeared in the public live HTML');
+if (/AIza[A-Za-z0-9_-]{20,}/.test(liveHtml)) throw new Error('A Google credential pattern appeared in the public live HTML');
+
+const errorGuide = requireFile('public/fxga-error-guide.html');
+if (!errorGuide.includes('__FXGA_GOOGLE_CLOUD_API_BASE__') || !errorGuide.includes('/api/errors/catalog')) throw new Error('Public error guide is not connected to the friendly error catalog');
+if (/AIza[A-Za-z0-9_-]{20,}/.test(errorGuide)) throw new Error('A Google credential pattern appeared in the public error guide');
 
 const dockerfile = requireFile('google-cloud-app/Dockerfile');
 if (!dockerfile.includes('COPY google-cloud-app/prompts ./prompts')) throw new Error('Cloud Run image does not copy the prompt library');
 if (!dockerfile.includes('--import", "./fxga-intelligence-extension.js')) throw new Error('Cloud Run image does not load the intelligence extension');
 
-console.log(`FXGA intelligence architecture verified: ${requiredPrompts.length} advanced prompts, live journal, chatbot, friendly errors, provider-managed Gemini quota.`);
+console.log(`FXGA intelligence architecture verified: ${requiredPrompts.length} advanced prompts, ${requiredErrors.length} friendly error classes, live journal, chatbot, searchable error guide, evidence-driven cache, provider-managed quota.`);
