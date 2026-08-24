@@ -7,7 +7,7 @@ const promptDir = path.join(__dirname, 'prompts');
 const promptCache = new Map();
 
 export const FXGA_PROMPTS = [
-  { id: 'program-chat', file: 'program-chat.md', label: 'Program chatbot', keywords: ['anything','program','dashboard','explain','question','what is','why','how'], states: ['intelligence','market','technical','macro','calendar','event-studies','signals','signal-metrics'] },
+  { id: 'program-chat', file: 'program-chat.md', label: 'Program chatbot', keywords: ['anything','program','dashboard','explain','question','what is','why','how'], states: ['intelligence','market','technical','macro','calendar','event-studies','signals','signal-metrics','meta'] },
   { id: 'strategy-performance', file: 'strategy-performance.md', label: 'Strategy performance', keywords: ['performance','win rate','profit','loss','expectancy','drawdown','returns','strategy'], states: ['intelligence','event-studies','signals','signal-metrics'] },
   { id: 'edge-research', file: 'edge-research.md', label: 'Edge research', keywords: ['edge','advantage','expectancy','robust','oos','out of sample','monte carlo','bootstrap'], states: ['intelligence','event-studies','macro','technical','signals','signal-metrics'] },
   { id: 'trade-setup', file: 'trade-setup.md', label: 'Trade setup', keywords: ['trade setup','entry','stop loss','take profit','tp1','tp2','tp3','signal','buy','sell'], states: ['market','technical','calendar','signals','signal-metrics'] },
