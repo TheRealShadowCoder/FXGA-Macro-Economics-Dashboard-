@@ -175,6 +175,17 @@ async function buildContext(descriptor, body = {}) {
   for (const [key, value] of Object.entries(raw)) {
     context[key] = ['signals','signalMetrics','meta'].includes(key) ? value : compactState(key, value);
   }
+  context.program = {
+    name: 'FX Global Avengers Trading Academy Macro Intelligence Dashboard',
+    architecture: 'Cloudflare static frontend -> Google Cloud Run processing -> Firestore evidence/state -> Google Gemini explanation layer',
+    primaryModel: GEMINI_MODEL,
+    fallbackModel: GEMINI_FALLBACK_MODEL,
+    promptRouting: 'task-aware Markdown prompt library',
+    quotaPolicy: 'Google provider/project/model quota only; no FXGA hourly or daily Gemini cap',
+    chatbot: true,
+    liveIntelligenceJournal: true,
+    friendlyErrorTranslation: true,
+  };
   context.generatedAt = new Date().toISOString();
   context.evidencePolicy = 'Missing evidence is represented as missing/null and must never be synthesized.';
   return context;
@@ -212,7 +223,7 @@ async function invokeOnce(model, prompt) {
     let payload = {};
     try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: text.slice(0, 1000) }; }
     if (!response.ok) {
-      const providerCode = String(payload?.error?.code || payload?.code || '').toLowerCase();
+      const providerCode = String(payload?.error?.code || payload?.error?.type || payload?.code || '').toLowerCase();
       const providerMessage = String(payload?.error?.message || payload?.message || `Gemini ${model} returned HTTP ${response.status}`);
       const error = Object.assign(new Error(providerMessage), { statusCode: response.status, providerCode, retryAfterSeconds: retryAfterSeconds(response) });
       throw error;
@@ -249,8 +260,8 @@ async function invokeGemini(prompt) {
   catch (error) {
     const status = Number(error.statusCode || 500);
     const code = String(error.providerCode || error.code || '').toLowerCase();
-    const fallbackEligible = ['model_not_found','not_found'].includes(code) || [404, 429, 500, 502, 503, 504].includes(status);
-    if (!fallbackEligible || GEMINI_FALLBACK_MODEL === GEMINI_MODEL || code === 'quota_exceeded') throw error;
+    const fallbackEligible = ['model_not_found','not_found','quota_exceeded'].includes(code) || [404, 429, 500, 502, 503, 504].includes(status);
+    if (!fallbackEligible || GEMINI_FALLBACK_MODEL === GEMINI_MODEL) throw error;
     return invokeWithRetry(GEMINI_FALLBACK_MODEL, prompt);
   }
 }
@@ -271,7 +282,7 @@ async function cachedIntelligence(cacheId, ttlMs, work) {
   if (!task) {
     task = work();
     inFlight.set(cacheId, task);
-    task.finally(() => inFlight.delete(cacheId));
+    task.then(() => inFlight.delete(cacheId), () => inFlight.delete(cacheId));
   }
   const value = await task;
   return { value, cached: false, coalesced };
@@ -356,6 +367,7 @@ http.createServer = function fxgaIntelligenceCreateServer(options, requestListen
       ok: true, configured: Boolean(GEMINI_API_KEY), model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL,
       promptCount: publicPromptRegistry().length, promptRouting: 'task-aware-md-library', liveReport: true, chatbot: true,
       applicationHourlyCap: null, applicationDailyCap: null, providerQuotaManaged: true,
+      fallbackOnPrimaryQuota: GEMINI_FALLBACK_MODEL !== GEMINI_MODEL,
       endpoints: ['/api/gemini/chat','/api/gemini/live-report','/api/gemini/prompts','/api/errors/catalog'],
       timestamp: new Date().toISOString(),
     });
@@ -364,4 +376,4 @@ http.createServer = function fxgaIntelligenceCreateServer(options, requestListen
   return serverOptions === undefined ? originalCreateServer(wrapped) : originalCreateServer(serverOptions, wrapped);
 };
 
-console.log('FXGA intelligence extension loaded', { model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL, promptCount: publicPromptRegistry().length, providerQuotaManaged: true });
+console.log('FXGA intelligence extension loaded', { model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL, promptCount: publicPromptRegistry().length, providerQuotaManaged: true, fallbackOnPrimaryQuota: GEMINI_FALLBACK_MODEL !== GEMINI_MODEL });
