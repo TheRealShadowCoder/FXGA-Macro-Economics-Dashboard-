@@ -9,13 +9,20 @@ const GEMINI_FALLBACK_MODEL = String(process.env.GEMINI_FALLBACK_MODEL || 'gemin
 const PUBLIC_ORIGIN = String(process.env.FXGA_PUBLIC_ORIGIN || 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev').replace(/\/$/, '');
 const API_URL = 'https://generativelanguage.googleapis.com/v1/interactions';
 const MAX_BODY_BYTES = 32_000;
-const MAX_REQUESTS_PER_HOUR = Math.max(6, Math.min(120, Number(process.env.GEMINI_REQUESTS_PER_HOUR || 24)));
 const db = new Firestore({ projectId: PROJECT_ID, ignoreUndefinedProperties: true });
 const state = db.collection('fxga_collector_state');
 const chunks = db.collection('fxga_collector_state_chunks');
 const signals = db.collection('fxga_tradingview_signals');
 const cache = db.collection('fxga_gemini_cache');
-const rate = new Map();
+
+// Do not impose an FXGA requests-per-hour/day ceiling. Google Gemini's active
+// project/model quota is the source of truth. We conserve quota through Firestore
+// result caching and same-instance in-flight request coalescing instead.
+const inFlight = new Map();
+const quotaTelemetry = {
+  lastProvider429At: null,
+  lastRetryAfterSeconds: null,
+};
 
 const MODE_CONFIG = {
   'smc-signal': { ttlMs: 60 * 60_000, label: 'SMC setup explanation' },
@@ -47,22 +54,6 @@ function sendJson(req, res, status, payload, cacheControl = 'no-store') {
     'Cache-Control': cacheControl,
   });
   res.end(body);
-}
-
-function requestIp(req) {
-  return String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim().replace(/^::ffff:/, '');
-}
-
-function rateAllowed(req) {
-  const ip = requestIp(req);
-  const hour = Math.floor(Date.now() / 3_600_000);
-  const key = `${ip}:${hour}`;
-  const next = (rate.get(key) || 0) + 1;
-  rate.set(key, next);
-  if (rate.size > 5000) {
-    for (const [entry] of rate) if (!entry.endsWith(`:${hour}`)) rate.delete(entry);
-  }
-  return next <= MAX_REQUESTS_PER_HOUR;
 }
 
 async function readJson(req) {
@@ -246,6 +237,16 @@ function textFromInteraction(payload) {
   return '';
 }
 
+function retryAfterSeconds(response) {
+  const raw = String(response.headers.get('retry-after') || '').trim();
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds);
+  const date = Date.parse(raw);
+  if (Number.isFinite(date)) return Math.max(0, Math.ceil((date - Date.now()) / 1000));
+  return null;
+}
+
 async function invokeModel(model, prompt) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 35_000);
@@ -262,6 +263,11 @@ async function invokeModel(model, prompt) {
     if (!response.ok) {
       const error = new Error(`Gemini ${model} returned HTTP ${response.status}`);
       error.statusCode = response.status;
+      error.retryAfterSeconds = retryAfterSeconds(response);
+      if (response.status === 429) {
+        quotaTelemetry.lastProvider429At = new Date().toISOString();
+        quotaTelemetry.lastRetryAfterSeconds = error.retryAfterSeconds;
+      }
       throw error;
     }
     const output = textFromInteraction(payload);
@@ -278,9 +284,28 @@ async function invokeGemini(prompt) {
   }
 }
 
+async function createAnalysisDocument(mode, body, contextHash, cacheId, prompt) {
+  const result = await invokeGemini(prompt);
+  const document = {
+    schema: 'fxga.gemini.analysis.v1',
+    mode,
+    label: MODE_CONFIG[mode].label,
+    model: result.model,
+    output: result.output,
+    contextHash,
+    signalId: mode === 'smc-signal' ? String(body.signalId || '') : null,
+    usage: result.usage,
+    interactionId: result.interactionId,
+    createdAt: new Date().toISOString(),
+    quotaPolicy: 'provider-managed-no-artificial-hourly-or-daily-cap',
+    policy: 'Gemini is an explanatory layer over deterministic FXGA evidence. It does not create trading signals or guarantee outcomes.',
+  };
+  await cache.doc(cacheId).set(document, { merge: false });
+  return document;
+}
+
 async function analyze(req, res) {
   if (!GEMINI_API_KEY) return sendJson(req, res, 503, { error: 'Gemini is not configured on this Cloud Run service', configured: false });
-  if (!rateAllowed(req)) return sendJson(req, res, 429, { error: 'Gemini free-tier protection limit reached for this client. Try again later.' });
 
   let body;
   try { body = await readJson(req); }
@@ -299,33 +324,36 @@ async function analyze(req, res) {
   if (cachedSnap.exists) {
     const cached = cachedSnap.data();
     const age = Date.now() - Date.parse(cached.createdAt || 0);
-    if (Number.isFinite(age) && age >= 0 && age < MODE_CONFIG[mode].ttlMs) return sendJson(req, res, 200, { ...cached, cached: true }, 'private, max-age=30');
+    if (Number.isFinite(age) && age >= 0 && age < MODE_CONFIG[mode].ttlMs) {
+      return sendJson(req, res, 200, { ...cached, cached: true, coalesced: false }, 'private, max-age=30');
+    }
+  }
+
+  const prompt = promptFor(mode, context);
+  let task = inFlight.get(cacheId);
+  const coalesced = Boolean(task);
+  if (!task) {
+    task = createAnalysisDocument(mode, body, contextHash, cacheId, prompt);
+    inFlight.set(cacheId, task);
+    task.then(() => inFlight.delete(cacheId), () => inFlight.delete(cacheId));
   }
 
   try {
-    const result = await invokeGemini(promptFor(mode, context));
-    const document = {
-      schema: 'fxga.gemini.analysis.v1',
-      mode,
-      label: MODE_CONFIG[mode].label,
-      model: result.model,
-      output: result.output,
-      contextHash,
-      signalId: mode === 'smc-signal' ? String(body.signalId || '') : null,
-      usage: result.usage,
-      interactionId: result.interactionId,
-      createdAt: new Date().toISOString(),
-      policy: 'Gemini is an explanatory layer over deterministic FXGA evidence. It does not create trading signals or guarantee outcomes.',
-    };
-    await cache.doc(cacheId).set(document, { merge: false });
-    return sendJson(req, res, 200, { ...document, cached: false });
+    const document = await task;
+    return sendJson(req, res, 200, { ...document, cached: false, coalesced });
   } catch (error) {
     console.error('FXGA Gemini request failed', { mode, statusCode: error.statusCode || null, message: String(error.message || error).replace(/[A-Za-z0-9_-]{24,}/g, '[redacted]') });
     const status = [401, 403, 429].includes(Number(error.statusCode)) ? Number(error.statusCode) : 502;
     return sendJson(req, res, status, {
-      error: status === 401 || status === 403 ? 'Gemini authentication is not accepted. Rotate or verify the Secret Manager key.' : status === 429 ? 'Gemini free-tier quota/rate limit reached.' : 'Gemini analysis is temporarily unavailable.',
+      error: status === 401 || status === 403
+        ? 'Gemini authentication is not accepted. Rotate or verify the Secret Manager key.'
+        : status === 429
+          ? 'Google Gemini has reached an active project/model quota. FXGA is not imposing an additional hourly or daily cap.'
+          : 'Gemini analysis is temporarily unavailable.',
       model: GEMINI_MODEL,
       fallbackModel: GEMINI_FALLBACK_MODEL,
+      quotaPolicy: 'provider-managed-no-artificial-hourly-or-daily-cap',
+      retryAfterSeconds: error.retryAfterSeconds ?? null,
     });
   }
 }
@@ -352,13 +380,22 @@ http.createServer = function patchedCreateServer(options, requestListener) {
           fallbackModel: GEMINI_FALLBACK_MODEL,
           modes: Object.keys(MODE_CONFIG),
           keyExposedToBrowser: false,
+          quotaPolicy: 'provider-managed-no-artificial-hourly-or-daily-cap',
+          applicationHourlyCap: null,
+          applicationDailyCap: null,
+          firestoreCaching: true,
+          duplicateRequestCoalescing: true,
+          inFlightRequests: inFlight.size,
+          lastProvider429At: quotaTelemetry.lastProvider429At,
+          lastRetryAfterSeconds: quotaTelemetry.lastRetryAfterSeconds,
           timestamp: new Date().toISOString(),
         });
       }
       if (req.method !== 'POST') return sendJson(req, res, 405, { error: 'Gemini analysis requires POST' });
       if (url.pathname === '/api/gemini/explain-smc') {
-        const body = await readJson(req);
-        req[Symbol.for('fxga.gemini.body')] = body;
+        let body;
+        try { body = await readJson(req); }
+        catch (error) { return sendJson(req, res, error.statusCode || 400, { error: error.message }); }
         const rebuilt = JSON.stringify({ mode: 'smc-signal', signalId: body.signalId });
         const originalAsyncIterator = req[Symbol.asyncIterator];
         req[Symbol.asyncIterator] = async function* () { yield Buffer.from(rebuilt); };
@@ -372,4 +409,9 @@ http.createServer = function patchedCreateServer(options, requestListener) {
   return serverOptions === undefined ? originalCreateServer(wrapped) : originalCreateServer(serverOptions, wrapped);
 };
 
-console.log('FXGA Gemini intelligence gateway loaded', { configured: Boolean(GEMINI_API_KEY), model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL });
+console.log('FXGA Gemini intelligence gateway loaded', {
+  configured: Boolean(GEMINI_API_KEY),
+  model: GEMINI_MODEL,
+  fallbackModel: GEMINI_FALLBACK_MODEL,
+  quotaPolicy: 'provider-managed-no-artificial-hourly-or-daily-cap',
+});
