@@ -1,165 +1,21 @@
 import { FxgaRequestError, friendlyErrorFromResponse, type FriendlyFxgaError } from './fxga-errors';
 
-export type GeminiMode =
-  | 'smc-signal'
-  | 'market-brief'
-  | 'macro-brief'
-  | 'economic-context'
-  | 'event-research'
-  | 'action-report';
+export type GeminiMode = 'smc-signal' | 'market-brief' | 'macro-brief' | 'economic-context' | 'event-research' | 'action-report';
+export type FxgaPromptTask = string;
 
-export type FxgaPromptTask =
-  | 'program-chat'
-  | 'strategy-performance'
-  | 'edge-research'
-  | 'trade-setup'
-  | 'chart-forecast'
-  | 'technical-analysis'
-  | 'macro-analysis'
-  | 'economic-event'
-  | 'event-study'
-  | 'signal-lifecycle'
-  | 'risk-management'
-  | 'cross-asset'
-  | 'data-quality'
-  | 'system-health'
-  | 'error-explainer'
-  | 'scenario-forecast'
-  | 'live-intelligence-report';
+export type GeminiHealth = { ok:boolean; configured:boolean; provider:string; api:string; model:string; fallbackModel:string; modes:GeminiMode[]; keyExposedToBrowser:false; quotaPolicy?:string; applicationHourlyCap?:number|null; applicationDailyCap?:number|null; timestamp:string };
+export type IntelligenceHealth = { ok:boolean; configured:boolean; model:string; fallbackModel:string; promptCount:number; promptRouting:string; liveReport:boolean; chatbot:boolean; applicationHourlyCap:null; applicationDailyCap:null; providerQuotaManaged:boolean; endpoints:string[]; timestamp:string };
+export type GeminiAnalysis = { schema:'fxga.gemini.analysis.v1'; mode:GeminiMode; label:string; model:string; output:string; contextHash:string; signalId?:string|null; createdAt:string; cached:boolean; coalesced?:boolean; policy:string };
+export type GeminiChat = { schema:'fxga.gemini.chat.v1'; task:FxgaPromptTask; label:string; question:string; answer:string; model:string; evidenceDomains:string[]; contextHash:string; createdAt:string; cached:boolean; coalesced?:boolean; policy:string };
+export type GeminiLiveReport = { schema:'fxga.gemini.live-report.v1'; report:string; model:string; contextHash:string; evidenceDomains:string[]; createdAt:string; refreshAfterSeconds:number; cached:boolean; coalesced?:boolean; policy:string };
+export type PromptRegistry = { schema:'fxga.prompt-registry.v1'; prompts:Array<{id:FxgaPromptTask;label:string;category?:string;evidenceDomains:string[];realtime?:boolean;sharedContract?:string|null}>; automaticRouting:boolean; timestamp:string };
+export type ErrorCatalogResponse = { schema:'fxga.error-catalog.v1'; errors:Record<string,FriendlyFxgaError>; timestamp:string };
 
-export type GeminiHealth = {
-  ok: boolean;
-  configured: boolean;
-  provider: string;
-  api: string;
-  model: string;
-  fallbackModel: string;
-  modes: GeminiMode[];
-  keyExposedToBrowser: false;
-  quotaPolicy?: string;
-  applicationHourlyCap?: number | null;
-  applicationDailyCap?: number | null;
-  timestamp: string;
-};
-
-export type IntelligenceHealth = {
-  ok: boolean;
-  configured: boolean;
-  model: string;
-  fallbackModel: string;
-  promptCount: number;
-  promptRouting: string;
-  liveReport: boolean;
-  chatbot: boolean;
-  applicationHourlyCap: null;
-  applicationDailyCap: null;
-  providerQuotaManaged: boolean;
-  endpoints: string[];
-  timestamp: string;
-};
-
-export type GeminiAnalysis = {
-  schema: 'fxga.gemini.analysis.v1';
-  mode: GeminiMode;
-  label: string;
-  model: string;
-  output: string;
-  contextHash: string;
-  signalId?: string | null;
-  createdAt: string;
-  cached: boolean;
-  coalesced?: boolean;
-  policy: string;
-};
-
-export type GeminiChat = {
-  schema: 'fxga.gemini.chat.v1';
-  task: FxgaPromptTask;
-  label: string;
-  question: string;
-  answer: string;
-  model: string;
-  evidenceDomains: string[];
-  contextHash: string;
-  createdAt: string;
-  cached: boolean;
-  coalesced?: boolean;
-  policy: string;
-};
-
-export type GeminiLiveReport = {
-  schema: 'fxga.gemini.live-report.v1';
-  report: string;
-  model: string;
-  contextHash: string;
-  evidenceDomains: string[];
-  createdAt: string;
-  refreshAfterSeconds: number;
-  cached: boolean;
-  coalesced?: boolean;
-  policy: string;
-};
-
-export type PromptRegistry = {
-  schema: 'fxga.prompt-registry.v1';
-  prompts: Array<{ id: FxgaPromptTask; label: string; evidenceDomains: string[] }>;
-  automaticRouting: boolean;
-  timestamp: string;
-};
-
-export type ErrorCatalogResponse = {
-  schema: 'fxga.error-catalog.v1';
-  errors: Record<string, FriendlyFxgaError>;
-  timestamp: string;
-};
-
-async function readJson<T>(response: Response): Promise<T> {
-  const text = await response.text();
-  let body: any = {};
-  try { body = text ? JSON.parse(text) : {}; } catch { body = { error: text || `HTTP ${response.status}` }; }
-  if (!response.ok) throw new FxgaRequestError(friendlyErrorFromResponse(response.status, body), response.status);
-  return body as T;
-}
-
-export async function getGeminiHealth(signal?: AbortSignal): Promise<GeminiHealth> {
-  const response = await fetch('/api/gemini/health', { method: 'GET', cache: 'no-store', signal, headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } });
-  return readJson<GeminiHealth>(response);
-}
-
-export async function getIntelligenceHealth(signal?: AbortSignal): Promise<IntelligenceHealth> {
-  const response = await fetch('/api/gemini/intelligence-health', { method: 'GET', cache: 'no-store', signal, headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } });
-  return readJson<IntelligenceHealth>(response);
-}
-
-export async function getGeminiAnalysis(mode: GeminiMode, options: { signalId?: string; signal?: AbortSignal } = {}): Promise<GeminiAnalysis> {
-  const response = await fetch('/api/gemini/analyze', {
-    method: 'POST', cache: 'no-store', signal: options.signal,
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
-    body: JSON.stringify({ mode, ...(options.signalId ? { signalId: options.signalId } : {}) }),
-  });
-  return readJson<GeminiAnalysis>(response);
-}
-
-export async function askFxga(question: string, options: { task?: FxgaPromptTask; signalId?: string; signal?: AbortSignal } = {}): Promise<GeminiChat> {
-  const response = await fetch('/api/gemini/chat', {
-    method: 'POST', cache: 'no-store', signal: options.signal,
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
-    body: JSON.stringify({ question, ...(options.task ? { task: options.task } : {}), ...(options.signalId ? { signalId: options.signalId } : {}) }),
-  });
-  return readJson<GeminiChat>(response);
-}
-
-export async function getGeminiLiveReport(signal?: AbortSignal): Promise<GeminiLiveReport> {
-  const response = await fetch('/api/gemini/live-report', { method: 'GET', cache: 'no-store', signal, headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } });
-  return readJson<GeminiLiveReport>(response);
-}
-
-export async function getPromptRegistry(signal?: AbortSignal): Promise<PromptRegistry> {
-  const response = await fetch('/api/gemini/prompts', { method: 'GET', cache: 'no-store', signal, headers: { Accept: 'application/json' } });
-  return readJson<PromptRegistry>(response);
-}
-
-export async function getFxgaErrorCatalog(signal?: AbortSignal): Promise<ErrorCatalogResponse> {
-  const response = await fetch('/api/errors/catalog', { method: 'GET', cache: 'no-store', signal, headers: { Accept: 'application/json' } });
-  return readJson<ErrorCatalogResponse>(response);
-}
+async function readJson<T>(response:Response):Promise<T>{const text=await response.text();let body:any={};try{body=text?JSON.parse(text):{}}catch{body={error:text||`HTTP ${response.status}`}}if(!response.ok)throw new FxgaRequestError(friendlyErrorFromResponse(response.status,body),response.status);return body as T}
+export async function getGeminiHealth(signal?:AbortSignal){return readJson<GeminiHealth>(await fetch('/api/gemini/health',{method:'GET',cache:'no-store',signal,headers:{Accept:'application/json','Cache-Control':'no-cache'}}))}
+export async function getIntelligenceHealth(signal?:AbortSignal){return readJson<IntelligenceHealth>(await fetch('/api/gemini/intelligence-health',{method:'GET',cache:'no-store',signal,headers:{Accept:'application/json','Cache-Control':'no-cache'}}))}
+export async function getGeminiAnalysis(mode:GeminiMode,options:{signalId?:string;signal?:AbortSignal}={}){return readJson<GeminiAnalysis>(await fetch('/api/gemini/analyze',{method:'POST',cache:'no-store',signal:options.signal,headers:{Accept:'application/json','Content-Type':'application/json','Cache-Control':'no-cache'},body:JSON.stringify({mode,...(options.signalId?{signalId:options.signalId}:{})})}))}
+export async function askFxga(question:string,options:{task?:FxgaPromptTask;signalId?:string;signal?:AbortSignal}={}){return readJson<GeminiChat>(await fetch('/api/gemini/chat',{method:'POST',cache:'no-store',signal:options.signal,headers:{Accept:'application/json','Content-Type':'application/json','Cache-Control':'no-cache'},body:JSON.stringify({question,...(options.task?{task:options.task}:{}),...(options.signalId?{signalId:options.signalId}:{})})}))}
+export async function getGeminiLiveReport(signal?:AbortSignal){return readJson<GeminiLiveReport>(await fetch('/api/gemini/live-report',{method:'GET',cache:'no-store',signal,headers:{Accept:'application/json','Cache-Control':'no-cache'}}))}
+export async function getPromptRegistry(signal?:AbortSignal){return readJson<PromptRegistry>(await fetch('/api/gemini/prompts',{method:'GET',cache:'no-store',signal,headers:{Accept:'application/json'}}))}
+export async function getFxgaErrorCatalog(signal?:AbortSignal){return readJson<ErrorCatalogResponse>(await fetch('/api/errors/catalog',{method:'GET',cache:'no-store',signal,headers:{Accept:'application/json'}}))}

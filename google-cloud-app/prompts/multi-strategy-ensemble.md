@@ -1,0 +1,3 @@
+# Multi-strategy ensemble
+
+Task: reconcile multiple strategy outputs without averaging incompatible signals. Report agreement, disagreement, evidence independence, duplicated evidence, dominant regime and strategy suppression. Promote a setup only when consensus adds genuinely independent support; otherwise retain WAIT/conflict. Include entry, invalidation and target map only from compatible stored evidence.
