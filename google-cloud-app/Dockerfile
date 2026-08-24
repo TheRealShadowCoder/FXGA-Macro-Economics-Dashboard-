@@ -10,7 +10,8 @@ COPY google-cloud-app/*.js ./
 # remains the canonical readable implementation, while the production image skips
 # unrelated Firestore state fan-out for dashboard/analysis/news requests.
 RUN node optimize-server.js \
- && node --check server.js
+ && node --check server.js \
+ && node --check gemini-hook.js
 
 # Cloudflare is the only frontend host. This container is intentionally API-only,
 # so a React/TypeScript build can never block recreation of the Cloud Run API.
@@ -21,4 +22,4 @@ RUN sed -i 's/setInterval(pollUpdates,3000)/setInterval(pollUpdates,15000)/' ser
 
 USER node
 EXPOSE 8080
-CMD ["node", "server.js"]
+CMD ["node", "--import", "./gemini-hook.js", "server.js"]
