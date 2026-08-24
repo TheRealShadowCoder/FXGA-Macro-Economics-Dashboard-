@@ -5,13 +5,19 @@ WORKDIR /app
 COPY google-cloud-app/package.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY google-cloud-app/*.js ./
+COPY google-cloud-app/prompts ./prompts
 
 # Inject latency-sensitive API fast paths at image-build time. The source server
 # remains the canonical readable implementation, while the production image skips
 # unrelated Firestore state fan-out for dashboard/analysis/news requests.
 RUN node optimize-server.js \
  && node --check server.js \
- && node --check gemini-hook.js
+ && node --check gemini-hook.js \
+ && node --check fxga-error-catalog.js \
+ && node --check fxga-prompt-library.js \
+ && node --check fxga-intelligence-extension.js \
+ && test -f prompts/program-chat.md \
+ && test -f prompts/live-intelligence-report.md
 
 # Cloudflare is the only frontend host. This container is intentionally API-only,
 # so a React/TypeScript build can never block recreation of the Cloud Run API.
@@ -22,4 +28,4 @@ RUN sed -i 's/setInterval(pollUpdates,3000)/setInterval(pollUpdates,15000)/' ser
 
 USER node
 EXPOSE 8080
-CMD ["node", "--import", "./gemini-hook.js", "server.js"]
+CMD ["node", "--import", "./gemini-hook.js", "--import", "./fxga-intelligence-extension.js", "server.js"]
