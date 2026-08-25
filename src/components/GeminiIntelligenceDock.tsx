@@ -33,6 +33,40 @@ const formatTime = (value?: string) => {
   return Number.isFinite(time) ? new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : value;
 };
 
+const formatElapsed = (milliseconds: number) => `${Math.max(0, milliseconds / 1000).toFixed(1)}s`;
+
+const waitStage = (milliseconds: number) => {
+  if (milliseconds < 700) return { label: 'Preparing FXGA evidence', detail: 'Collecting the context needed for this request.' };
+  if (milliseconds < 1_700) return { label: 'Routing request to Gemini', detail: 'Selecting the available model route and sending the evidence.' };
+  if (milliseconds < 7_000) return { label: 'Gemini is thinking', detail: 'The model is processing the evidence and constructing the answer.' };
+  if (milliseconds < 18_000) return { label: 'Gemini is still thinking', detail: 'The request is active. Complex evidence can take a little longer.' };
+  return { label: 'Gemini is still working', detail: 'The request is still active; FXGA will keep waiting unless the server returns an error.' };
+};
+
+function ActivityDots() {
+  return <span className="gemini-activity-dots" aria-hidden="true"><i></i><i></i><i></i></span>;
+}
+
+function ProgressCard({ elapsedMs, rendering = false, compact = false }: { elapsedMs: number; rendering?: boolean; compact?: boolean }) {
+  const stage = rendering
+    ? { label: 'Response received · FXGA is typing', detail: 'Gemini has finished the request. The answer is now being displayed.' }
+    : waitStage(elapsedMs);
+
+  return (
+    <div className={`gemini-progress-card ${compact ? 'compact' : ''}`} role="status" aria-live="polite">
+      <div className="gemini-progress-topline">
+        <span className={`gemini-progress-orb ${rendering ? 'rendering' : ''}`}></span>
+        <strong>{stage.label}</strong>
+        <ActivityDots />
+        <time>{formatElapsed(elapsedMs)}</time>
+      </div>
+      <p>{stage.detail}</p>
+      <div className="gemini-progress-track"><span></span></div>
+      <small>Live status · completion percentage is intentionally not guessed because Gemini does not expose provider-side progress.</small>
+    </div>
+  );
+}
+
 function ErrorCard({ value }: { value: FriendlyFxgaError }) {
   return (
     <div className="gemini-error-card">
@@ -55,10 +89,14 @@ export function GeminiIntelligenceDock() {
   const [mode, setMode] = useState<Exclude<GeminiMode, 'smc-signal'>>('action-report');
   const [analysis, setAnalysis] = useState<GeminiAnalysis | null>(null);
   const [chat, setChat] = useState<GeminiChat | null>(null);
+  const [displayedAnswer, setDisplayedAnswer] = useState('');
   const [question, setQuestion] = useState('');
   const [task, setTask] = useState<'auto' | FxgaPromptTask>('auto');
   const [loading, setLoading] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatRendering, setChatRendering] = useState(false);
+  const [analysisElapsedMs, setAnalysisElapsedMs] = useState(0);
+  const [chatElapsedMs, setChatElapsedMs] = useState(0);
   const [healthChecking, setHealthChecking] = useState(true);
   const [healthError, setHealthError] = useState('');
   const [error, setError] = useState<FriendlyFxgaError | null>(null);
@@ -98,6 +136,43 @@ export function GeminiIntelligenceDock() {
     return () => window.clearInterval(timer);
   }, [open, configured, refreshHealth]);
 
+  useEffect(() => {
+    if (!chatLoading) return;
+    const startedAt = Date.now() - chatElapsedMs;
+    const timer = window.setInterval(() => setChatElapsedMs(Date.now() - startedAt), 100);
+    return () => window.clearInterval(timer);
+  }, [chatLoading]);
+
+  useEffect(() => {
+    if (!loading) return;
+    const startedAt = Date.now() - analysisElapsedMs;
+    const timer = window.setInterval(() => setAnalysisElapsedMs(Date.now() - startedAt), 100);
+    return () => window.clearInterval(timer);
+  }, [loading]);
+
+  useEffect(() => {
+    if (!chat || !chatRendering) return;
+    const answer = chat.answer || 'Gemini returned no displayable answer.';
+    if (!answer.length) {
+      setDisplayedAnswer(answer);
+      setChatRendering(false);
+      return;
+    }
+
+    let cursor = 0;
+    setDisplayedAnswer('');
+    const chunkSize = Math.max(3, Math.ceil(answer.length / 150));
+    const timer = window.setInterval(() => {
+      cursor = Math.min(answer.length, cursor + chunkSize);
+      setDisplayedAnswer(answer.slice(0, cursor));
+      if (cursor >= answer.length) {
+        window.clearInterval(timer);
+        setChatRendering(false);
+      }
+    }, 18);
+    return () => window.clearInterval(timer);
+  }, [chat, chatRendering]);
+
   const promptGroups = useMemo(() => {
     const groups = new Map<string, PromptRegistry['prompts']>();
     for (const item of registry?.prompts ?? []) {
@@ -114,6 +189,7 @@ export function GeminiIntelligenceDock() {
   async function run(nextMode = mode) {
     setMode(nextMode);
     setLoading(true);
+    setAnalysisElapsedMs(0);
     setError(null);
     try {
       setAnalysis(await getGeminiAnalysis(nextMode));
@@ -129,14 +205,20 @@ export function GeminiIntelligenceDock() {
 
   async function ask() {
     const clean = question.trim();
-    if (!clean || chatLoading) return;
+    if (!clean || chatLoading || chatRendering) return;
     setChatLoading(true);
+    setChatElapsedMs(0);
+    setDisplayedAnswer('');
+    setChat(null);
     setError(null);
     try {
-      setChat(await askFxga(clean, task === 'auto' ? {} : { task }));
+      const result = await askFxga(clean, task === 'auto' ? {} : { task });
+      setChat(result);
+      setChatRendering(true);
       if (!configured) void refreshHealth();
     } catch (caught) {
       setChat(null);
+      setDisplayedAnswer('');
       setError(friendlyErrorFromThrown(caught));
       void refreshHealth();
     } finally {
@@ -145,10 +227,10 @@ export function GeminiIntelligenceDock() {
   }
 
   useEffect(() => {
-    if (!open || !liveTradeTask || !question.trim() || chatLoading) return;
+    if (!open || !liveTradeTask || !question.trim() || chatLoading || chatRendering) return;
     const timer = window.setInterval(() => void ask(), LIVE_TRADE_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [open, liveTradeTask, task, question, chatLoading]);
+  }, [open, liveTradeTask, task, question, chatLoading, chatRendering]);
 
   const statusText = healthChecking && !healthKnown
     ? 'Checking Google Gemini configuration…'
@@ -158,12 +240,18 @@ export function GeminiIntelligenceDock() {
         ? 'Gemini credential is not active yet · server recovery is enabled · Ask will retry directly'
         : 'Gemini health unavailable · Ask will retry Google Cloud directly';
 
+  const chatButtonText = chatLoading
+    ? chatElapsedMs < 1_700 ? 'Preparing…' : 'Gemini thinking…'
+    : chatRendering
+      ? 'Typing answer…'
+      : 'Ask FXGA';
+
   return (
     <div className={`gemini-dock ${open ? 'open' : ''}`}>
       <button className="gemini-dock-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span className="gemini-spark">✦</span>
         <span>Ask FXGA AI</span>
-        <i className={configured ? 'online' : 'offline'}></i>
+        {(chatLoading || chatRendering) ? <ActivityDots /> : <i className={configured ? 'online' : 'offline'}></i>}
       </button>
 
       {open && (
@@ -200,19 +288,25 @@ export function GeminiIntelligenceDock() {
                   </optgroup>
                 ))}
               </select>
-              <button onClick={() => void ask()} disabled={chatLoading || !question.trim()}>{chatLoading ? 'Analyzing…' : 'Ask FXGA'}</button>
+              <button onClick={() => void ask()} disabled={chatLoading || chatRendering || !question.trim()}>{chatButtonText}</button>
               {liveTradeTask && <small className="gemini-live-note">LIVE · re-checks current evidence every 15 seconds</small>}
             </div>
 
+            {(chatLoading || chatRendering) && <ProgressCard elapsedMs={chatElapsedMs} rendering={chatRendering} compact />}
+
             {chat && (
-              <div className="gemini-chat-answer">
+              <div className={`gemini-chat-answer ${chatRendering ? 'typing' : ''}`}>
                 <div className="gemini-output-meta">
                   <span>{chat.label || 'FXGA intelligence'}</span>
                   <span>{chat.model || 'Gemini'}</span>
                   <span>{chat.cached ? 'cached' : 'fresh'}</span>
                   <span>{formatTime(chat.createdAt)}</span>
+                  {chatRendering && <span className="gemini-typing-label">typing</span>}
                 </div>
-                <div className="gemini-output-text">{chat.answer || 'Gemini returned no displayable answer.'}</div>
+                <div className="gemini-output-text">
+                  {displayedAnswer || (chatRendering ? '' : chat.answer || 'Gemini returned no displayable answer.')}
+                  {chatRendering && <span className="gemini-typing-caret" aria-hidden="true"></span>}
+                </div>
                 <footer>Evidence: {(chat.evidenceDomains ?? []).join(' · ') || 'current FXGA evidence'} · {chat.policy || 'Evidence-grounded analysis only.'}</footer>
               </div>
             )}
@@ -229,7 +323,7 @@ export function GeminiIntelligenceDock() {
 
           {error && <ErrorCard value={error} />}
           <div className="gemini-output">
-            {loading && <div className="gemini-loading"><span></span><p>Reading FXGA evidence and generating explanation…</p></div>}
+            {loading && <ProgressCard elapsedMs={analysisElapsedMs} />}
             {!loading && !error && !analysis && <div className="gemini-empty"><strong>{selected.label}</strong><p>Select a one-click intelligence mode, or ask the chatbot anything about the program. The request goes directly to Google Cloud; the Gemini credential never enters the browser.</p></div>}
             {!loading && analysis && (
               <>
