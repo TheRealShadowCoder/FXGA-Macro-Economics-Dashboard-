@@ -1,0 +1,101 @@
+name: Verify FXGA MT5 All Timeframes Live
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ['Deploy FXGA Google Cloud MT5 Signal Ingress']
+    types: [completed]
+
+permissions:
+  contents: read
+
+env:
+  MT5_URL: https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app
+  SYMBOL: EURUSD
+
+jobs:
+  verify:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify official timeframe registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error "$MT5_URL/api/mt5/price-cache/status" -o /tmp/status.json
+          node <<'NODE'
+          const fs=require('fs');
+          const status=JSON.parse(fs.readFileSync('/tmp/status.json','utf8'));
+          const expected=['M1','M2','M3','M4','M5','M6','M10','M12','M15','M20','M30','H1','H2','H3','H4','H6','H8','H12','D1','W1','MN1'];
+          const actual=status.derivedTimeframes||[];
+          const missing=expected.filter(tf=>!actual.includes(tf));
+          const unexpected=actual.filter(tf=>!expected.includes(tf));
+          if(missing.length||unexpected.length||actual.length!==expected.length){
+            throw new Error(`MT5 timeframe registry mismatch: missing=${missing.join(',')} unexpected=${unexpected.join(',')} count=${actual.length}`);
+          }
+          if(status.baseTimeframe!=='M1') throw new Error(`Expected canonical M1, got ${status.baseTimeframe}`);
+          if(status.management?.canonicalM1Only!==true||status.management?.reconstructionOnDemand!==true) throw new Error('Canonical M1 reconstruction contract missing');
+          console.log('Official MT5 timeframe registry verified:',actual.join(','));
+          NODE
+
+      - name: Query every official timeframe
+        shell: bash
+        run: |
+          set -euo pipefail
+          FRAMES=(M1 M2 M3 M4 M5 M6 M10 M12 M15 M20 M30 H1 H2 H3 H4 H6 H8 H12 D1 W1 MN1)
+          rm -f /tmp/mt5-timeframe-results.ndjson
+          for tf in "${FRAMES[@]}"; do
+            curl --fail --silent --show-error \
+              "$MT5_URL/api/mt5/prices?symbol=$SYMBOL&timeframe=$tf&limit=3" \
+              -o "/tmp/$tf.json"
+            TF="$tf" node <<'NODE' >> /tmp/mt5-timeframe-results.ndjson
+          const fs=require('fs');
+          const tf=process.env.TF;
+          const data=JSON.parse(fs.readFileSync(`/tmp/${tf}.json`,'utf8'));
+          if(data.timeframe!==tf) throw new Error(`${tf}: response timeframe mismatch ${data.timeframe}`);
+          if(data.baseTimeframe!=='M1') throw new Error(`${tf}: base timeframe must remain M1`);
+          if(!Array.isArray(data.bars)) throw new Error(`${tf}: bars must be an array`);
+          if(data.count!==data.bars.length) throw new Error(`${tf}: count mismatch`);
+          if(tf!=='M1'&&data.derived!==true) throw new Error(`${tf}: derived flag must be true`);
+          if(tf==='M1'&&data.derived===true) throw new Error('M1 must remain canonical, not derived');
+          if(data.bars.length){
+            for(const bar of data.bars){
+              if(!Array.isArray(bar)||bar.length<8) throw new Error(`${tf}: malformed OHLCV tuple`);
+              const [time,open,high,low,close]=bar;
+              if(![time,open,high,low,close].every(Number.isFinite)) throw new Error(`${tf}: non-finite OHLC value`);
+              if(high<Math.max(open,close)||low>Math.min(open,close)||high<low) throw new Error(`${tf}: invalid OHLC relationship`);
+            }
+          }
+          const last=data.bars.at(-1)?.[0]??null;
+          console.log(JSON.stringify({timeframe:tf,count:data.count,last,derived:Boolean(data.derived)}));
+          NODE
+          done
+          cat /tmp/mt5-timeframe-results.ndjson
+
+      - name: Verify W1 and MN1 UTC alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          const weekly=JSON.parse(fs.readFileSync('/tmp/W1.json','utf8'));
+          const monthly=JSON.parse(fs.readFileSync('/tmp/MN1.json','utf8'));
+          for(const bar of weekly.bars||[]){
+            const d=new Date(bar[0]);
+            if(d.getUTCDay()!==1||d.getUTCHours()!==0||d.getUTCMinutes()!==0||d.getUTCSeconds()!==0){
+              throw new Error(`W1 bar is not Monday 00:00 UTC: ${d.toISOString()}`);
+            }
+          }
+          for(const bar of monthly.bars||[]){
+            const d=new Date(bar[0]);
+            if(d.getUTCDate()!==1||d.getUTCHours()!==0||d.getUTCMinutes()!==0||d.getUTCSeconds()!==0){
+              throw new Error(`MN1 bar is not calendar-month 00:00 UTC: ${d.toISOString()}`);
+            }
+          }
+          console.log('W1 Monday UTC and MN1 calendar-month UTC alignment verified',{weeklyBars:weekly.count,monthlyBars:monthly.count});
+          NODE
+
+      - name: Summary
+        run: |
+          echo 'All 21 official MT5 periods are live and queryable from canonical M1.'
+          echo 'M1 M2 M3 M4 M5 M6 M10 M12 M15 M20 M30 H1 H2 H3 H4 H6 H8 H12 D1 W1 MN1'
