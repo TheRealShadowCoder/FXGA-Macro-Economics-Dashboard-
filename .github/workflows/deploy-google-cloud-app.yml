@@ -114,15 +114,28 @@ jobs:
           set -euo pipefail
           gcloud config set project "$GCP_PROJECT_ID"
 
+          SECRET_EXISTS=false
           if gcloud secrets describe "$GEMINI_SECRET_NAME" --format='value(name)' >/dev/null 2>&1; then
-            echo 'Gemini Secret Manager entry found.'
-          elif [ -n "${GEMINI_API_KEY_FROM_GITHUB:-}" ]; then
-            echo 'Gemini Secret Manager entry is missing; creating it from the protected GitHub Actions GEMINI_API_KEY secret.'
-            printf '%s' "$GEMINI_API_KEY_FROM_GITHUB" | gcloud secrets create "$GEMINI_SECRET_NAME" \
-              --replication-policy=automatic \
-              --data-file=- \
-              --quiet
-            echo 'Gemini Secret Manager entry created without exposing the credential.'
+            SECRET_EXISTS=true
+          fi
+
+          if [ -n "${GEMINI_API_KEY_FROM_GITHUB:-}" ]; then
+            if [ "$SECRET_EXISTS" = 'true' ]; then
+              echo 'Gemini Secret Manager entry exists; synchronizing the protected GitHub Actions GEMINI_API_KEY as a new latest version.'
+              printf '%s' "$GEMINI_API_KEY_FROM_GITHUB" | gcloud secrets versions add "$GEMINI_SECRET_NAME" \
+                --data-file=- \
+                --quiet
+              echo 'Gemini Secret Manager latest version synchronized without exposing the credential.'
+            else
+              echo 'Gemini Secret Manager entry is missing; creating it from the protected GitHub Actions GEMINI_API_KEY secret.'
+              printf '%s' "$GEMINI_API_KEY_FROM_GITHUB" | gcloud secrets create "$GEMINI_SECRET_NAME" \
+                --replication-policy=automatic \
+                --data-file=- \
+                --quiet
+              echo 'Gemini Secret Manager entry created without exposing the credential.'
+            fi
+          elif [ "$SECRET_EXISTS" = 'true' ]; then
+            echo 'GitHub Actions GEMINI_API_KEY is not set; retaining the existing Google Secret Manager credential.'
           else
             echo '::error::Gemini is required but no credential is configured. Add repository Actions secret GEMINI_API_KEY, or create Secret Manager secret gemini-api-key in project fxglobalavengerstradingacademy, then rerun this workflow.'
             exit 1
@@ -141,6 +154,46 @@ jobs:
 
           echo 'configured=true' >> "$GITHUB_OUTPUT"
           echo 'GEMINI_CONFIGURED=true' >> "$GITHUB_ENV"
+
+      - name: Verify Gemini credential against current Interactions API
+        run: |
+          set -euo pipefail
+          GEMINI_KEY="$(gcloud secrets versions access latest --secret="$GEMINI_SECRET_NAME")"
+          test -n "$GEMINI_KEY" || { echo '::error::Latest Gemini secret version is empty'; exit 1; }
+
+          SUCCESS=false
+          LAST_ERROR=''
+          for MODEL in "$GEMINI_MODEL" "$GEMINI_FALLBACK_MODEL"; do
+            payload="$(jq -nc --arg model "$MODEL" '{model:$model,input:"Reply with exactly: FXGA_GEMINI_OK",store:false,generation_config:{max_output_tokens:32}}')"
+            HTTP_STATUS="$(curl -sS --connect-timeout 15 --max-time 60 \
+              -o /tmp/gemini-provider.json \
+              -w '%{http_code}' \
+              -X POST 'https://generativelanguage.googleapis.com/v1/interactions' \
+              -H "x-goog-api-key: $GEMINI_KEY" \
+              -H 'Content-Type: application/json' \
+              --data "$payload" || true)"
+
+            if [[ "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
+              ANSWER="$(jq -r '[.steps[]? | select(.type=="model_output") | .content[]? | select(.type=="text") | .text] | join("")' /tmp/gemini-provider.json)"
+              if [ -n "$ANSWER" ]; then
+                echo "Gemini provider live response via $MODEL: $ANSWER"
+                SUCCESS=true
+                break
+              fi
+              LAST_ERROR="HTTP ${HTTP_STATUS} from ${MODEL}, but no model_output text was returned"
+              continue
+            fi
+
+            PROVIDER_MESSAGE="$(jq -r 'try (.error.message // .message // .error.status // empty) catch empty' /tmp/gemini-provider.json 2>/dev/null || true)"
+            LAST_ERROR="${MODEL} returned HTTP ${HTTP_STATUS}${PROVIDER_MESSAGE:+: $PROVIDER_MESSAGE}"
+            echo "::warning::$LAST_ERROR"
+          done
+
+          if [ "$SUCCESS" != 'true' ]; then
+            echo "::error::Gemini credential/provider smoke test failed. $LAST_ERROR"
+            echo '::error::Use a current Gemini Auth key from Google AI Studio. Unrestricted Standard keys are rejected now and Standard keys stop working in September 2026.'
+            exit 1
+          fi
 
       - name: Build and push API-only dashboard container
         run: |
@@ -230,7 +283,8 @@ jobs:
           echo "Gemini health: $APP_URL/api/gemini/health"
           echo "Gemini analysis: $APP_URL/api/gemini/analyze"
           echo "Gemini configured: true (required and live-verified)"
-          echo "Gemini credential source: Google Secret Manager; GitHub Actions GEMINI_API_KEY can bootstrap the missing secret without exposing it"
+          echo "Gemini credential source: GitHub Actions GEMINI_API_KEY is synchronized into Google Secret Manager as the latest secret version when present"
+          echo "Gemini credential validation: live Interactions API model_output required before deployment"
           echo "Gemini routing: $GEMINI_MODEL -> $GEMINI_FALLBACK_MODEL -> $GEMINI_RESERVE_MODEL"
           echo "Gemini 429 strategy: immediate model failover plus per-model cooldown; provider Retry-After honored when supplied"
           echo "Gemini quota: Google provider/project/model limits only; no FXGA hourly or daily request cap"
