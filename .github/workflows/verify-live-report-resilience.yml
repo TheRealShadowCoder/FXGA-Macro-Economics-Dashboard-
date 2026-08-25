@@ -27,15 +27,16 @@ jobs:
             -o /tmp/live-report.json \
             -w '%{http_code}' \
             "${API_BASE}/api/gemini/live-report")
+          printf '%s' "$HTTP" > /tmp/http-status.txt
           echo "LIVE_REPORT_HTTP=${HTTP}"
-          cat /tmp/live-report.json | jq '{schema,model,cached,stale,degraded,source,providerThrottled,retryAfterSeconds,refreshAfterSeconds,compatibilityRoute,reportLength:(.report|length),error,friendlyError}'
+          jq '{schema,model,cached,stale,degraded,source,providerThrottled,retryAfterSeconds,refreshAfterSeconds,compatibilityRoute,reportLength:(.report|length),error,friendlyError}' /tmp/live-report.json
 
           curl -fsS --connect-timeout 10 --max-time 30 \
             "${API_BASE}/api/gemini/file-context-status" > /tmp/file-status.json
 
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const http = Number(process.env.HTTP_STATUS || fs.readFileSync('/tmp/http-status.txt','utf8'));
+          const http = Number(fs.readFileSync('/tmp/http-status.txt','utf8'));
           const body = JSON.parse(fs.readFileSync('/tmp/live-report.json','utf8'));
           const file = JSON.parse(fs.readFileSync('/tmp/file-status.json','utf8'));
           const out = {
@@ -77,16 +78,17 @@ jobs:
           if(file.persistedLastFileState!=='ACTIVE') throw new Error(`Gemini file state is ${file.persistedLastFileState||'none'}`);
           if(file.persistedLastError) throw new Error(`Gemini file context reports error: ${file.persistedLastError}`);
           NODE
-        env:
-          HTTP_STATUS: ${{ steps.none.outputs.unused }}
 
-      - name: Reconstruct status for Node verifier
+      - name: Verification summary
         if: always()
         shell: bash
         run: |
-          # This step is retained only to make failure diagnostics explicit in the job summary.
+          echo '## FXGA live-report resilience' >> "$GITHUB_STEP_SUMMARY"
           if [ -f /tmp/live-report.json ]; then
-            echo 'Live report response captured.' >> "$GITHUB_STEP_SUMMARY"
+            echo '- Exact /api/gemini/live-report response captured.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f /tmp/result.json ]; then
+            jq -r '"- HTTP: \(.liveReport.http)\n- Schema: \(.liveReport.schema)\n- Model: \(.liveReport.model // "none")\n- Source: \(.liveReport.source // "none")\n- Provider 429 leaked: \(.liveReport.leaked429)\n- Refresh seconds: \(.liveReport.refreshAfterSeconds)\n- File mode/state: \(.fileContext.persistedLastMode)/\(.fileContext.persistedLastFileState)"' /tmp/result.json >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Persist sanitized verification result
