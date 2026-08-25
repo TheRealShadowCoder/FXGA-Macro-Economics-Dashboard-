@@ -3,4 +3,5 @@
 await import('./gemini-bootstrap.js');
 await import('./gemini-hook.js');
 await import('./fxga-intelligence-extension.js');
+await import('./fxga-gemini-streaming-extension.js');
 await import('./server.js');
