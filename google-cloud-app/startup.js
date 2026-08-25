@@ -1,6 +1,10 @@
 // Startup is deliberately sequential. The Gemini credential bootstrap must finish
 // before the intelligence modules read process.env.GEMINI_API_KEY at module load.
 await import('./gemini-bootstrap.js');
+// Stable Gemini Interactions API v1 requires file-backed multimodal content arrays
+// to be wrapped in a user_input.content step. Load this before gemini-file-context.js
+// so the file transport's captured fetch is normalized before it reaches Google.
+await import('./gemini-v1-file-input-adapter.js');
 // FXGA_GEMINI_CONTEXT_TRANSPORT=one-reusable-active-csv-file
 // Convert large FXGA Gemini prompts into one reusable CSV context package uploaded
 // through the Gemini Files API. The transport waits for ACTIVE readiness and patches
