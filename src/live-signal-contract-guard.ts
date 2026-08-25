@@ -106,16 +106,32 @@ function normalizeSignal(value: unknown): JsonRecord | null {
   };
 }
 
+function emptyDetailSignal(): JsonRecord {
+  // The detail view only uses this sentinel to reject lifecycle events whose signal
+  // no longer satisfies the current contract. A complete safe shape prevents the
+  // React view from dereferencing null while preserving the rule that missing
+  // trading evidence is never fabricated.
+  return normalizeSignal({
+    id: '__FXGA_INVALID_LEGACY_DETAIL__',
+    symbol: 'UNKNOWN',
+    timeframe: '—',
+    side: 'WAIT',
+    status: 'UNAVAILABLE',
+    lastEvent: 'UNAVAILABLE',
+    updatedAt: new Date(0).toISOString(),
+  })!;
+}
+
 function normalizePayload(value: unknown): unknown {
   const payload = asRecord(value);
   if (Array.isArray(payload.signals)) {
     const signals = payload.signals.map(normalizeSignal).filter((row): row is JsonRecord => row !== null);
     return { ...payload, count: signals.length, signals };
   }
-  if (payload.signal) {
-    const signal = normalizeSignal(payload.signal);
+  if ('signal' in payload || Array.isArray(payload.events)) {
+    const signal = normalizeSignal(payload.signal) ?? emptyDetailSignal();
     const events = Array.isArray(payload.events) ? payload.events : [];
-    return signal ? { ...payload, signal, events } : { ...payload, signal: null, events };
+    return { ...payload, signal, events };
   }
   return value;
 }
@@ -143,7 +159,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     headers.delete('content-length');
     headers.delete('content-encoding');
     headers.set('content-type', 'application/json; charset=utf-8');
-    headers.set('x-fxga-contract-guard', 'live-signal-v1');
+    headers.set('x-fxga-contract-guard', 'live-signal-v2');
     return new Response(JSON.stringify(normalized), {
       status: response.status,
       statusText: response.statusText,
