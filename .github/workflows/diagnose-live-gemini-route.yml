@@ -114,3 +114,5 @@ jobs:
           echo 'AI_ANSWER_BEGIN'
           printf '%s\n' "$answer"
           echo 'AI_ANSWER_END'
+
+# diagnostic refresh: 2026-08-25T16:29+02:00
