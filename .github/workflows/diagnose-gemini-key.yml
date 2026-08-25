@@ -1,0 +1,94 @@
+name: Diagnose Gemini API Key
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-gemini-key.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+env:
+  MODEL: gemini-3.5-flash-lite
+  STATUS_CONTEXT: fxga/gemini-key-diagnostic
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call Gemini using protected GitHub secret
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          post_status() {
+            local state="$1"
+            local description="$2"
+            local payload
+            description="$(printf '%s' "$description" | tr '\r\n' ' ' | cut -c1-140)"
+            payload="$(jq -nc \
+              --arg state "$state" \
+              --arg context "$STATUS_CONTEXT" \
+              --arg description "$description" \
+              --arg target_url "$RUN_URL" \
+              '{state:$state,context:$context,description:$description,target_url:$target_url}')"
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+              -d "$payload" >/dev/null
+          }
+
+          post_status pending 'Testing protected GEMINI_API_KEY against Gemini v1 Interactions API'
+
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            post_status failure 'GEMINI_API_KEY repository Actions secret is missing or empty'
+            echo '::error::GEMINI_API_KEY repository Actions secret is missing or empty.'
+            exit 1
+          fi
+
+          payload="$(jq -nc --arg model "$MODEL" '{model:$model,input:"Reply with exactly: FXGA_GEMINI_OK",store:false,generation_config:{max_output_tokens:32}}')"
+          http_status="$(curl -sS --connect-timeout 15 --max-time 60 \
+            -o /tmp/gemini-key-diagnostic.json \
+            -w '%{http_code}' \
+            -X POST 'https://generativelanguage.googleapis.com/v1/interactions' \
+            -H "x-goog-api-key: $GEMINI_API_KEY" \
+            -H 'Content-Type: application/json' \
+            --data "$payload" || true)"
+
+          if [[ "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+            answer="$(jq -r '[.steps[]? | select(.type=="model_output") | .content[]? | select(.type=="text") | .text] | join("")' /tmp/gemini-key-diagnostic.json 2>/dev/null || true)"
+            returned_model="$(jq -r '.model // empty' /tmp/gemini-key-diagnostic.json 2>/dev/null || true)"
+            if [ -n "$answer" ]; then
+              snippet="$(printf '%s' "$answer" | tr '\r\n' ' ' | cut -c1-105)"
+              post_status success "${returned_model:-$MODEL}: ${snippet}"
+              echo "MODEL=${returned_model:-$MODEL}"
+              echo 'AI_ANSWER_BEGIN'
+              printf '%s\n' "$answer"
+              echo 'AI_ANSWER_END'
+              exit 0
+            fi
+            post_status failure "Gemini HTTP ${http_status}, but no model_output text was returned"
+            exit 1
+          fi
+
+          provider_message="$(jq -r 'try (.error.message // .message // .error.status // empty) catch empty' /tmp/gemini-key-diagnostic.json 2>/dev/null || true)"
+          case "$http_status" in
+            400|401|403) hint='Create a current Auth key in Google AI Studio and replace GEMINI_API_KEY.' ;;
+            429) hint='Key reached the active Google model/project rate or quota limit.' ;;
+            *) hint='See the diagnostic workflow log for the sanitized provider response.' ;;
+          esac
+          post_status failure "HTTP ${http_status}: ${provider_message:-Gemini rejected the request}"
+          echo "::error::Gemini key diagnostic failed: HTTP ${http_status}: ${provider_message:-unknown provider error}"
+          echo "::error::$hint"
+          exit 1
