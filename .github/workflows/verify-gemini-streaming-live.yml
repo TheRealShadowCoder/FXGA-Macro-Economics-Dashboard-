@@ -75,8 +75,6 @@ jobs:
           NODE
 
       - name: Exercise representative FXGA queries and real SSE typing
-        env:
-          FXGA_API_BASE: ${{ env.FXGA_API_BASE }}
         run: node scripts/test-gemini-streaming-live.mjs
 
       - name: Streaming verification summary
