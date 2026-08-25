@@ -1,0 +1,88 @@
+name: Verify FXGA Gemini TXT File Context Live
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Deploy FXGA Google Cloud Application"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fxga-gemini-file-context-live
+  cancel-in-progress: true
+
+env:
+  API_BASE: https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app
+
+jobs:
+  verify-file-context:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Exercise a cache-miss action report through Gemini
+        shell: bash
+        run: |
+          set -euo pipefail
+          NONCE="$(date -u +%s)-${GITHUB_RUN_ID}"
+          QUESTION="Transport verification ${NONCE}. Produce the current action report from stored intelligence, market, technical and event-risk evidence. Respect WAIT, WATCH and PREPARE states."
+          jq -nc --arg q "$QUESTION" '{question:$q,task:"live-intelligence-report"}' > /tmp/request.json
+
+          curl -sS --connect-timeout 15 --max-time 200 \
+            -o /tmp/file-context.sse \
+            -w 'HTTP_STATUS=%{http_code}\n' \
+            -X POST "${API_BASE}/api/gemini/chat-stream" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: text/event-stream' \
+            --data-binary @/tmp/request.json
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const raw = fs.readFileSync('/tmp/file-context.sse', 'utf8');
+          let answer = '';
+          let model = '';
+          let error = '';
+          const phases = [];
+          for (const frame of raw.split(/\r?\n\r?\n/)) {
+            const lines = frame.split(/\r?\n/);
+            const event = (lines.find(line => line.startsWith('event: ')) || '').slice(7).trim();
+            const dataText = lines.filter(line => line.startsWith('data: ')).map(line => line.slice(6)).join('\n');
+            if (!event || !dataText) continue;
+            let data;
+            try { data = JSON.parse(dataText); } catch { continue; }
+            if (event === 'status' && data.phase) phases.push(data.phase);
+            if (event === 'delta') answer += String(data.text ?? '');
+            if (event === 'done') model = String(data?.result?.model || model || '');
+            if (event === 'error') error = String(data?.friendlyError?.title || data?.message || data?.error || 'stream error');
+          }
+          console.log(JSON.stringify({ model, phases, answerLength: answer.length, answerPreview: answer.slice(0, 600) }, null, 2));
+          if (error) throw new Error(error);
+          if (!answer.trim()) throw new Error('No streamed Gemini answer text');
+          if (!model || model.startsWith('fxga-local-')) throw new Error(`Real Gemini did not answer; model=${model || 'none'}`);
+          NODE
+
+      - name: Verify server used one uploaded TXT package
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --connect-timeout 10 --max-time 30 "${API_BASE}/api/gemini/file-context-status" -o /tmp/status.json
+          jq . /tmp/status.json
+          jq -e '.enabled == true' /tmp/status.json >/dev/null
+          jq -e '.persistedLastMode == "file"' /tmp/status.json >/dev/null
+          jq -e '(.persistedLastFileBytes | tonumber) >= 2000' /tmp/status.json >/dev/null
+          jq -e '(.persistedLastModel | type == "string") and (.persistedLastModel | startswith("gemini-"))' /tmp/status.json >/dev/null
+          jq -e '(.persistedLastFileHashPrefix | type == "string") and (.persistedLastFileHashPrefix | length >= 8)' /tmp/status.json >/dev/null
+          if jq -e '.persistedLastError != null and .persistedLastError != ""' /tmp/status.json >/dev/null; then
+            echo '::error::File-context transport reported an error'
+            exit 1
+          fi
+
+      - name: Verification summary
+        if: always()
+        run: |
+          echo '## Gemini one-file TXT transport' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Sends large FXGA context through Gemini Files API as one text/plain document.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Sends only the live user question as the small Interactions text block.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Verifies production transport telemetry without exposing file URI or credentials.' >> "$GITHUB_STEP_SUMMARY"
