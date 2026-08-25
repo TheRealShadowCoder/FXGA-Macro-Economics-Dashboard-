@@ -8,8 +8,9 @@ type LiveSignal={id:string;symbol:string;timeframe?:string;side?:string;status?:
 type LiveSignalList={signals:LiveSignal[]};
 type Props={dashboard:DashboardPayload;signals:SessionSignalsPayload|null};
 type Series={symbol:string;timeframe:string;payload:MT5PricePayload|null;error?:string};
+type Job={symbol:string;timeframe:string};
 
-const FRAMES=['M1','M5','M15','M30','H1','H4','D1'] as const;
+const FRAMES=['M1','M2','M3','M4','M5','M6','M10','M12','M15','M20','M30','H1','H2','H3','H4','H6','H8','H12','D1','W1','MN1'] as const;
 const CORE=['EURUSD','GBPUSD','USDJPY','USDZAR'] as const;
 const allowed=new Set<string>(MT5_WEBSITE_ASSETS as readonly string[]);
 const mapSymbol=(value:string)=>{const x=String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(x==='XAUUSD'||x==='XAU')return'GOLD';if(x==='US500'||x==='SP500'||x==='SPX500')return'SPX';if(x==='NAS100'||x==='USTEC'||x==='NDX')return'NASDAQ';if(x==='US30')return'DJI';if(x==='XTIUSD'||x==='USOIL')return'WTI';if(x==='XBRUSD'||x==='UKOIL')return'BRENT';return x;};
@@ -18,6 +19,20 @@ const fmt=(value:number|null|undefined,digits=5)=>value==null||!Number.isFinite(
 const ts=(ms:number)=>new Date(ms).toLocaleString();
 
 function chartBars(payload:MT5PricePayload|null){return (payload?.bars??[]).filter(row=>Array.isArray(row)&&row.length>=5&&row.slice(0,5).every(Number.isFinite)).slice(-24);}
+
+async function settleJobs(jobs:Job[],concurrency=6):Promise<Series[]>{
+  const results=new Array<Series>(jobs.length);let cursor=0;
+  async function worker(){
+    while(true){
+      const index=cursor++;if(index>=jobs.length)return;
+      const job=jobs[index];
+      try{results[index]={symbol:job.symbol,timeframe:job.timeframe,payload:await fetchMT5Prices(job.symbol,job.timeframe,24)};}
+      catch(error){results[index]={symbol:job.symbol,timeframe:job.timeframe,payload:null,error:error instanceof Error?error.message:'MT5 series unavailable'};}
+    }
+  }
+  await Promise.all(Array.from({length:Math.min(concurrency,jobs.length)},()=>worker()));
+  return results;
+}
 
 function MT5Chart({series}:{series:Series}){
   const rows=chartBars(series.payload);const width=1120,height=420,padL=62,padR=84,padT=28,padB=52,plotW=width-padL-padR,plotH=height-padT-padB;
@@ -45,13 +60,14 @@ export function CanonicalMT5Evidence({dashboard,signals}:Props){
     const market=(dashboard.market??[]).filter(row=>row.price!=null).map(row=>row.symbol||row.id);
     const online=status?new Set(Object.values(status.series||{}).filter(row=>row.bars>0).map(row=>row.symbol)):null;
     const chosen:string[]=[];for(const raw of [...ranked,...directional,...market,...CORE]){const symbol=mapSymbol(raw);if(!allowed.has(symbol)||chosen.includes(symbol)||(online&&!online.has(symbol)))continue;chosen.push(symbol);if(chosen.length>=4)break;}
-    setCacheNote(status?`${status.totalBars.toLocaleString()} canonical M1 bars retained · ${status.databaseHealth?.assetsOnline??status.databaseHealth?.pairsOnline??0} assets online`:'MT5 cache status unavailable; direct series queries attempted');
+    const backendFrames=status?.derivedTimeframes?.length??0;
+    setCacheNote(status?`${status.totalBars.toLocaleString()} canonical M1 bars retained · ${status.databaseHealth?.assetsOnline??status.databaseHealth?.pairsOnline??0} assets online · ${backendFrames||FRAMES.length} backend timeframes`:'MT5 cache status unavailable; direct series queries attempted');
     const jobs=chosen.flatMap(symbol=>FRAMES.map(timeframe=>({symbol,timeframe})));
-    const settled=await Promise.all(jobs.map(async job=>{try{return {symbol:job.symbol,timeframe:job.timeframe,payload:await fetchMT5Prices(job.symbol,job.timeframe,24)} as Series;}catch(error){return {symbol:job.symbol,timeframe:job.timeframe,payload:null,error:error instanceof Error?error.message:'MT5 series unavailable'} as Series;}}));
+    const settled=await settleJobs(jobs,6);
     if(!cancelled){setSeries(settled);setUpdatedAt(new Date().toISOString());}
   }finally{if(!cancelled)setLoading(false);}})();return()=>{cancelled=true;};},[dashboard,directional]);
   const symbols=useMemo(()=>[...new Set(series.map(row=>row.symbol))],[series]);
-  return <section className="canonical-mt5-evidence" data-pdf-section="canonical-mt5-every-timeframe"><header className="mt5-evidence-cover"><span>CANONICAL PRICE EVIDENCE · METATRADER 5</span><h2>Every supported timeframe for the strongest current symbols</h2><p>This section searches the current MT5 cache after prioritising live indicator signals, session signals and then the current market tape. Every chart uses the exact OHLCV rows printed immediately below it.</p><div><b>{loading?'Refreshing MT5 series…':`${symbols.length} symbols · ${FRAMES.length} timeframes each`}</b><span>{cacheNote}</span><small>{updatedAt?`Evidence refreshed ${new Date(updatedAt).toLocaleString()}`:'Waiting for current scan'}</small></div></header>
+  return <section className="canonical-mt5-evidence" data-pdf-section="canonical-mt5-every-timeframe"><header className="mt5-evidence-cover"><span>CANONICAL PRICE EVIDENCE · METATRADER 5</span><h2>All 21 official MT5 chart periods for the strongest current symbols</h2><p>This section searches the current MT5 cache after prioritising live indicator signals, session signals and then the current market tape. Every chart is reconstructed from canonical M1 and uses the exact OHLCV rows printed immediately below it. W1 is aligned to Monday UTC; MN1 uses calendar-month UTC boundaries.</p><div><b>{loading?'Refreshing all official MT5 periods…':`${symbols.length} symbols · ${FRAMES.length} timeframes each`}</b><span>{cacheNote}</span><small>{updatedAt?`Evidence refreshed ${new Date(updatedAt).toLocaleString()}`:'Waiting for current scan'}</small></div></header>
     {symbols.map(symbol=><section className="mt5-symbol-evidence" key={symbol}><div className="mt5-symbol-cover"><span>CURRENT MULTI-TIMEFRAME EVIDENCE</span><h2>{symbol}</h2><p>{liveSignals.some(row=>mapSymbol(row.symbol)===symbol)?'Selected because a current non-test live indicator signal references this symbol.':'Selected from the current FXGA session/market evidence universe.'}</p><div>{FRAMES.map(frame=><b key={frame}>{frame}</b>)}</div></div>{FRAMES.map(timeframe=>{const row=series.find(item=>item.symbol===symbol&&item.timeframe===timeframe)??{symbol,timeframe,payload:null};return <article className="mt5-timeframe-page" key={`${symbol}-${timeframe}`}><MT5Chart series={row}/><PriceRows payload={row.payload}/><footer><span>Source: {row.payload?.source||'MetaTrader5'}</span><span>Base: {row.payload?.baseTimeframe||'M1'}</span><span>{row.payload?.derived?'Reconstructed from canonical M1':'Canonical M1'}</span><span>Generated: {row.payload?.generatedAt?new Date(row.payload.generatedAt).toLocaleString():'unavailable'}</span></footer></article>;})}</section>)}
     {!loading&&!symbols.length?<div className="mt5-evidence-empty">No canonical MT5 price series is currently available for the selected signal universe. The PDF records this rather than synthesising bars.</div>:null}
   </section>;
