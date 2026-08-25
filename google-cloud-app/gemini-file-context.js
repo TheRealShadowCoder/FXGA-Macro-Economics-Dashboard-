@@ -6,11 +6,15 @@ const PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJEC
 const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || '').trim();
 const ENABLED = !/^(0|false|off|no)$/i.test(String(process.env.FXGA_GEMINI_FILE_CONTEXT || 'true'));
 const MIN_PROMPT_CHARS = Math.max(2_000, Number(process.env.FXGA_GEMINI_FILE_MIN_CHARS || 8_000));
-const FILE_MIME_TYPE = 'text/plain';
+const FILE_MIME_TYPE = 'text/csv';
+const FILE_EXTENSION = 'csv';
+const FILE_FORMAT_VERSION = 'fxga-context-csv-v1';
 const FILE_UPLOAD_START_URL = 'https://generativelanguage.googleapis.com/upload/v1beta/files';
 const FILE_METADATA_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const FILE_SAFETY_MARGIN_MS = 20 * 60_000;
 const ASSUMED_FILE_LIFETIME_MS = 46 * 60 * 60_000;
+const FILE_READY_POLL_MS = Math.max(250, Number(process.env.FXGA_GEMINI_FILE_READY_POLL_MS || 1_000));
+const FILE_READY_TIMEOUT_MS = Math.max(5_000, Number(process.env.FXGA_GEMINI_FILE_READY_TIMEOUT_MS || 30_000));
 const INTERACTIONS_URL_RE = /^https:\/\/generativelanguage\.googleapis\.com\/v1(?:beta)?\/interactions(?:\?|$)/i;
 const STATUS_PATH = '/api/gemini/file-context-status';
 
@@ -29,17 +33,27 @@ const metrics = {
   inlineFallbacks: 0,
   uploadFailures: 0,
   invalidFileRetries: 0,
+  readinessPolls: 0,
+  readinessFailures: 0,
   lastMode: 'not-used-yet',
   lastAt: null,
   lastModel: null,
   lastFileBytes: null,
   lastFileHashPrefix: null,
+  lastFileState: null,
   lastReuseSource: null,
   lastError: null,
 };
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const nowIso = () => new Date().toISOString();
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const contextHash = fileText => sha(`${FILE_FORMAT_VERSION}\n${fileText}`);
+
+function toCsvDocument(fileText) {
+  const escaped = String(fileText).replaceAll('"', '""');
+  return `context\n"${escaped}"\n`;
+}
 
 function safeExpiry(ref = {}) {
   const explicit = Date.parse(String(ref.expirationTime || ''));
@@ -49,17 +63,27 @@ function safeExpiry(ref = {}) {
 }
 
 function usableRef(ref) {
-  return Boolean(ref?.uri && ref?.name && safeExpiry(ref) > Date.now() + FILE_SAFETY_MARGIN_MS);
+  return Boolean(
+    ref?.uri
+    && ref?.name
+    && ref?.mimeType === FILE_MIME_TYPE
+    && ref?.formatVersion === FILE_FORMAT_VERSION
+    && String(ref?.fileState || '').toUpperCase() === 'ACTIVE'
+    && safeExpiry(ref) > Date.now() + FILE_SAFETY_MARGIN_MS
+  );
 }
 
 function publicMetrics(extra = {}) {
   return {
-    schema: 'fxga.gemini.file-context.status.v1',
+    schema: 'fxga.gemini.file-context.status.v2',
     enabled: ENABLED,
-    transport: 'Gemini Files API TXT document -> Interactions API',
+    transport: 'Gemini Files API CSV document -> Interactions API',
     mimeType: FILE_MIME_TYPE,
+    formatVersion: FILE_FORMAT_VERSION,
     minimumPromptChars: MIN_PROMPT_CHARS,
-    fileRetention: 'provider-temporary; expiry-aware reuse',
+    readinessPollMs: FILE_READY_POLL_MS,
+    readinessTimeoutMs: FILE_READY_TIMEOUT_MS,
+    fileRetention: 'provider-temporary; ACTIVE-state and expiry-aware reuse',
     ...metrics,
     ...extra,
   };
@@ -87,7 +111,7 @@ function splitFxgaPrompt(prompt) {
   if (qIndex < 0 || eIndex < 0 || eIndex <= qIndex) {
     return {
       fileText: prompt,
-      instruction: 'Read the attached FXGA TXT package completely and follow its instructions. Produce the requested evidence-grounded answer. Do not invent missing evidence.',
+      instruction: 'Read the attached FXGA CSV context package completely and follow its instructions. Produce the requested evidence-grounded answer. Do not invent missing evidence.',
       extractedQuestion: false,
     };
   }
@@ -97,8 +121,9 @@ function splitFxgaPrompt(prompt) {
   const evidence = prompt.slice(eIndex + evidenceMarker.length);
   const fileText = `${prefix}\n\nSTRUCTURED FXGA EVIDENCE\n${evidence}`;
   const instruction = [
-    'Read the attached FXGA TXT context package completely.',
-    'Apply every FXGA rule and task-specific instruction contained in that file.',
+    'Read the attached FXGA CSV context package completely.',
+    'The CSV has one context field whose quoted value contains the full FXGA instructions and structured evidence.',
+    'Apply every FXGA rule and task-specific instruction contained in that context.',
     'Answer only from the attached evidence; missing evidence must remain missing.',
     `USER QUESTION: ${question}`,
   ].join('\n');
@@ -145,9 +170,52 @@ async function invalidateRef(hash) {
   try { await fileRefs.doc(hash).delete(); } catch { }
 }
 
-async function uploadTxtFile(fileText, hash, apiKey) {
-  const bytes = Buffer.from(fileText, 'utf8');
-  const displayName = `fxga-context-${hash.slice(0, 16)}.txt`;
+async function fetchFileMetadata(name, apiKey) {
+  const fileName = String(name || '').replace(/^\/+/, '');
+  if (!fileName) throw new Error('Gemini Files API file name is missing');
+
+  const response = await originalFetch(`${FILE_METADATA_BASE_URL}/${fileName}`, {
+    method: 'GET',
+    headers: { 'x-goog-api-key': apiKey },
+  });
+  const raw = await response.text();
+  let payload = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = {}; }
+  if (!response.ok) {
+    throw Object.assign(new Error(`Gemini Files API metadata failed (${response.status}) ${raw.slice(0, 300)}`), { statusCode: response.status });
+  }
+  return payload.file || payload;
+}
+
+async function waitForActiveFile(file, apiKey) {
+  const name = String(file?.name || '').trim();
+  if (!name) throw new Error('Gemini Files API returned no file name for readiness verification');
+
+  let current = file;
+  const deadline = Date.now() + FILE_READY_TIMEOUT_MS;
+  while (true) {
+    const state = String(current?.state || '').toUpperCase();
+    if (state === 'ACTIVE') return current;
+    if (state === 'FAILED') {
+      metrics.readinessFailures += 1;
+      const reason = current?.error?.message || current?.error?.status || 'provider processing failed';
+      throw new Error(`Gemini Files API file processing failed: ${reason}`);
+    }
+    if (Date.now() >= deadline) {
+      metrics.readinessFailures += 1;
+      throw new Error(`Gemini Files API file readiness timed out after ${FILE_READY_TIMEOUT_MS}ms; state=${state || 'unknown'}`);
+    }
+
+    metrics.readinessPolls += 1;
+    await sleep(FILE_READY_POLL_MS);
+    current = await fetchFileMetadata(name, apiKey);
+  }
+}
+
+async function uploadCsvFile(fileText, hash, apiKey) {
+  const csvText = toCsvDocument(fileText);
+  const bytes = Buffer.from(csvText, 'utf8');
+  const displayName = `fxga-context-${hash.slice(0, 16)}.${FILE_EXTENSION}`;
 
   const start = await originalFetch(FILE_UPLOAD_START_URL, {
     method: 'POST',
@@ -186,32 +254,40 @@ async function uploadTxtFile(fileText, hash, apiKey) {
   try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = {}; }
   if (!finish.ok) throw Object.assign(new Error(`Gemini Files API upload finalize failed (${finish.status}) ${raw.slice(0, 300)}`), { statusCode: finish.status });
 
-  const file = payload.file || payload;
-  const uri = String(file.uri || '').trim();
-  const name = String(file.name || '').trim();
-  if (!uri || !name) throw new Error('Gemini Files API returned no usable file URI/name');
+  const uploadedFile = payload.file || payload;
+  const name = String(uploadedFile.name || '').trim();
+  if (!name) throw new Error('Gemini Files API returned no usable file name');
+
+  const activeFile = await waitForActiveFile(uploadedFile, apiKey);
+  const uri = String(activeFile.uri || uploadedFile.uri || '').trim();
+  if (!uri) throw new Error('Gemini Files API ACTIVE file returned no usable URI');
 
   const ref = {
     uri,
-    name,
-    mimeType: String(file.mimeType || file.mime_type || FILE_MIME_TYPE),
-    sizeBytes: Number(file.sizeBytes || bytes.length),
-    createdAt: String(file.createTime || nowIso()),
-    expirationTime: String(file.expirationTime || new Date(Date.now() + ASSUMED_FILE_LIFETIME_MS).toISOString()),
-    displayName: String(file.displayName || displayName),
+    name: String(activeFile.name || name),
+    mimeType: String(activeFile.mimeType || activeFile.mime_type || uploadedFile.mimeType || uploadedFile.mime_type || FILE_MIME_TYPE),
+    sizeBytes: Number(activeFile.sizeBytes || uploadedFile.sizeBytes || bytes.length),
+    sourceTextBytes: Buffer.byteLength(fileText, 'utf8'),
+    createdAt: String(activeFile.createTime || uploadedFile.createTime || nowIso()),
+    expirationTime: String(activeFile.expirationTime || uploadedFile.expirationTime || new Date(Date.now() + ASSUMED_FILE_LIFETIME_MS).toISOString()),
+    displayName: String(activeFile.displayName || uploadedFile.displayName || displayName),
+    fileState: String(activeFile.state || 'ACTIVE').toUpperCase(),
+    formatVersion: FILE_FORMAT_VERSION,
   };
+
+  if (!usableRef(ref)) throw new Error('Gemini Files API produced a file reference that is not safe for reuse');
   metrics.uploaded += 1;
   await persistRef(hash, ref);
   return { ...ref, reuseSource: 'new-upload' };
 }
 
 async function getOrCreateFile(fileText, apiKey) {
-  const hash = sha(fileText);
+  const hash = contextHash(fileText);
   const existing = await readStoredRef(hash);
   if (existing) return { hash, ref: existing };
 
   if (inFlightUploads.has(hash)) return { hash, ref: await inFlightUploads.get(hash) };
-  const promise = uploadTxtFile(fileText, hash, apiKey);
+  const promise = uploadCsvFile(fileText, hash, apiKey);
   inFlightUploads.set(hash, promise);
   try { return { hash, ref: await promise }; }
   finally { inFlightUploads.delete(hash); }
@@ -257,7 +333,7 @@ async function transformedFetch(input, init = undefined) {
     const replacement = {
       ...body,
       input: [
-        { type: 'document', uri: ref.uri, mime_type: ref.mimeType || FILE_MIME_TYPE },
+        { type: 'document', uri: ref.uri, mime_type: FILE_MIME_TYPE },
         { type: 'text', text: instruction },
       ],
     };
@@ -268,6 +344,7 @@ async function transformedFetch(input, init = undefined) {
     metrics.lastModel = String(body.model || '');
     metrics.lastFileBytes = Buffer.byteLength(fileText, 'utf8');
     metrics.lastFileHashPrefix = hash.slice(0, 16);
+    metrics.lastFileState = ref.fileState || 'ACTIVE';
     metrics.lastReuseSource = ref.reuseSource || null;
     metrics.lastError = null;
     await writeTelemetry({ extractedQuestion });
@@ -281,7 +358,7 @@ async function transformedFetch(input, init = undefined) {
         metrics.invalidFileRetries += 1;
         metrics.inlineFallbacks += 1;
         metrics.lastMode = 'inline-after-file-rejection';
-        metrics.lastError = `file input rejected HTTP ${response.status}`;
+        metrics.lastError = `file input rejected HTTP ${response.status}: ${cloneText.slice(0, 200)}`;
         await invalidateRef(hash);
         await writeTelemetry();
         return originalFetch(input, { ...init, body: originalBody });
@@ -295,7 +372,8 @@ async function transformedFetch(input, init = undefined) {
     metrics.lastAt = nowIso();
     metrics.lastModel = String(body.model || '');
     metrics.lastFileBytes = Buffer.byteLength(fileText, 'utf8');
-    metrics.lastFileHashPrefix = hash ? hash.slice(0, 16) : sha(fileText).slice(0, 16);
+    metrics.lastFileHashPrefix = hash ? hash.slice(0, 16) : contextHash(fileText).slice(0, 16);
+    metrics.lastFileState = ref?.fileState || null;
     metrics.lastReuseSource = null;
     metrics.lastError = String(error?.message || error).slice(0, 500);
     await writeTelemetry();
@@ -317,6 +395,7 @@ async function handleStatus(req, res) {
     persistedLastModel: stored.lastModel || null,
     persistedLastFileBytes: stored.lastFileBytes || null,
     persistedLastFileHashPrefix: stored.lastFileHashPrefix || null,
+    persistedLastFileState: stored.lastFileState || null,
     persistedLastReuseSource: stored.lastReuseSource || null,
     persistedLastError: stored.lastError || null,
   } : {});
@@ -347,9 +426,12 @@ console.log('FXGA Gemini one-file context transport loaded', {
   enabled: ENABLED,
   minimumPromptChars: MIN_PROMPT_CHARS,
   mimeType: FILE_MIME_TYPE,
+  formatVersion: FILE_FORMAT_VERSION,
+  readinessPollMs: FILE_READY_POLL_MS,
+  readinessTimeoutMs: FILE_READY_TIMEOUT_MS,
   uploadApi: 'Gemini Files API v1beta',
   inferenceApi: 'Interactions API v1/v1beta compatible',
-  crossInstanceReuse: 'Firestore metadata',
+  crossInstanceReuse: 'Firestore metadata; ACTIVE-state and format-version guarded',
   inlineSafetyFallback: true,
   statusRoute: STATUS_PATH,
 });
