@@ -1,5 +1,5 @@
 #property strict
-#property version   "1.00"
+#property version   "1.01"
 #property description "Publishes the terminal's real broker symbol inventory to the FXGA Google Cloud MT5 scanner endpoint."
 
 input string InpEndpoint = "https://fxga-mt5-signal-ingress-kbjj66blka-uc.a.run.app/api/mt5/scanner-universe";
@@ -69,9 +69,9 @@ string SymbolJson(const string symbol)
    row += "\"base_currency\":" + JsonString(baseCurrency) + ",";
    row += "\"profit_currency\":" + JsonString(profitCurrency) + ",";
    row += "\"margin_currency\":" + JsonString(marginCurrency) + ",";
-   row += "\"trade_mode\":" + IntegerToString(tradeMode) + ",";
-   row += "\"digits\":" + IntegerToString(digits) + ",";
-   row += "\"scanner_included\":" + string(selected ? "true" : "false") + ",";
+   row += "\"trade_mode\":" + IntegerToString((int)tradeMode) + ",";
+   row += "\"digits\":" + IntegerToString((int)digits) + ",";
+   row += "\"scanner_included\":" + (selected ? "true" : "false") + ",";
    row += "\"status\":" + JsonString(status) + ",";
    row += "\"last_scan_ms\":0,";
    row += "\"scans\":0,";
@@ -113,7 +113,7 @@ bool BuildPayload(string &payload, int &terminalTotal, int &scannerTotal)
    payload += "\"source\":\"MetaTrader5\",";
    payload += "\"engine\":" + JsonString(FXGA_ENGINE) + ",";
    payload += "\"stream\":" + JsonString(FXGA_STREAM) + ",";
-   payload += "\"generated_at_ms\":" + LongToString(EpochMilliseconds()) + ",";
+   payload += "\"generated_at_ms\":" + StringFormat("%I64d", EpochMilliseconds()) + ",";
    payload += "\"total_symbols\":" + IntegerToString(terminalTotal) + ",";
    payload += "\"scan_symbols\":" + IntegerToString(scannerTotal) + ",";
    payload += "\"broker\":{";
@@ -171,13 +171,13 @@ bool PublishUniverse()
            "LIVE · HTTP ", status, "\n",
            "Broker symbols: ", terminalTotal, "\n",
            "Scanner symbols: ", scannerTotal, "\n",
-           "Refresh: ", MathMax(10, InpPublishEverySeconds), " sec");
+           "Refresh: ", (int)MathMax(10, InpPublishEverySeconds), " sec");
    return true;
 }
 
 int OnInit()
 {
-   const int seconds = MathMax(10, InpPublishEverySeconds);
+   const int seconds = (int)MathMax(10, InpPublishEverySeconds);
    EventSetTimer(seconds);
    if(InpPublishOnInit)
       PublishUniverse();
