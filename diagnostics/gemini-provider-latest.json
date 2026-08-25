@@ -1,15 +1,45 @@
 {
-  "schema": "fxga.gemini.provider-probe.v4",
-  "runId": 32855589449,
-  "startedAt": "2026-08-25T13:48:46Z",
+  "schema": "fxga.gemini.provider-probe.final.v1",
+  "runId": 32855901225,
+  "startedAt": "2026-08-25T13:51:49.642Z",
   "bypasses": [
     "Cloud Run",
-    "Firestore",
-    "FXGA routing",
+    "Firestore cache",
+    "FXGA provider cooldown",
     "frontend"
   ],
   "file": {
-    "startCurlExit": 0,
-    "uploadUrlReturned": true
-  }
+    "startHttp": 200,
+    "uploadUrlReturned": true,
+    "uploadHttp": 200,
+    "state": "ACTIVE",
+    "mimeType": "text/csv",
+    "hasUri": true,
+    "hasName": true
+  },
+  "fileInteraction": {
+    "model": "gemini-3.5-flash-lite",
+    "http": 400,
+    "retryAfter": null,
+    "errorStatus": null,
+    "errorMessage": "The value 'text' is not supported for 'type' at 'input[1]'. Supported values: 'elicitation_call', 'view_file_call', 'file_search_call', 'user_action_demo', 'find_file_call', 'file_search_result', 'retrieval_result', 'google_maps_result', 'transcription', 'playback_complete', 'code_execution_result',",
+    "answer": ""
+  },
+  "inlinePrimary": {
+    "model": "gemini-3.5-flash-lite",
+    "http": 200,
+    "retryAfter": null,
+    "errorStatus": null,
+    "errorMessage": null,
+    "answer": "FXGA_INLINE_PROVIDER_OK"
+  },
+  "inlineReserve": {
+    "model": "gemini-3.7-flash",
+    "http": 0,
+    "retryAfter": null,
+    "errorStatus": "NETWORK_EXCEPTION",
+    "errorMessage": "fetch failed",
+    "answer": ""
+  },
+  "completedAt": "2026-08-25T13:58:03.313Z"
 }
