@@ -1,10 +1,10 @@
 {
   "schema": "fxga.production.website-view-audit.v1",
   "passed": true,
-  "verifiedCommit": "6092ceb8c05c0842989f1b33c1c2dbaa7daf5775",
-  "auditRunId": 32869299991,
-  "auditUrl": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32869299991",
-  "verifiedAt": "2026-08-25T16:00:48.954Z",
+  "verifiedCommit": "1602fb3b398ae8dd9c9abc5e27179ccbdc15c041",
+  "auditRunId": 32870746876,
+  "auditUrl": "https://github.com/TheRealShadowCoder/FXGA-Macro-Economics-Dashboard-/actions/runs/32870746876",
+  "verifiedAt": "2026-08-25T16:14:44.393Z",
   "scope": [
     "Cloudflare static shell and current release",
     "all 12 sidebar navigation labels",
