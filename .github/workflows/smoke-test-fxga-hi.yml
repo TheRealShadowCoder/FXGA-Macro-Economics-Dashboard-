@@ -1,0 +1,53 @@
+name: Smoke Test FXGA AI Hi
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/smoke-test-fxga-hi.yml'
+
+permissions:
+  contents: read
+
+env:
+  API_BASE: https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app
+
+jobs:
+  say-hi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send hi to live FXGA AI
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload=$(jq -nc '{module:"researchDesk",profile:{pair:"EURUSD",horizon:"Intraday",style:"researchDesk",technicalMode:"fxga-smc2000"},question:"hi"}')
+          status=$(curl -sS --connect-timeout 15 --max-time 100 \
+            -o /tmp/fxga-hi.json \
+            -w '%{http_code}' \
+            -X POST "${API_BASE}/api/intelligence/query" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")
+
+          echo "HTTP_STATUS=${status}"
+          echo 'RAW_RESPONSE_BEGIN'
+          cat /tmp/fxga-hi.json
+          echo
+          echo 'RAW_RESPONSE_END'
+
+          if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+            echo "FXGA AI hi request failed with HTTP ${status}" >&2
+            exit 1
+          fi
+
+          answer=$(jq -r '.intelligence // .output // .answer // empty' /tmp/fxga-hi.json)
+          if [[ -z "${answer}" ]]; then
+            echo 'FXGA AI returned HTTP success but no usable answer field.' >&2
+            exit 1
+          fi
+
+          echo 'AI_ANSWER_BEGIN'
+          printf '%s\n' "$answer"
+          echo 'AI_ANSWER_END'
