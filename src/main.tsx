@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './google-cloud-routing';
 import './live-signal-contract-guard';
 import App from './App';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { ExplainabilityLayer } from './components/ExplainabilityLayer';
 import { QualityFrameworkDock } from './components/QualityFrameworkDock';
 import { FirestoreCapacityDock } from './components/FirestoreCapacityDock';
@@ -20,7 +21,9 @@ import './institutional-finish.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
     <QualityFrameworkDock />
     <FirestoreCapacityDock />
     <MT5PriceCacheDock />
