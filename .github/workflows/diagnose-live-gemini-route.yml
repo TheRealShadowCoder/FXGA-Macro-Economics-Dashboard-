@@ -1,0 +1,89 @@
+name: Diagnose Live FXGA Gemini Route
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-live-gemini-route.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+env:
+  API_BASE: https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app
+  STATUS_CONTEXT: fxga/gemini-live-route-diagnostic
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call deployed Gemini streaming route
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          post_status() {
+            local state="$1"
+            local description="$2"
+            local payload
+            description="$(printf '%s' "$description" | tr '\r\n' ' ' | cut -c1-140)"
+            payload="$(jq -nc --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" --arg target_url "$RUN_URL" '{state:$state,context:$context,description:$description,target_url:$target_url}')"
+            curl -fsS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+              -d "$payload" >/dev/null
+          }
+
+          post_status pending 'Calling deployed /api/gemini/chat-stream'
+          http_status="$(curl -sS --connect-timeout 15 --max-time 120 \
+            -o /tmp/fxga-live-route.txt \
+            -w '%{http_code}' \
+            -X POST "${API_BASE}/api/gemini/chat-stream" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: text/event-stream' \
+            --data '{"question":"Reply with a short greeting confirming Gemini is working through the deployed FXGA route.","task":"conversation"}' || true)"
+
+          echo "HTTP_STATUS=${http_status}"
+          echo 'RAW_RESPONSE_BEGIN'
+          cat /tmp/fxga-live-route.txt 2>/dev/null || true
+          echo
+          echo 'RAW_RESPONSE_END'
+
+          if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+            post_status failure "Live route returned HTTP ${http_status}"
+            exit 1
+          fi
+
+          model="$(awk '/^event: done/{want=1;next} want && /^data: /{sub(/^data: /,"");print;exit}' /tmp/fxga-live-route.txt | jq -r 'try (.result.model // empty) catch ""')"
+          answer="$(awk '/^event: delta/{want=1;next} want && /^data: /{sub(/^data: /,"");print;want=0}' /tmp/fxga-live-route.txt | jq -r -s 'map(try fromjson catch empty) | map(.text // .delta // .content // empty) | join("")')"
+
+          if grep -q '^event: error' /tmp/fxga-live-route.txt; then
+            error_text="$(awk '/^event: error/{want=1;next} want && /^data: /{sub(/^data: /,"");print;exit}' /tmp/fxga-live-route.txt | jq -r 'try (.message // .error // .code // "stream error") catch "stream error"')"
+            post_status failure "${error_text:-Live stream error}"
+            exit 1
+          fi
+
+          if [ -z "$answer" ]; then
+            post_status failure 'Live route returned no streamed text'
+            exit 1
+          fi
+
+          snippet="$(printf '%s' "$answer" | tr '\r\n' ' ' | cut -c1-105)"
+          if [[ "$model" == fxga-local-* || -z "$model" ]]; then
+            post_status failure "${model:-unknown model}: ${snippet}"
+            exit 1
+          fi
+
+          post_status success "${model}: ${snippet}"
+          echo "MODEL=${model}"
+          echo 'AI_ANSWER_BEGIN'
+          printf '%s\n' "$answer"
+          echo 'AI_ANSWER_END'
