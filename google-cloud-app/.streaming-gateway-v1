@@ -1,0 +1,5 @@
+FXGA Gemini streaming gateway
+- unified chatbot and one-click intelligence route
+- three-model failover and cooldown
+- real SSE progress and text deltas
+- production query smoke tests
