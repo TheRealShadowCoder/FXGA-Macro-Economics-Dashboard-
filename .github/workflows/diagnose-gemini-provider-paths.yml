@@ -1,0 +1,186 @@
+name: Diagnose Gemini Provider File and Inline Paths
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-gemini-provider-paths.yml'
+
+permissions:
+  contents: read
+
+env:
+  FILE_MODEL: gemini-3.5-flash-lite
+  INLINE_MODEL: gemini-3.5-flash-lite
+  RESERVE_MODEL: gemini-3.7-flash
+
+jobs:
+  provider-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Require protected Gemini key
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${GEMINI_API_KEY:-}" || { echo '::error::GEMINI_API_KEY is missing'; exit 1; }
+          echo 'Protected Gemini key is present (value remains masked).'
+
+      - name: Test Gemini Files API upload and document interaction
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          printf 'field,value\nprobe,FXGA_FILE_PROVIDER_OK\nrun,%s\n' "${GITHUB_RUN_ID}" > /tmp/fxga-provider-probe.csv
+          BYTES="$(wc -c < /tmp/fxga-provider-probe.csv | tr -d ' ')"
+
+          curl -sS -D /tmp/upload-start.headers -o /tmp/upload-start.body \
+            -X POST 'https://generativelanguage.googleapis.com/upload/v1beta/files' \
+            -H "x-goog-api-key: ${GEMINI_API_KEY}" \
+            -H 'X-Goog-Upload-Protocol: resumable' \
+            -H 'X-Goog-Upload-Command: start' \
+            -H "X-Goog-Upload-Header-Content-Length: ${BYTES}" \
+            -H 'X-Goog-Upload-Header-Content-Type: text/csv' \
+            -H 'Content-Type: application/json' \
+            --data '{"file":{"display_name":"fxga-provider-diagnostic.csv"}}'
+
+          UPLOAD_URL="$(awk 'BEGIN{IGNORECASE=1} /^x-goog-upload-url:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}' /tmp/upload-start.headers)"
+          test -n "$UPLOAD_URL" || {
+            echo '::error::Gemini Files API did not return an upload URL'
+            sed -E 's/(AIza[A-Za-z0-9_-]{10,})/***REDACTED***/g' /tmp/upload-start.body | head -c 1200
+            exit 1
+          }
+
+          HTTP_UPLOAD="$(curl -sS -D /tmp/upload.headers -o /tmp/upload.json -w '%{http_code}' \
+            -X POST "$UPLOAD_URL" \
+            -H "Content-Length: ${BYTES}" \
+            -H 'Content-Type: text/csv' \
+            -H 'X-Goog-Upload-Offset: 0' \
+            -H 'X-Goog-Upload-Command: upload, finalize' \
+            --data-binary @/tmp/fxga-provider-probe.csv)"
+          echo "FILE_UPLOAD_HTTP=${HTTP_UPLOAD}"
+          test "$HTTP_UPLOAD" -ge 200 -a "$HTTP_UPLOAD" -lt 300 || {
+            jq '{error:{code:.error.code,status:.error.status,message:.error.message}}' /tmp/upload.json 2>/dev/null || head -c 1200 /tmp/upload.json
+            exit 1
+          }
+
+          FILE_NAME="$(jq -r '.file.name // empty' /tmp/upload.json)"
+          FILE_URI="$(jq -r '.file.uri // empty' /tmp/upload.json)"
+          FILE_MIME="$(jq -r '.file.mimeType // .file.mime_type // "text/csv"' /tmp/upload.json)"
+          FILE_STATE="$(jq -r '.file.state // "ACTIVE"' /tmp/upload.json)"
+          test -n "$FILE_NAME" -a -n "$FILE_URI" || { echo '::error::Upload returned no usable file reference'; exit 1; }
+
+          for attempt in $(seq 1 20); do
+            FILE_STATE="$(curl -fsS \
+              -H "x-goog-api-key: ${GEMINI_API_KEY}" \
+              "https://generativelanguage.googleapis.com/v1beta/${FILE_NAME}" \
+              | jq -r '.state // "ACTIVE"')" || FILE_STATE='UNKNOWN'
+            echo "FILE_STATE=${FILE_STATE} attempt=${attempt}"
+            case "$FILE_STATE" in
+              ACTIVE) break ;;
+              FAILED) echo '::error::Gemini file processing failed'; exit 1 ;;
+            esac
+            sleep 1
+          done
+          test "$FILE_STATE" = 'ACTIVE' || { echo "::error::Gemini file did not become ACTIVE (state=${FILE_STATE})"; exit 1; }
+
+          jq -nc \
+            --arg model "$FILE_MODEL" \
+            --arg uri "$FILE_URI" \
+            --arg mime "$FILE_MIME" \
+            '{model:$model,input:[{type:"document",uri:$uri,mime_type:$mime},{type:"text",text:"Read the attached CSV and reply with exactly the probe value, nothing else."}],store:false,generation_config:{max_output_tokens:32}}' \
+            > /tmp/file-interaction-request.json
+
+          HTTP_FILE="$(curl -sS -D /tmp/file-interaction.headers -o /tmp/file-interaction.json -w '%{http_code}' \
+            -X POST 'https://generativelanguage.googleapis.com/v1/interactions' \
+            -H "x-goog-api-key: ${GEMINI_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/file-interaction-request.json)"
+
+          RETRY_AFTER="$(awk 'BEGIN{IGNORECASE=1} /^retry-after:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}' /tmp/file-interaction.headers)"
+          echo "FILE_INTERACTION_HTTP=${HTTP_FILE}"
+          echo "FILE_INTERACTION_RETRY_AFTER=${RETRY_AFTER:-none}"
+
+          if [ "$HTTP_FILE" -ge 200 ] && [ "$HTTP_FILE" -lt 300 ]; then
+            ANSWER="$(jq -r '[.steps[]? | select(.type=="model_output") | .content[]? | select(.type=="text") | .text] | join("")' /tmp/file-interaction.json)"
+            echo "FILE_INTERACTION_ANSWER=${ANSWER}"
+            test "$ANSWER" = 'FXGA_FILE_PROVIDER_OK' || { echo '::error::Unexpected file interaction answer'; exit 1; }
+          else
+            jq '{error:{code:.error.code,status:.error.status,message:.error.message,details:.error.details}}' /tmp/file-interaction.json 2>/dev/null || head -c 1500 /tmp/file-interaction.json
+          fi
+
+          jq -nc \
+            --arg upload "$HTTP_UPLOAD" \
+            --arg state "$FILE_STATE" \
+            --arg interaction "$HTTP_FILE" \
+            --arg retry "${RETRY_AFTER:-}" \
+            '{uploadHttp:($upload|tonumber),fileState:$state,interactionHttp:($interaction|tonumber),retryAfter:($retry|select(length>0)//null)}' \
+            > /tmp/file-result.json
+
+      - name: Test normal inline Interactions API path
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          test_model () {
+            local model="$1" label="$2" out="/tmp/${label}.json" hdr="/tmp/${label}.headers"
+            jq -nc --arg model "$model" '{model:$model,input:"Reply with exactly: FXGA_INLINE_PROVIDER_OK",store:false,generation_config:{max_output_tokens:32}}' > "/tmp/${label}-request.json"
+            local code
+            code="$(curl -sS -D "$hdr" -o "$out" -w '%{http_code}' \
+              -X POST 'https://generativelanguage.googleapis.com/v1/interactions' \
+              -H "x-goog-api-key: ${GEMINI_API_KEY}" \
+              -H 'Content-Type: application/json' \
+              --data-binary @"/tmp/${label}-request.json")"
+            local retry
+            retry="$(awk 'BEGIN{IGNORECASE=1} /^retry-after:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}' "$hdr")"
+            echo "${label^^}_MODEL=${model}"
+            echo "${label^^}_HTTP=${code}"
+            echo "${label^^}_RETRY_AFTER=${retry:-none}"
+            if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+              local answer
+              answer="$(jq -r '[.steps[]? | select(.type=="model_output") | .content[]? | select(.type=="text") | .text] | join("")' "$out")"
+              echo "${label^^}_ANSWER=${answer}"
+            else
+              jq '{error:{code:.error.code,status:.error.status,message:.error.message,details:.error.details}}' "$out" 2>/dev/null || head -c 1500 "$out"
+            fi
+            jq -nc --arg model "$model" --arg code "$code" --arg retry "${retry:-}" '{model:$model,http:($code|tonumber),retryAfter:($retry|select(length>0)//null)}' > "/tmp/${label}-result.json"
+          }
+
+          test_model "$INLINE_MODEL" inline_primary
+          sleep 2
+          test_model "$RESERVE_MODEL" inline_reserve
+
+      - name: Provider diagnostic verdict
+        if: always()
+        shell: bash
+        run: |
+          echo '## Gemini provider-only diagnostic' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This test bypasses FXGA Cloud Run routing, Firestore caching, provider cooldowns and frontend logic.' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f /tmp/file-result.json ]; then
+            echo '### File path' >> "$GITHUB_STEP_SUMMARY"
+            jq -r '"- Upload HTTP: \(.uploadHttp)\n- File state: \(.fileState)\n- Document interaction HTTP: \(.interactionHttp)\n- Retry-After: \(.retryAfter // "none")"' /tmp/file-result.json >> "$GITHUB_STEP_SUMMARY"
+          fi
+          for f in /tmp/inline_primary-result.json /tmp/inline_reserve-result.json; do
+            [ -f "$f" ] || continue
+            jq -r '"- \(.model): HTTP \(.http), Retry-After \(.retryAfter // "none")"' "$f" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const read = p => fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
+          const file = read('/tmp/file-result.json');
+          const primary = read('/tmp/inline_primary-result.json');
+          const reserve = read('/tmp/inline_reserve-result.json');
+          console.log(JSON.stringify({file, primary, reserve}, null, 2));
+          if (!file || !primary || !reserve) process.exit(1);
+          if (file.uploadHttp < 200 || file.uploadHttp >= 300 || file.fileState !== 'ACTIVE') process.exit(1);
+          // Do not fail simply because Gemini is currently provider-rate-limited; the purpose is diagnosis.
+          // Fail only on auth/configuration errors that make the probe unusable.
+          const fatal = [400, 401, 403, 404];
+          if (fatal.includes(file.interactionHttp) || fatal.includes(primary.http) || fatal.includes(reserve.http)) process.exit(1);
+          NODE
