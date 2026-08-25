@@ -18,33 +18,45 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Send hi to live FXGA AI
+      - name: Send hi to direct live FXGA Gemini stream
         shell: bash
         run: |
           set -euo pipefail
-          payload=$(jq -nc '{module:"researchDesk",profile:{pair:"EURUSD",horizon:"Intraday",style:"researchDesk",technicalMode:"fxga-smc2000"},question:"hi"}')
           status=$(curl -sS --connect-timeout 15 --max-time 100 \
-            -o /tmp/fxga-hi.json \
+            -o /tmp/fxga-hi-stream.txt \
             -w '%{http_code}' \
-            -X POST "${API_BASE}/api/intelligence/query" \
+            -X POST "${API_BASE}/api/gemini/chat-stream" \
             -H 'Content-Type: application/json' \
-            -H 'Accept: application/json' \
-            --data "$payload")
+            -H 'Accept: text/event-stream' \
+            --data '{"question":"hi","task":"conversation"}')
 
           echo "HTTP_STATUS=${status}"
           echo 'RAW_RESPONSE_BEGIN'
-          cat /tmp/fxga-hi.json
+          cat /tmp/fxga-hi-stream.txt
           echo
           echo 'RAW_RESPONSE_END'
 
           if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
-            echo "FXGA AI hi request failed with HTTP ${status}" >&2
+            echo "Direct FXGA Gemini hi request failed with HTTP ${status}" >&2
             exit 1
           fi
 
-          answer=$(jq -r '.intelligence // .output // .answer // empty' /tmp/fxga-hi.json)
+          if grep -q '^event: error' /tmp/fxga-hi-stream.txt; then
+            echo 'Direct stream returned an error event.' >&2
+            exit 1
+          fi
+
+          answer=$(awk '
+            /^event: delta/ { want=1; next }
+            want && /^data: / {
+              sub(/^data: /, "");
+              print;
+              want=0;
+            }
+          ' /tmp/fxga-hi-stream.txt | jq -r -s 'map(try fromjson catch empty) | map(.delta // .text // .content // empty) | join("")')
+
           if [[ -z "${answer}" ]]; then
-            echo 'FXGA AI returned HTTP success but no usable answer field.' >&2
+            echo 'No usable streamed AI text was returned.' >&2
             exit 1
           fi
 
