@@ -6,13 +6,16 @@ import { loadPrompt, publicPromptRegistry, selectPrompt, promptDescriptor } from
 
 const PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || undefined;
 const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || '').trim();
-const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.7-flash').trim();
-const GEMINI_FALLBACK_MODEL = String(process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.5-flash-lite').trim();
+const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim();
+const GEMINI_FALLBACK_MODEL = String(process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.1-flash-lite').trim();
+const GEMINI_RESERVE_MODEL = String(process.env.GEMINI_RESERVE_MODEL || 'gemini-3.7-flash').trim();
 const PUBLIC_ORIGIN = String(process.env.FXGA_PUBLIC_ORIGIN || 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev').replace(/\/$/, '');
 const API_URL = 'https://generativelanguage.googleapis.com/v1/interactions';
 const MAX_CHAT_BYTES = 12_000;
 const LIVE_REPORT_TTL_MS = 24 * 60 * 60_000;
 const CHAT_TTL_MS = 10 * 60_000;
+const RATE_LIMIT_COOLDOWN_MS = 45_000;
+const QUOTA_COOLDOWN_MS = 15 * 60_000;
 
 const db = new Firestore({ projectId: PROJECT_ID, ignoreUndefinedProperties: true });
 const state = db.collection('fxga_collector_state');
@@ -21,6 +24,8 @@ const signals = db.collection('fxga_tradingview_signals');
 const liveSignals = db.collection('fxga_tradingview_live');
 const cache = db.collection('fxga_gemini_cache');
 const inFlight = new Map();
+const modelCooldownUntil = new Map();
+const modelTelemetry = new Map();
 
 const CORE_RULES = [
   'You are the FXGA evidence intelligence layer.',
@@ -104,11 +109,11 @@ function objectEntries(value, max) { return value && typeof value === 'object' ?
 function compactState(name, doc) {
   const payload = doc?.payload ?? doc ?? null;
   if (!payload) return null;
-  if (name === 'market') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, source: payload.source || null, assets: list(payload.assets, 60) };
-  if (name === 'technical') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, methodology: payload.methodology || null, counts: payload.counts || null, assets: objectEntries(payload.assets, 60) };
-  if (name === 'macro') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, coverageQuality: payload.coverageQuality || null, failureDiagnostics: payload.failureDiagnostics || null, observations: list(payload.observations, 140) };
-  if (name === 'calendar') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, sourceHealth: payload.sourceHealth || null, events: list(payload.events, 100) };
-  if (name === 'event-studies') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, summary: payload.summary || null, source: payload.source || null, priceUniverse: list(payload.priceUniverse, 60), preNewsWindows: list(payload.preNewsWindows, 30), horizons: list(payload.horizons, 30), patternResearch: payload.patternResearch || null, backtestResearch: payload.backtestResearch || null };
+  if (name === 'market') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, source: payload.source || null, assets: list(payload.assets, 36) };
+  if (name === 'technical') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, methodology: payload.methodology || null, counts: payload.counts || null, assets: objectEntries(payload.assets, 36) };
+  if (name === 'macro') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, coverageQuality: payload.coverageQuality || null, failureDiagnostics: payload.failureDiagnostics || null, observations: list(payload.observations, 70) };
+  if (name === 'calendar') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, sourceHealth: payload.sourceHealth || null, events: list(payload.events, 50) };
+  if (name === 'event-studies') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, summary: payload.summary || null, source: payload.source || null, priceUniverse: list(payload.priceUniverse, 40), preNewsWindows: list(payload.preNewsWindows, 20), horizons: list(payload.horizons, 20), patternResearch: payload.patternResearch || null, backtestResearch: payload.backtestResearch || null };
   if (name === 'intelligence') return {
     generatedAt: payload.generatedAt || doc?.updatedAt || null,
     decisionGovernance: payload.decisionGovernance || null,
@@ -118,7 +123,7 @@ function compactState(name, doc) {
     sessionSignals: payload.sessionSignals || null,
     research: payload.research ? {
       generatedAt: payload.research.generatedAt || null,
-      scenarios: list(payload.research.scenarios, 30),
+      scenarios: list(payload.research.scenarios, 20),
       releaseAnalytics: payload.research.releaseAnalytics || null,
       qualityCalibrationEvidence: payload.research.qualityCalibrationEvidence || null,
       performance: payload.research.performance || payload.research.strategyPerformance || null,
@@ -148,9 +153,9 @@ async function recentSignals(signalId = '') {
     const snap = await signals.doc(signalId).get();
     return snap.exists ? [safeSignal({ id: snap.id, ...snap.data() })] : [];
   }
-  const snap = await signals.limit(100).get();
+  const snap = await signals.limit(60).get();
   return snap.docs.map(doc => safeSignal({ id: doc.id, ...doc.data() })).filter(Boolean)
-    .sort((a, b) => Date.parse(b.updatedAt || b.signalTime || 0) - Date.parse(a.updatedAt || a.signalTime || 0)).slice(0, 80);
+    .sort((a, b) => Date.parse(b.updatedAt || b.signalTime || 0) - Date.parse(a.updatedAt || a.signalTime || 0)).slice(0, 30);
 }
 
 async function stateMeta() {
@@ -180,6 +185,7 @@ async function buildContext(descriptor, body = {}) {
     architecture: 'Cloudflare static frontend -> Google Cloud Run processing -> Firestore evidence/state -> Google Gemini explanation layer',
     primaryModel: GEMINI_MODEL,
     fallbackModel: GEMINI_FALLBACK_MODEL,
+    reserveModel: GEMINI_RESERVE_MODEL,
     promptRouting: 'task-aware Markdown prompt library',
     quotaPolicy: 'Google provider/project/model quota only; no FXGA hourly or daily Gemini cap',
     chatbot: true,
@@ -203,10 +209,43 @@ function interactionText(payload) {
 
 function retryAfterSeconds(response) {
   const raw = String(response.headers.get('retry-after') || '').trim();
+  if (!raw) return null;
   const seconds = Number(raw);
   if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds);
   const date = Date.parse(raw);
   return Number.isFinite(date) ? Math.max(0, Math.ceil((date - Date.now()) / 1000)) : null;
+}
+
+function cooldownSeconds(model) {
+  const until = Number(modelCooldownUntil.get(model) || 0);
+  if (!until || until <= Date.now()) {
+    if (until) modelCooldownUntil.delete(model);
+    return 0;
+  }
+  return Math.max(1, Math.ceil((until - Date.now()) / 1000));
+}
+
+function markModelCooldown(model, error) {
+  const code = String(error.providerCode || error.code || '').toLowerCase();
+  const hintMs = Number.isFinite(Number(error.retryAfterSeconds)) && Number(error.retryAfterSeconds) > 0
+    ? Number(error.retryAfterSeconds) * 1000
+    : 0;
+  const duration = code === 'quota_exceeded'
+    ? Math.max(QUOTA_COOLDOWN_MS, hintMs)
+    : Math.max(RATE_LIMIT_COOLDOWN_MS, hintMs);
+  const bounded = Math.min(code === 'quota_exceeded' ? 60 * 60_000 : 2 * 60_000, duration);
+  const until = Date.now() + bounded;
+  modelCooldownUntil.set(model, until);
+  modelTelemetry.set(model, {
+    last429At: new Date().toISOString(),
+    providerCode: code || 'rate_limit_exceeded',
+    cooldownUntil: new Date(until).toISOString(),
+  });
+  return Math.ceil(bounded / 1000);
+}
+
+function modelOrder() {
+  return [...new Set([GEMINI_MODEL, GEMINI_FALLBACK_MODEL, GEMINI_RESERVE_MODEL].filter(Boolean))];
 }
 
 async function invokeOnce(model, prompt) {
@@ -216,7 +255,7 @@ async function invokeOnce(model, prompt) {
     const response = await fetch(API_URL, {
       method: 'POST', signal: controller.signal,
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
-      body: JSON.stringify({ model, input: prompt, store: false, generation_config: { max_output_tokens: 1800 } }),
+      body: JSON.stringify({ model, input: prompt, store: false, generation_config: { max_output_tokens: 1400 } }),
     });
     const text = await response.text();
     let payload = {};
@@ -224,14 +263,14 @@ async function invokeOnce(model, prompt) {
     if (!response.ok) {
       const providerCode = String(payload?.error?.code || payload?.error?.type || payload?.code || '').toLowerCase();
       const providerMessage = String(payload?.error?.message || payload?.message || `Gemini ${model} returned HTTP ${response.status}`);
-      const error = Object.assign(new Error(providerMessage), { statusCode: response.status, providerCode, retryAfterSeconds: retryAfterSeconds(response) });
+      const error = Object.assign(new Error(providerMessage), { statusCode: response.status, providerCode, retryAfterSeconds: retryAfterSeconds(response), model });
       throw error;
     }
     const answer = interactionText(payload);
-    if (!answer) throw Object.assign(new Error('Gemini returned no usable text output'), { statusCode: 502, code: 'bad_gateway' });
+    if (!answer) throw Object.assign(new Error('Gemini returned no usable text output'), { statusCode: 502, code: 'bad_gateway', model });
     return { model, answer, usage: payload?.usage || null, interactionId: payload?.id || null };
   } catch (error) {
-    if (error?.name === 'AbortError') throw Object.assign(new Error('Gemini request deadline exceeded'), { statusCode: 504, code: 'deadline_exceeded' });
+    if (error?.name === 'AbortError') throw Object.assign(new Error('Gemini request deadline exceeded'), { statusCode: 504, code: 'deadline_exceeded', model });
     throw error;
   } finally { clearTimeout(timer); }
 }
@@ -242,9 +281,13 @@ async function invokeWithRetry(model, prompt) {
     try { return await invokeOnce(model, prompt); }
     catch (error) {
       last = error;
-      const code = String(error.providerCode || error.code || '').toLowerCase();
       const status = Number(error.statusCode || 500);
-      const transient = [408, 429, 500, 502, 503, 504].includes(status) && code !== 'quota_exceeded';
+      const code = String(error.providerCode || error.code || '').toLowerCase();
+      if (status === 429) {
+        error.retryAfterSeconds = Number(error.retryAfterSeconds) > 0 ? Number(error.retryAfterSeconds) : markModelCooldown(model, error);
+        throw error;
+      }
+      const transient = [408, 500, 502, 503, 504].includes(status) && code !== 'quota_exceeded';
       if (!transient || attempt === 2) throw error;
       const base = Number(error.retryAfterSeconds) || (1.2 * (2 ** attempt));
       const jitter = Math.random() * 0.4;
@@ -255,14 +298,44 @@ async function invokeWithRetry(model, prompt) {
 }
 
 async function invokeGemini(prompt) {
-  try { return await invokeWithRetry(GEMINI_MODEL, prompt); }
-  catch (error) {
-    const status = Number(error.statusCode || 500);
-    const code = String(error.providerCode || error.code || '').toLowerCase();
-    const fallbackEligible = ['model_not_found','not_found','quota_exceeded'].includes(code) || [404, 429, 500, 502, 503, 504].includes(status);
-    if (!fallbackEligible || GEMINI_FALLBACK_MODEL === GEMINI_MODEL) throw error;
-    return invokeWithRetry(GEMINI_FALLBACK_MODEL, prompt);
+  const models = modelOrder();
+  const attempted = [];
+  let last = null;
+  let shortestCooldown = Infinity;
+
+  for (const model of models) {
+    const cooling = cooldownSeconds(model);
+    if (cooling > 0) {
+      shortestCooldown = Math.min(shortestCooldown, cooling);
+      continue;
+    }
+    attempted.push(model);
+    try { return await invokeWithRetry(model, prompt); }
+    catch (error) {
+      last = error;
+      const status = Number(error.statusCode || 500);
+      const code = String(error.providerCode || error.code || '').toLowerCase();
+      if (status === 429) {
+        shortestCooldown = Math.min(shortestCooldown, cooldownSeconds(model) || Number(error.retryAfterSeconds) || 45);
+        continue;
+      }
+      const fallbackEligible = ['model_not_found','not_found','quota_exceeded'].includes(code) || [404, 500, 502, 503, 504].includes(status);
+      if (!fallbackEligible) throw error;
+    }
   }
+
+  if (last) {
+    last.modelsTried = attempted;
+    if (Number.isFinite(shortestCooldown)) last.retryAfterSeconds = Math.max(1, shortestCooldown);
+    throw last;
+  }
+
+  throw Object.assign(new Error('All configured Gemini models are cooling down after provider rate limits'), {
+    statusCode: 429,
+    providerCode: 'rate_limit_exceeded',
+    retryAfterSeconds: Number.isFinite(shortestCooldown) ? Math.max(1, shortestCooldown) : 45,
+    modelsTried: [],
+  });
 }
 
 function composePrompt(taskPrompt, question, context) {
@@ -271,10 +344,10 @@ function composePrompt(taskPrompt, question, context) {
 
 async function cachedIntelligence(cacheId, ttlMs, work) {
   const snap = await cache.doc(cacheId).get();
-  if (snap.exists) {
-    const value = snap.data();
-    const age = Date.now() - Date.parse(value.createdAt || 0);
-    if (Number.isFinite(age) && age >= 0 && age < ttlMs) return { value, cached: true, coalesced: false };
+  const stale = snap.exists ? snap.data() : null;
+  if (stale) {
+    const age = Date.now() - Date.parse(stale.createdAt || 0);
+    if (Number.isFinite(age) && age >= 0 && age < ttlMs) return { value: stale, cached: true, stale: false, coalesced: false };
   }
   let task = inFlight.get(cacheId);
   const coalesced = Boolean(task);
@@ -283,8 +356,16 @@ async function cachedIntelligence(cacheId, ttlMs, work) {
     inFlight.set(cacheId, task);
     task.then(() => inFlight.delete(cacheId), () => inFlight.delete(cacheId));
   }
-  const value = await task;
-  return { value, cached: false, coalesced };
+  try {
+    const value = await task;
+    return { value, cached: false, stale: false, coalesced };
+  } catch (error) {
+    const status = Number(error.statusCode || 500);
+    if (stale && [429, 500, 502, 503, 504].includes(status)) {
+      return { value: { ...stale, degraded: true, degradedReason: 'Gemini provider temporarily unavailable; serving the last matching evidence-grounded answer.' }, cached: true, stale: true, coalesced };
+    }
+    throw error;
+  }
 }
 
 async function chat(req, res) {
@@ -309,9 +390,9 @@ async function chat(req, res) {
       await cache.doc(cacheId).set(document, { merge: false });
       return document;
     });
-    return sendJson(req, res, 200, { ...result.value, cached: result.cached, coalesced: result.coalesced });
+    return sendJson(req, res, 200, { ...result.value, cached: result.cached, stale: result.stale, coalesced: result.coalesced });
   } catch (error) {
-    console.error('FXGA chatbot failed', { task: descriptor.id, statusCode: error.statusCode || null, providerCode: error.providerCode || null, message: String(error.message || error).slice(0, 300) });
+    console.error('FXGA chatbot failed', { task: descriptor.id, statusCode: error.statusCode || null, providerCode: error.providerCode || null, model: error.model || null, modelsTried: error.modelsTried || null, message: String(error.message || error).slice(0, 300) });
     return sendFriendlyError(req, res, error, error.statusCode || 502);
   }
 }
@@ -334,9 +415,9 @@ async function liveReport(req, res) {
       await cache.doc(cacheId).set(document, { merge: false });
       return document;
     });
-    return sendJson(req, res, 200, { ...result.value, cached: result.cached, coalesced: result.coalesced }, 'no-store');
+    return sendJson(req, res, 200, { ...result.value, cached: result.cached, stale: result.stale, coalesced: result.coalesced }, 'no-store');
   } catch (error) {
-    console.error('FXGA live intelligence report failed', { statusCode: error.statusCode || null, providerCode: error.providerCode || null, message: String(error.message || error).slice(0, 300) });
+    console.error('FXGA live intelligence report failed', { statusCode: error.statusCode || null, providerCode: error.providerCode || null, model: error.model || null, modelsTried: error.modelsTried || null, message: String(error.message || error).slice(0, 300) });
     return sendFriendlyError(req, res, error, error.statusCode || 502);
   }
 }
@@ -363,11 +444,14 @@ http.createServer = function fxgaIntelligenceCreateServer(options, requestListen
     if (url.pathname === '/api/gemini/prompts') return sendJson(req, res, 200, { schema: 'fxga.prompt-registry.v1', prompts: publicPromptRegistry(), automaticRouting: true, timestamp: new Date().toISOString() }, 'public, max-age=60');
     if (url.pathname === '/api/errors/catalog') return sendJson(req, res, 200, { schema: 'fxga.error-catalog.v1', errors: publicErrorCatalog(), timestamp: new Date().toISOString() }, 'public, max-age=300');
     if (url.pathname === '/api/gemini/intelligence-health') return sendJson(req, res, 200, {
-      ok: true, configured: Boolean(GEMINI_API_KEY), model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL,
+      ok: true, configured: Boolean(GEMINI_API_KEY), model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL, reserveModel: GEMINI_RESERVE_MODEL,
       promptCount: publicPromptRegistry().length, promptRouting: 'task-aware-md-library', liveReport: true, chatbot: true,
       applicationHourlyCap: null, applicationDailyCap: null, providerQuotaManaged: true,
-      fallbackOnPrimaryQuota: GEMINI_FALLBACK_MODEL !== GEMINI_MODEL,
-      cachePolicy: 'evidence-hash-driven; live report reuses identical evidence for up to 24h',
+      fallbackOnPrimaryQuota: modelOrder().length > 1,
+      rateLimitStrategy: 'instant-model-failover-plus-per-model-cooldown',
+      modelCooldowns: Object.fromEntries(modelOrder().map(model => [model, cooldownSeconds(model)])),
+      modelTelemetry: Object.fromEntries(modelTelemetry.entries()),
+      cachePolicy: 'evidence-hash-driven; live report reuses identical evidence for up to 24h; stale matching answers may be served during transient provider failure',
       endpoints: ['/api/gemini/chat','/api/gemini/live-report','/api/gemini/prompts','/api/errors/catalog'],
       timestamp: new Date().toISOString(),
     });
@@ -376,4 +460,4 @@ http.createServer = function fxgaIntelligenceCreateServer(options, requestListen
   return serverOptions === undefined ? originalCreateServer(wrapped) : originalCreateServer(serverOptions, wrapped);
 };
 
-console.log('FXGA intelligence extension loaded', { model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL, promptCount: publicPromptRegistry().length, providerQuotaManaged: true, fallbackOnPrimaryQuota: GEMINI_FALLBACK_MODEL !== GEMINI_MODEL, cachePolicy: 'evidence-driven' });
+console.log('FXGA intelligence extension loaded', { model: GEMINI_MODEL, fallbackModel: GEMINI_FALLBACK_MODEL, reserveModel: GEMINI_RESERVE_MODEL, promptCount: publicPromptRegistry().length, providerQuotaManaged: true, fallbackOnPrimaryQuota: modelOrder().length > 1, rateLimitStrategy: 'instant-model-failover-plus-per-model-cooldown', cachePolicy: 'evidence-driven' });
