@@ -1,6 +1,6 @@
 {
   "schema": "fxga.institutional.readiness.v3",
-  "generatedAt": "2026-08-25T04:00:17.875Z",
+  "generatedAt": "2026-08-25T04:34:31.442Z",
   "institutionalReady": false,
   "tradeModelReady": false,
   "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
@@ -18,7 +18,7 @@
       "ready": true,
       "blocking": true,
       "detail": {
-        "commit": "e5b08c0fa3cc801b30a9e3f3a0ba199124be922b",
+        "commit": "6f373bddd8bf1460732627fd46fccadd3255befc",
         "release": "cross-asset-mt5-60d-event-research",
         "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app"
       }
@@ -30,10 +30,10 @@
       "detail": {
         "updatedAt": {
           "calendar": "2026-08-25T00:05:09.128Z",
-          "macro": "2026-08-25T03:01:54.110Z",
+          "macro": "2026-08-25T04:02:00.836Z",
           "intelligence": "2026-08-21T02:52:15.275Z",
-          "market": "2026-08-25T03:59:27.863Z",
-          "technical": "2026-08-25T04:00:02.590Z"
+          "market": "2026-08-25T04:33:28.693Z",
+          "technical": "2026-08-25T04:33:32.541Z"
         },
         "compute": "Google Cloud Run",
         "state": "Google Cloud Firestore"
@@ -44,8 +44,8 @@
       "ready": false,
       "blocking": true,
       "detail": {
-        "intelligenceAgeMinutes": 5828,
-        "macroAgeMinutes": 58,
+        "intelligenceAgeMinutes": 5862,
+        "macroAgeMinutes": 32,
         "marketAgeMinutes": 1,
         "thresholds": {
           "intelligence": 30,
@@ -90,7 +90,7 @@
         "unique": 5,
         "structurallyValid": 5,
         "generatedAt": "2026-08-21T02:52:03.999Z",
-        "ageMinutes": 5828
+        "ageMinutes": 5862
       }
     },
     {
@@ -143,7 +143,7 @@
         "totalBars": 48657,
         "assetsExpected": 16,
         "newestEURUSD": 1787274060000,
-        "ageMinutes": 5939,
+        "ageMinutes": 5974,
         "marketExpectedOpen": true,
         "secretBackedAuthentication": true
       }
