@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './google-cloud-routing';
+import './live-signal-contract-guard';
 import App from './App';
 import { ExplainabilityLayer } from './components/ExplainabilityLayer';
 import { QualityFrameworkDock } from './components/QualityFrameworkDock';
