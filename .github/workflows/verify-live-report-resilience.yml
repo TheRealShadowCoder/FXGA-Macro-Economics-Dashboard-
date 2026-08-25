@@ -1,0 +1,109 @@
+name: Verify FXGA Live Report Resilience
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'diagnostics/live-report-resilience-trigger.txt'
+
+permissions:
+  contents: write
+
+env:
+  API_BASE: https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Exercise exact standalone live-report route
+        shell: bash
+        run: |
+          set -euo pipefail
+          HTTP=$(curl -sS --connect-timeout 15 --max-time 150 \
+            -D /tmp/live-report.headers \
+            -o /tmp/live-report.json \
+            -w '%{http_code}' \
+            "${API_BASE}/api/gemini/live-report")
+          echo "LIVE_REPORT_HTTP=${HTTP}"
+          cat /tmp/live-report.json | jq '{schema,model,cached,stale,degraded,source,providerThrottled,retryAfterSeconds,refreshAfterSeconds,compatibilityRoute,reportLength:(.report|length),error,friendlyError}'
+
+          curl -fsS --connect-timeout 10 --max-time 30 \
+            "${API_BASE}/api/gemini/file-context-status" > /tmp/file-status.json
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const http = Number(process.env.HTTP_STATUS || fs.readFileSync('/tmp/http-status.txt','utf8'));
+          const body = JSON.parse(fs.readFileSync('/tmp/live-report.json','utf8'));
+          const file = JSON.parse(fs.readFileSync('/tmp/file-status.json','utf8'));
+          const out = {
+            schema:'fxga.live-report-resilience.verification.v1',
+            runId:Number(process.env.GITHUB_RUN_ID),
+            checkedAt:new Date().toISOString(),
+            liveReport:{
+              http,
+              schema:body.schema||null,
+              model:body.model||null,
+              reportLength:String(body.report||'').length,
+              cached:Boolean(body.cached),
+              stale:Boolean(body.stale),
+              degraded:Boolean(body.degraded),
+              source:body.source||null,
+              providerThrottled:Boolean(body.providerThrottled),
+              retryAfterSeconds:body.retryAfterSeconds??null,
+              refreshAfterSeconds:body.refreshAfterSeconds??null,
+              compatibilityRoute:body.compatibilityRoute||null,
+              leaked429:http===429,
+              error:body.error||body?.friendlyError?.title||null,
+            },
+            fileContext:{
+              http:200,
+              persistedLastMode:file.persistedLastMode||null,
+              persistedLastModel:file.persistedLastModel||null,
+              persistedLastFileState:file.persistedLastFileState||null,
+              persistedLastError:file.persistedLastError||null,
+            }
+          };
+          fs.writeFileSync('/tmp/result.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          if(http!==200) throw new Error(`Expected live-report HTTP 200, got ${http}`);
+          if(body.schema!=='fxga.gemini.live-report.v2') throw new Error(`Old live-report schema still deployed: ${body.schema||'none'}`);
+          if(body.compatibilityRoute!=='streaming-gateway') throw new Error(`Live report is not using streaming gateway: ${body.compatibilityRoute||'none'}`);
+          if(!String(body.report||'').trim()) throw new Error('Live report is empty');
+          if(Number(body.refreshAfterSeconds||0)<180) throw new Error(`Refresh interval still too aggressive: ${body.refreshAfterSeconds}`);
+          if(file.persistedLastMode!=='file') throw new Error(`File context mode is ${file.persistedLastMode||'none'}`);
+          if(file.persistedLastFileState!=='ACTIVE') throw new Error(`Gemini file state is ${file.persistedLastFileState||'none'}`);
+          if(file.persistedLastError) throw new Error(`Gemini file context reports error: ${file.persistedLastError}`);
+          NODE
+        env:
+          HTTP_STATUS: ${{ steps.none.outputs.unused }}
+
+      - name: Reconstruct status for Node verifier
+        if: always()
+        shell: bash
+        run: |
+          # This step is retained only to make failure diagnostics explicit in the job summary.
+          if [ -f /tmp/live-report.json ]; then
+            echo 'Live report response captured.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Persist sanitized verification result
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const path = 'diagnostics/live-report-resilience-latest.json';
+            let raw;
+            if (fs.existsSync('/tmp/result.json')) raw = fs.readFileSync('/tmp/result.json','utf8');
+            else {
+              let body = {};
+              try { body = JSON.parse(fs.readFileSync('/tmp/live-report.json','utf8')); } catch {}
+              raw = JSON.stringify({schema:'fxga.live-report-resilience.verification.v1',runId:Number(process.env.GITHUB_RUN_ID),checkedAt:new Date().toISOString(),fatal:'verification_step_failed_before_result',responseSchema:body.schema||null,error:body.error||body?.friendlyError?.title||null},null,2);
+            }
+            let sha;
+            try { const x=await github.rest.repos.getContent({owner:context.repo.owner,repo:context.repo.repo,path,ref:'main'}); if(!Array.isArray(x.data)) sha=x.data.sha; } catch(e){ if(e.status!==404) throw e; }
+            await github.rest.repos.createOrUpdateFileContents({owner:context.repo.owner,repo:context.repo.repo,path,message:'Record live-report resilience verification [skip ci]',content:Buffer.from(raw).toString('base64'),branch:'main',...(sha?{sha}:{})});
