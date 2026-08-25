@@ -14,10 +14,12 @@ RUN node optimize-server.js \
  && node --check server.js \
  && node --check gemini-bootstrap.js \
  && node --check startup.js \
+ && node --check gemini-legacy-resilience.js \
  && node --check gemini-hook.js \
  && node --check fxga-error-catalog.js \
  && node --check fxga-prompt-library.js \
  && node --check fxga-intelligence-extension.js \
+ && node --check fxga-gemini-streaming-extension.js \
  && test -f prompts/program-chat.md \
  && test -f prompts/live-intelligence-report.md
 
