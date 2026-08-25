@@ -9,6 +9,7 @@ import { QualityFrameworkDock } from './components/QualityFrameworkDock';
 import { FirestoreCapacityDock } from './components/FirestoreCapacityDock';
 import { MT5PriceCacheDock } from './components/MT5PriceCacheDock';
 import { GeminiIntelligenceDock } from './components/GeminiIntelligenceDock';
+import { EvidencePackDock } from './components/EvidencePackDock';
 import './google-live-refresh';
 import './public-finish';
 import './styles.css';
@@ -29,5 +30,6 @@ createRoot(document.getElementById('root')!).render(
     <MT5PriceCacheDock />
     <ExplainabilityLayer />
     <GeminiIntelligenceDock />
+    <EvidencePackDock />
   </StrictMode>,
 );
