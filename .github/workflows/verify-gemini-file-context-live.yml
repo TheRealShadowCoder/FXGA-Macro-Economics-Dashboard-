@@ -1,4 +1,4 @@
-name: Verify FXGA Gemini TXT File Context Live
+name: Verify FXGA Gemini CSV File Context Live
 
 on:
   workflow_dispatch:
@@ -63,14 +63,18 @@ jobs:
           if (!model || model.startsWith('fxga-local-')) throw new Error(`Real Gemini did not answer; model=${model || 'none'}`);
           NODE
 
-      - name: Verify server used one uploaded TXT package
+      - name: Verify server used one ACTIVE uploaded CSV package
         shell: bash
         run: |
           set -euo pipefail
           curl -fsS --connect-timeout 10 --max-time 30 "${API_BASE}/api/gemini/file-context-status" -o /tmp/status.json
           jq . /tmp/status.json
           jq -e '.enabled == true' /tmp/status.json >/dev/null
+          jq -e '.schema == "fxga.gemini.file-context.status.v2"' /tmp/status.json >/dev/null
+          jq -e '.mimeType == "text/csv"' /tmp/status.json >/dev/null
+          jq -e '.formatVersion == "fxga-context-csv-v1"' /tmp/status.json >/dev/null
           jq -e '.persistedLastMode == "file"' /tmp/status.json >/dev/null
+          jq -e '.persistedLastFileState == "ACTIVE"' /tmp/status.json >/dev/null
           jq -e '(.persistedLastFileBytes | tonumber) >= 2000' /tmp/status.json >/dev/null
           jq -e '(.persistedLastModel | type == "string") and (.persistedLastModel | startswith("gemini-"))' /tmp/status.json >/dev/null
           jq -e '(.persistedLastFileHashPrefix | type == "string") and (.persistedLastFileHashPrefix | length >= 8)' /tmp/status.json >/dev/null
@@ -82,7 +86,9 @@ jobs:
       - name: Verification summary
         if: always()
         run: |
-          echo '## Gemini one-file TXT transport' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Sends large FXGA context through Gemini Files API as one text/plain document.' >> "$GITHUB_STEP_SUMMARY"
+          echo '## Gemini one-file CSV transport' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Sends large FXGA context through Gemini Files API as one text/csv document.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Requires the provider file to reach ACTIVE before Interactions inference.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Uses format-versioned hashing so stale TXT references cannot be reused.' >> "$GITHUB_STEP_SUMMARY"
           echo '- Sends only the live user question as the small Interactions text block.' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Verifies production transport telemetry without exposing file URI or credentials.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Verifies strict production file mode without accepting inline fallback as success.' >> "$GITHUB_STEP_SUMMARY"
