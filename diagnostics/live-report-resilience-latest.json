@@ -1,0 +1,28 @@
+{
+  "schema": "fxga.live-report-resilience.verification.v1",
+  "runId": 32858980119,
+  "checkedAt": "2026-08-25T14:22:06.288Z",
+  "liveReport": {
+    "http": 200,
+    "schema": "fxga.gemini.live-report.v2",
+    "model": "gemini-3.5-flash-lite",
+    "reportLength": 1616,
+    "cached": false,
+    "stale": false,
+    "degraded": false,
+    "source": "gemini",
+    "providerThrottled": false,
+    "retryAfterSeconds": null,
+    "refreshAfterSeconds": 300,
+    "compatibilityRoute": "streaming-gateway",
+    "leaked429": false,
+    "error": null
+  },
+  "fileContext": {
+    "http": 200,
+    "persistedLastMode": "file",
+    "persistedLastModel": "gemini-3.5-flash-lite",
+    "persistedLastFileState": "ACTIVE",
+    "persistedLastError": null
+  }
+}
