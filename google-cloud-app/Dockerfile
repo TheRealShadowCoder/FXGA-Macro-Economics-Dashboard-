@@ -12,6 +12,8 @@ COPY google-cloud-app/prompts ./prompts
 # unrelated Firestore state fan-out for dashboard/analysis/news requests.
 RUN node optimize-server.js \
  && node --check server.js \
+ && node --check gemini-bootstrap.js \
+ && node --check startup.js \
  && node --check gemini-hook.js \
  && node --check fxga-error-catalog.js \
  && node --check fxga-prompt-library.js \
@@ -28,4 +30,8 @@ RUN sed -i 's/setInterval(pollUpdates,3000)/setInterval(pollUpdates,15000)/' ser
 
 USER node
 EXPOSE 8080
-CMD ["node", "--import", "./gemini-hook.js", "--import", "./fxga-intelligence-extension.js", "server.js"]
+
+# startup.js resolves Gemini from the already-configured Cloud Run secret env first
+# and falls back to Google Secret Manager through the runtime service account. Only
+# then are the Gemini modules imported, preventing a false "not configured" state.
+CMD ["node", "startup.js"]
