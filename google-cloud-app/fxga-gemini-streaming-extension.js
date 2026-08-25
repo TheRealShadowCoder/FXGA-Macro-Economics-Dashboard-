@@ -13,7 +13,7 @@ const PUBLIC_ORIGIN = String(process.env.FXGA_PUBLIC_ORIGIN || 'https://fxga-mac
 const API_STREAM_URL = 'https://generativelanguage.googleapis.com/v1/interactions?alt=sse';
 const MAX_BODY_BYTES = 12_000;
 const CACHE_TTL_MS = 10 * 60_000;
-const RATE_LIMIT_COOLDOWN_MS = 45_000;
+const RATE_LIMIT_COOLDOWN_MS = 20_000;
 const QUOTA_COOLDOWN_MS = 15 * 60_000;
 
 const db = new Firestore({ projectId: PROJECT_ID, ignoreUndefinedProperties: true });
@@ -22,6 +22,7 @@ const chunks = db.collection('fxga_collector_state_chunks');
 const signals = db.collection('fxga_tradingview_signals');
 const liveSignals = db.collection('fxga_tradingview_live');
 const cache = db.collection('fxga_gemini_cache');
+const providerState = state.doc('gemini-provider-state');
 const modelCooldownUntil = new Map();
 
 const CORE_RULES = [
@@ -29,7 +30,7 @@ const CORE_RULES = [
   'Use only supplied structured evidence. Never invent prices, signals, probabilities, performance statistics, events, backtests, or certainty.',
   'Stored FXGA engines and persisted Google Cloud evidence are the source of truth.',
   'Forecasts are scenarios with invalidation, not guarantees. A statistical edge may be claimed only when measured validation evidence supports it.',
-  'Explain advanced reasoning in clear language, but do not expose hidden chain-of-thought or private reasoning traces.',
+  'Explain conclusions clearly without exposing hidden chain-of-thought or private reasoning traces.',
   'Never expose credentials, keys, tokens, or authentication material.',
 ].join('\n');
 
@@ -61,10 +62,11 @@ function sendEvent(res, event, payload) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
-function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-function sha(value) { return crypto.createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex'); }
-function list(value, max) { return Array.isArray(value) ? value.slice(0, max) : []; }
-function objectEntries(value, max) { return value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).slice(0, max)) : value; }
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const sha = value => crypto.createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
+const list = (value, max) => Array.isArray(value) ? value.slice(0, max) : [];
+const objectEntries = (value, max) => value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).slice(0, max)) : value;
+const modelOrder = () => [...new Set([GEMINI_MODEL, GEMINI_FALLBACK_MODEL, GEMINI_RESERVE_MODEL].filter(Boolean))];
 
 async function readBody(req) {
   const parts = [];
@@ -79,7 +81,9 @@ async function readBody(req) {
   catch { throw Object.assign(new Error('FXGA chatbot request must be valid JSON'), { statusCode: 400, code: 'invalid_request' }); }
 }
 
-function chunkDocId(name, generation, index) { return `${name}__${generation}__${String(index).padStart(4, '0')}`; }
+function chunkDocId(name, generation, index) {
+  return `${name}__${generation}__${String(index).padStart(4, '0')}`;
+}
 
 async function readState(name) {
   const snap = await state.doc(name).get();
@@ -106,11 +110,11 @@ async function readState(name) {
 function compactState(name, doc) {
   const payload = doc?.payload ?? doc ?? null;
   if (!payload) return null;
-  if (name === 'market') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, assets: list(payload.assets, 28) };
-  if (name === 'technical') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, counts: payload.counts || null, assets: objectEntries(payload.assets, 28) };
-  if (name === 'macro') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, coverageQuality: payload.coverageQuality || null, observations: list(payload.observations, 48) };
-  if (name === 'calendar') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, sourceHealth: payload.sourceHealth || null, events: list(payload.events, 30) };
-  if (name === 'event-studies') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, summary: payload.summary || null, priceUniverse: list(payload.priceUniverse, 24), preNewsWindows: list(payload.preNewsWindows, 12), horizons: list(payload.horizons, 12), patternResearch: payload.patternResearch || null, backtestResearch: payload.backtestResearch || null };
+  if (name === 'market') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, assets: list(payload.assets, 24) };
+  if (name === 'technical') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, counts: payload.counts || null, assets: objectEntries(payload.assets, 24) };
+  if (name === 'macro') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, coverageQuality: payload.coverageQuality || null, observations: list(payload.observations, 36) };
+  if (name === 'calendar') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, sourceHealth: payload.sourceHealth || null, events: list(payload.events, 24) };
+  if (name === 'event-studies') return { generatedAt: payload.generatedAt || doc?.updatedAt || null, summary: payload.summary || null, priceUniverse: list(payload.priceUniverse, 18), preNewsWindows: list(payload.preNewsWindows, 10), horizons: list(payload.horizons, 10), patternResearch: payload.patternResearch || null, backtestResearch: payload.backtestResearch || null };
   if (name === 'intelligence') return {
     generatedAt: payload.generatedAt || doc?.updatedAt || null,
     decisionGovernance: payload.decisionGovernance || null,
@@ -118,7 +122,7 @@ function compactState(name, doc) {
     economyAnalysis: payload.economyAnalysis || null,
     sessionSignals: payload.sessionSignals || null,
     research: payload.research ? {
-      scenarios: list(payload.research.scenarios, 12),
+      scenarios: list(payload.research.scenarios, 10),
       performance: payload.research.performance || payload.research.strategyPerformance || null,
       validation: payload.research.validation || null,
       edgeResearch: payload.research.edgeResearch || null,
@@ -188,7 +192,6 @@ async function buildContext(descriptor, body) {
   return context;
 }
 
-function modelOrder() { return [...new Set([GEMINI_MODEL, GEMINI_FALLBACK_MODEL, GEMINI_RESERVE_MODEL].filter(Boolean))]; }
 function cooldownSeconds(model) {
   const until = Number(modelCooldownUntil.get(model) || 0);
   if (!until || until <= Date.now()) { if (until) modelCooldownUntil.delete(model); return 0; }
@@ -206,15 +209,158 @@ function retryAfterSeconds(response) {
 
 function markCooldown(model, retryAfter, message = '') {
   const quotaLike = /daily|quota exceeded|resource exhausted.*quota|per day/i.test(message);
-  const base = quotaLike ? QUOTA_COOLDOWN_MS : RATE_LIMIT_COOLDOWN_MS;
   const hinted = Number(retryAfter) > 0 ? Number(retryAfter) * 1000 : 0;
-  const duration = Math.min(quotaLike ? 60 * 60_000 : 2 * 60_000, Math.max(base, hinted));
+  const base = quotaLike ? QUOTA_COOLDOWN_MS : (hinted || RATE_LIMIT_COOLDOWN_MS);
+  const duration = Math.min(quotaLike ? 60 * 60_000 : 2 * 60_000, Math.max(5_000, base));
   modelCooldownUntil.set(model, Date.now() + duration);
   return Math.ceil(duration / 1000);
 }
 
+async function readProviderBackoff() {
+  try {
+    const snap = await providerState.get();
+    if (!snap.exists) return 0;
+    const until = Date.parse(String(snap.data()?.backoffUntil || ''));
+    return Number.isFinite(until) && until > Date.now() ? Math.max(1, Math.ceil((until - Date.now()) / 1000)) : 0;
+  } catch { return 0; }
+}
+
+async function setProviderBackoff(seconds, reason) {
+  const safeSeconds = Math.max(5, Math.min(15 * 60, Number(seconds || 20)));
+  try {
+    await providerState.set({
+      backoffUntil: new Date(Date.now() + safeSeconds * 1000).toISOString(),
+      reason: String(reason || 'Gemini provider throttling'),
+      updatedAt: new Date().toISOString(),
+      source: 'fxga-streaming-gateway',
+    }, { merge: true });
+  } catch { /* provider throttling must not make Firestore telemetry fatal */ }
+  return safeSeconds;
+}
+
 function composePrompt(taskPrompt, question, context) {
   return `${CORE_RULES}\n\nTASK-SPECIFIC INSTRUCTIONS\n${taskPrompt}\n\nUSER QUESTION\n${question}\n\nSTRUCTURED FXGA EVIDENCE\n${JSON.stringify(context)}`;
+}
+
+function printable(value, max = 900) {
+  if (value == null) return 'not available';
+  if (typeof value === 'string') return value.length > max ? `${value.slice(0, max)}…` : value;
+  try {
+    const text = JSON.stringify(value);
+    return text.length > max ? `${text.slice(0, max)}…` : text;
+  } catch { return String(value); }
+}
+
+function rowSummary(row, keys) {
+  if (!row || typeof row !== 'object') return printable(row, 360);
+  const pairs = [];
+  for (const key of keys) if (row[key] != null && row[key] !== '') pairs.push(`${key}=${printable(row[key], 180)}`);
+  return pairs.length ? pairs.join(' · ') : printable(row, 360);
+}
+
+function localEvidenceAnswer(descriptor, question, context, reason) {
+  const lines = [
+    'FXGA LOCAL EVIDENCE FALLBACK',
+    '',
+    `Gemini is temporarily unavailable (${reason}). FXGA is answering from the program’s stored deterministic evidence so the dashboard remains usable. This is not a Gemini-generated response.`,
+    '',
+    `Task: ${descriptor.label}`,
+    `Question: ${question}`,
+    '',
+    'Evidence status:',
+  ];
+  const domains = descriptor.states || [];
+  for (const domain of domains) {
+    const key = domain === 'signal-metrics' ? 'signalMetrics' : domain;
+    const value = context[key];
+    const count = Array.isArray(value) ? value.length : value && typeof value === 'object' ? Object.keys(value).length : value == null ? 0 : 1;
+    lines.push(`- ${domain}: ${value == null ? 'missing' : `available (${count} item/section${count === 1 ? '' : 's'})`}`);
+  }
+
+  const signalRows = Array.isArray(context.signals) ? context.signals.filter(Boolean).slice(0, 6) : [];
+  lines.push('', 'Current stored trade/setup evidence:');
+  if (!signalRows.length) {
+    lines.push('- No stored signal record is available for this task. FXGA will not invent an entry, stop loss or take-profit level.');
+  } else {
+    for (const signal of signalRows) {
+      const core = [signal.symbol || signal.canonicalSymbol || 'unknown symbol', signal.timeframe || 'TF n/a', signal.side || 'side n/a', signal.status || signal.lastEvent || 'status n/a'].join(' · ');
+      lines.push(`- ${core}${signal.methodScore != null ? ` · score=${signal.methodScore}` : ''}`);
+      if (signal.tradePlan) lines.push(`  Stored trade plan: ${printable(signal.tradePlan, 700)}`);
+      if (signal.invalidation) lines.push(`  Invalidation: ${printable(signal.invalidation, 420)}`);
+      if (signal.riskReward) lines.push(`  Risk/reward evidence: ${printable(signal.riskReward, 320)}`);
+    }
+  }
+
+  if (context.market?.assets?.length) {
+    lines.push('', 'Market evidence snapshot:');
+    for (const row of context.market.assets.slice(0, 6)) lines.push(`- ${rowSummary(row, ['symbol','name','price','last','close','changePct','changePercent','direction','trend','updatedAt'])}`);
+  }
+  if (context.technical?.assets) {
+    lines.push('', 'Technical evidence snapshot:');
+    for (const [symbol, row] of Object.entries(context.technical.assets).slice(0, 6)) lines.push(`- ${symbol}: ${rowSummary(row, ['trend','direction','bias','signal','score','timeframe','updatedAt'])}`);
+  }
+  if (context.macro?.observations?.length) {
+    lines.push('', 'Macro evidence snapshot:');
+    for (const row of context.macro.observations.slice(0, 6)) lines.push(`- ${rowSummary(row, ['country','seriesId','indicator','name','value','unit','date','change','updatedAt'])}`);
+  }
+  if (context.calendar?.events?.length) {
+    lines.push('', 'Upcoming/stored event evidence:');
+    for (const row of context.calendar.events.slice(0, 6)) lines.push(`- ${rowSummary(row, ['time','date','country','currency','event','title','impact','actual','forecast','previous'])}`);
+  }
+  if (context['event-studies']) {
+    lines.push('', 'Event-study evidence:', `- ${printable(context['event-studies'].summary || context['event-studies'], 1000)}`);
+  }
+  if (context.intelligence?.research) {
+    lines.push('', 'Research/validation evidence:', `- ${printable(context.intelligence.research, 1000)}`);
+  }
+  if (context.signalMetrics) {
+    lines.push('', 'Signal performance metrics:', `- ${printable(context.signalMetrics, 900)}`);
+  }
+
+  const executionTask = /scalp|day|long-term|session|entry|stop|take-profit|trade-management/.test(descriptor.id);
+  if (executionTask) {
+    lines.push('', 'Execution rule:', '- Only stored trade-plan levels above are actionable evidence. Missing entry/SL/TP values remain missing. No level is guaranteed, and any forecast must retain its invalidation condition.');
+  }
+  lines.push('', 'Provider recovery:', '- FXGA has temporarily cooled the Gemini route across Cloud Run instances. When Google capacity returns, the same question automatically goes back to Gemini; there is no fixed FXGA hourly/daily cap.');
+  return lines.join('\n');
+}
+
+async function streamDocument(res, document, { phase = 'cache', message = 'Using stored evidence-grounded answer', cached = true, stale = false } = {}) {
+  sendEvent(res, 'status', { phase, message, model: document.model || null });
+  sendEvent(res, 'status', { phase: 'typing', message: `${document.model || 'FXGA'} is streaming the answer`, model: document.model || null });
+  const text = String(document.answer || '');
+  const chunkSize = Math.max(16, Math.ceil(text.length / 90));
+  for (let index = 0; index < text.length; index += chunkSize) {
+    sendEvent(res, 'delta', { text: text.slice(index, index + chunkSize), model: document.model || null, cached });
+    await sleep(8);
+  }
+  sendEvent(res, 'done', { result: { ...document, cached, stale } });
+}
+
+async function streamLocalFallback(res, descriptor, question, context, contextHash, reason, retryAfterSeconds = 0) {
+  const answer = localEvidenceAnswer(descriptor, question, context, reason);
+  const document = {
+    schema: 'fxga.gemini.chat.v1',
+    task: descriptor.id,
+    label: `${descriptor.label} · provider fallback`,
+    question,
+    answer,
+    model: 'fxga-local-evidence-fallback',
+    evidenceDomains: descriptor.states,
+    contextHash,
+    createdAt: new Date().toISOString(),
+    cached: false,
+    stale: false,
+    degraded: true,
+    retryAfterSeconds,
+    policy: 'Deterministic FXGA evidence fallback. No Gemini inference was used. Missing trade levels and unsupported edge claims are never invented.',
+  };
+  await streamDocument(res, document, {
+    phase: 'fallback',
+    message: retryAfterSeconds > 0 ? `Gemini is throttled for about ${retryAfterSeconds}s; FXGA local evidence fallback is answering now` : 'Gemini is unavailable; FXGA local evidence fallback is answering now',
+    cached: false,
+    stale: false,
+  });
 }
 
 async function parseGoogleStream(response, res, model) {
@@ -225,7 +371,6 @@ async function parseGoogleStream(response, res, model) {
   let answer = '';
   let interactionId = null;
   let usage = null;
-  let sawOutput = false;
 
   const processFrame = frame => {
     const dataLines = frame.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trim());
@@ -238,10 +383,9 @@ async function parseGoogleStream(response, res, model) {
       sendEvent(res, 'status', { phase: 'connected', message: `${model} accepted the request`, model });
     } else if (type === 'step.start') {
       const stepType = String(payload.step?.type || '');
-      if (stepType === 'thought') sendEvent(res, 'status', { phase: 'thinking', message: `${model} is reasoning over the FXGA evidence`, model });
+      if (stepType === 'thought') sendEvent(res, 'status', { phase: 'thinking', message: `${model} is processing the FXGA evidence`, model });
       if (stepType === 'model_output') sendEvent(res, 'status', { phase: 'typing', message: `${model} is generating the answer`, model });
     } else if (type === 'step.delta' && payload.delta?.type === 'text' && typeof payload.delta.text === 'string') {
-      sawOutput = true;
       answer += payload.delta.text;
       sendEvent(res, 'delta', { text: payload.delta.text, model });
     } else if (type === 'interaction.completed') {
@@ -264,7 +408,7 @@ async function parseGoogleStream(response, res, model) {
   }
   buffer += decoder.decode();
   if (buffer.trim()) processFrame(buffer);
-  if (!answer.trim()) throw Object.assign(new Error('Gemini stream completed without usable text'), { statusCode: 502, code: 'bad_gateway', model, sawOutput });
+  if (!answer.trim()) throw Object.assign(new Error('Gemini stream completed without usable text'), { statusCode: 502, code: 'bad_gateway', model });
   return { model, answer: answer.trim(), usage, interactionId };
 }
 
@@ -277,7 +421,7 @@ async function invokeStreamingModel(model, prompt, res) {
       method: 'POST',
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY, Accept: 'text/event-stream' },
-      body: JSON.stringify({ model, input: prompt, stream: true, store: false, generation_config: { max_output_tokens: 1000 } }),
+      body: JSON.stringify({ model, input: prompt, stream: true, store: false, generation_config: { max_output_tokens: 650 } }),
     });
     if (!response.ok) {
       const text = await response.text();
@@ -312,11 +456,11 @@ async function invokeWithFailover(prompt, res) {
       if (status === 429) {
         const cooldown = markCooldown(model, error.retryAfterSeconds, error.message);
         shortestCooldown = Math.min(shortestCooldown, cooldown);
-        sendEvent(res, 'status', { phase: 'failover', message: `${model} is rate-limited; switching model`, model, retryAfterSeconds: cooldown });
+        sendEvent(res, 'status', { phase: 'failover', message: `${model} is rate-limited; trying the next route`, model, retryAfterSeconds: cooldown });
         continue;
       }
       if ([404, 408, 500, 502, 503, 504].includes(status)) {
-        sendEvent(res, 'status', { phase: 'failover', message: `${model} is temporarily unavailable; trying the next model`, model });
+        sendEvent(res, 'status', { phase: 'failover', message: `${model} is temporarily unavailable; trying the next route`, model });
         continue;
       }
       throw error;
@@ -327,28 +471,11 @@ async function invokeWithFailover(prompt, res) {
     if (Number.isFinite(shortestCooldown)) last.retryAfterSeconds = Math.max(1, shortestCooldown);
     throw last;
   }
-  throw Object.assign(new Error('All configured Gemini models are temporarily cooling down'), { statusCode: 429, code: 'rate_limit_exceeded', retryAfterSeconds: Number.isFinite(shortestCooldown) ? shortestCooldown : 45, modelsTried: [] });
-}
-
-async function streamCachedAnswer(res, document, stale = false) {
-  sendEvent(res, 'status', { phase: stale ? 'stale-cache' : 'cache', message: stale ? 'Provider busy — using the last matching evidence-grounded answer' : 'Matching evidence answer found in Firestore cache', model: document.model || null });
-  const text = String(document.answer || '');
-  const chunkSize = Math.max(12, Math.ceil(text.length / 80));
-  for (let index = 0; index < text.length; index += chunkSize) {
-    sendEvent(res, 'delta', { text: text.slice(index, index + chunkSize), model: document.model || null, cached: true });
-    await sleep(10);
-  }
-  sendEvent(res, 'done', { result: { ...document, cached: true, stale } });
+  throw Object.assign(new Error('All configured Gemini models are temporarily cooling down'), { statusCode: 429, code: 'rate_limit_exceeded', retryAfterSeconds: Number.isFinite(shortestCooldown) ? shortestCooldown : 20, modelsTried: [] });
 }
 
 async function handleStream(req, res) {
   startSse(req, res);
-  if (!GEMINI_API_KEY) {
-    const friendly = classifyFxgaError({ statusCode: 503, code: 'service_unavailable', message: 'Gemini is not configured' }, 503);
-    sendEvent(res, 'error', { friendlyError: friendly });
-    return res.end();
-  }
-
   try {
     sendEvent(res, 'status', { phase: 'preparing', message: 'Reading the question and selecting an advanced FXGA prompt' });
     const body = await readBody(req);
@@ -364,9 +491,19 @@ async function handleStream(req, res) {
     if (existing) {
       const age = Date.now() - Date.parse(existing.createdAt || 0);
       if (Number.isFinite(age) && age >= 0 && age < CACHE_TTL_MS) {
-        await streamCachedAnswer(res, existing, false);
+        await streamDocument(res, existing, { phase: 'cache', message: 'Matching Gemini answer found in Firestore cache', cached: true, stale: false });
         return res.end();
       }
+    }
+
+    const providerBackoff = await readProviderBackoff();
+    if (!GEMINI_API_KEY) {
+      await streamLocalFallback(res, descriptor, question, context, contextHash, 'Gemini credential is unavailable');
+      return res.end();
+    }
+    if (providerBackoff > 0) {
+      await streamLocalFallback(res, descriptor, question, context, contextHash, 'Google Gemini project/model capacity is temporarily cooling down', providerBackoff);
+      return res.end();
     }
 
     sendEvent(res, 'status', { phase: 'routing', message: `Routing through ${modelOrder().length} Gemini model routes`, task: descriptor.id });
@@ -374,8 +511,14 @@ async function handleStream(req, res) {
     try {
       model = await invokeWithFailover(composePrompt(taskPrompt, question, context), res);
     } catch (error) {
-      if (existing && [429, 500, 502, 503, 504].includes(Number(error.statusCode || 500))) {
-        await streamCachedAnswer(res, { ...existing, degraded: true, degradedReason: 'Gemini provider temporarily unavailable.' }, true);
+      const status = Number(error.statusCode || 500);
+      if (existing && [429, 500, 502, 503, 504].includes(status)) {
+        await streamDocument(res, { ...existing, degraded: true, degradedReason: 'Gemini provider temporarily unavailable.' }, { phase: 'stale-cache', message: 'Gemini is busy; using the last matching verified answer', cached: true, stale: true });
+        return res.end();
+      }
+      if ([429, 404, 408, 500, 502, 503, 504].includes(status)) {
+        const retry = status === 429 ? await setProviderBackoff(error.retryAfterSeconds || 20, error.message) : 0;
+        await streamLocalFallback(res, descriptor, question, context, contextHash, error.message || 'Gemini provider is temporarily unavailable', retry);
         return res.end();
       }
       throw error;
@@ -429,5 +572,7 @@ console.log('FXGA Gemini streaming gateway loaded', {
   models: modelOrder(),
   route: '/api/gemini/chat-stream',
   providerQuotaManaged: true,
+  projectWideAdaptiveBackoff: true,
+  localEvidenceFallback: true,
   realSseTyping: true,
 });
