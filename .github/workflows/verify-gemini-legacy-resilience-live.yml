@@ -1,0 +1,105 @@
+name: Verify FXGA Gemini Legacy Resilience Live
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Deploy FXGA Google Cloud Application
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-gemini-legacy-resilience-live
+  cancel-in-progress: true
+
+env:
+  API_BASE: https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app
+
+jobs:
+  verify-legacy-resilience:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait for deployed revision health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 24); do
+            if curl -fsS --max-time 20 "${API_BASE}/api/gemini/health" > /tmp/gemini-health.json; then
+              jq -e '.ok == true and .configured == true and .applicationHourlyCap == null and .applicationDailyCap == null' /tmp/gemini-health.json >/dev/null
+              cat /tmp/gemini-health.json | jq '{ok,configured,model,fallbackModel,quotaPolicy,lastProvider429At,lastRetryAfterSeconds}'
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Gemini health did not become ready.' >&2
+          exit 1
+
+      - name: Test legacy analyze modes through resilient streaming gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          modes=(market-brief macro-brief economic-context event-research action-report)
+          failures=0
+
+          for mode in "${modes[@]}"; do
+            echo "::group::Legacy mode ${mode}"
+            payload=$(jq -nc --arg mode "$mode" '{mode:$mode}')
+            status=$(curl -sS --max-time 100 -o "/tmp/${mode}.json" -w '%{http_code}' \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json' \
+              --data "$payload" \
+              "${API_BASE}/api/gemini/analyze" || true)
+
+            echo "HTTP ${status}"
+            cat "/tmp/${mode}.json" | jq '{mode,source,model,degraded,providerThrottled,retryAfterSeconds,compatibilityRoute,progressPhases,outputLength:(.output|length)}' || true
+
+            if [[ "$status" != "200" ]]; then
+              echo "Expected HTTP 200, received ${status}" >&2
+              failures=$((failures + 1))
+            elif ! jq -e '
+              (.output | type == "string" and length >= 80) and
+              (.source == "gemini" or .source == "fxga-evidence-fallback") and
+              .compatibilityRoute == "streaming-gateway" and
+              (.quotaPolicy == "provider-managed-no-artificial-hourly-or-daily-cap")
+            ' "/tmp/${mode}.json" >/dev/null; then
+              echo "Legacy response contract failed for ${mode}" >&2
+              failures=$((failures + 1))
+            fi
+
+            if [[ "$status" == "429" ]] || jq -e '.error? | tostring | test("429|rate.?limit|too quickly"; "i")' "/tmp/${mode}.json" >/dev/null 2>&1; then
+              echo "Fatal provider throttle leaked to legacy client for ${mode}" >&2
+              failures=$((failures + 1))
+            fi
+            echo "::endgroup::"
+          done
+
+          if (( failures > 0 )); then
+            echo "${failures} legacy Gemini resilience assertion(s) failed." >&2
+            exit 1
+          fi
+
+          echo 'All legacy Gemini modes returned usable HTTP 200 responses without leaking provider 429.'
+
+      - name: Test direct streaming AI response
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sS --max-time 100 \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: text/event-stream' \
+            --data '{"question":"Give me the current FXGA cross-asset market context using only stored evidence.","task":"cross-asset"}' \
+            "${API_BASE}/api/gemini/chat-stream" > /tmp/direct-stream.txt
+
+          grep -q '^event: status' /tmp/direct-stream.txt
+          grep -q '^event: delta' /tmp/direct-stream.txt
+          grep -q '^event: done' /tmp/direct-stream.txt
+          ! grep -q '^event: error' /tmp/direct-stream.txt
+
+          bytes=$(awk '/^event: delta/{getline; sub(/^data: /,""); print}' /tmp/direct-stream.txt | wc -c)
+          test "$bytes" -ge 80
+          echo "Direct streaming endpoint responded successfully (${bytes} streamed bytes)."
