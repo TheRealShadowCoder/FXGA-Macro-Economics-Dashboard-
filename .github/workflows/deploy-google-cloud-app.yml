@@ -46,7 +46,10 @@ jobs:
           node --check tradingview-signals.js
           node --check firestore-usage-monitor.js
           node --check optimize-server.js
+          node --check gemini-bootstrap.js
+          node --check startup.js
           node --check gemini-hook.js
+          node --check fxga-intelligence-extension.js
           node -e "const p=require('./package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies['@google-cloud/monitoring']||!p.dependencies.ws) process.exit(1)"
           ! grep -REn "AQ\.[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}" . --exclude='package-lock.json' || { echo '::error::Possible Gemini/Google credential committed to google-cloud-app'; exit 1; }
           ! grep -REn "GEMINI_REQUESTS_PER_HOUR|MAX_REQUESTS_PER_HOUR" . --exclude='package-lock.json' || { echo '::error::Artificial Gemini hourly cap detected in Google Cloud application'; exit 1; }
@@ -101,29 +104,40 @@ jobs:
           echo 'Using existing Cloud Run / Artifact Registry / Firestore project resources.'
 
       - id: gemini
-        name: Detect Gemini Secret Manager configuration
+        name: Require Gemini credential and synchronize Secret Manager
+        env:
+          GEMINI_API_KEY_FROM_GITHUB: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -euo pipefail
           gcloud config set project "$GCP_PROJECT_ID"
+
           if gcloud secrets describe "$GEMINI_SECRET_NAME" --format='value(name)' >/dev/null 2>&1; then
             echo 'Gemini Secret Manager entry found.'
-            echo 'configured=true' >> "$GITHUB_OUTPUT"
-            echo 'GEMINI_CONFIGURED=true' >> "$GITHUB_ENV"
-            set +e
-            gcloud secrets add-iam-policy-binding "$GEMINI_SECRET_NAME" \
-              --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
-              --role="roles/secretmanager.secretAccessor" \
+          elif [ -n "${GEMINI_API_KEY_FROM_GITHUB:-}" ]; then
+            echo 'Gemini Secret Manager entry is missing; creating it from the protected GitHub Actions GEMINI_API_KEY secret.'
+            printf '%s' "$GEMINI_API_KEY_FROM_GITHUB" | gcloud secrets create "$GEMINI_SECRET_NAME" \
+              --replication-policy=automatic \
+              --data-file=- \
               --quiet
-            ACCESS_STATUS=$?
-            set -e
-            if [ "$ACCESS_STATUS" -ne 0 ]; then
-              echo '::warning::Could not grant Gemini secretAccessor automatically. Ensure the runtime service account can access gemini-api-key.'
-            fi
+            echo 'Gemini Secret Manager entry created without exposing the credential.'
           else
-            echo '::warning::Gemini secret gemini-api-key is not present yet. Deploying the gateway disabled; add the secret and redeploy to activate it.'
-            echo 'configured=false' >> "$GITHUB_OUTPUT"
-            echo 'GEMINI_CONFIGURED=false' >> "$GITHUB_ENV"
+            echo '::error::Gemini is required but no credential is configured. Add repository Actions secret GEMINI_API_KEY, or create Secret Manager secret gemini-api-key in project fxglobalavengerstradingacademy, then rerun this workflow.'
+            exit 1
           fi
+
+          set +e
+          gcloud secrets add-iam-policy-binding "$GEMINI_SECRET_NAME" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role="roles/secretmanager.secretAccessor" \
+            --quiet
+          ACCESS_STATUS=$?
+          set -e
+          if [ "$ACCESS_STATUS" -ne 0 ]; then
+            echo '::warning::Could not grant secretAccessor automatically. Deployment will still verify the live Gemini health contract; if the runtime identity lacks access the workflow will fail rather than silently ship disabled AI.'
+          fi
+
+          echo 'configured=true' >> "$GITHUB_OUTPUT"
+          echo 'GEMINI_CONFIGURED=true' >> "$GITHUB_ENV"
 
       - name: Build and push API-only dashboard container
         run: |
@@ -138,10 +152,7 @@ jobs:
         name: Create or update public Google Cloud API application
         run: |
           set -euo pipefail
-          GEMINI_ARGS=()
-          if [ "${GEMINI_CONFIGURED:-false}" = 'true' ]; then
-            GEMINI_ARGS+=(--set-secrets "GEMINI_API_KEY=$GEMINI_SECRET_NAME:latest")
-          fi
+          test "${GEMINI_CONFIGURED:-false}" = 'true' || { echo '::error::Gemini deployment credential was not prepared'; exit 1; }
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
             --region "$GCP_REGION" \
@@ -154,8 +165,8 @@ jobs:
             --min 0 \
             --max 3 \
             --timeout 3600 \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting,FXGA_PUBLIC_ORIGIN=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_FALLBACK_MODEL=$GEMINI_FALLBACK_MODEL" \
-            "${GEMINI_ARGS[@]}"
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting,FXGA_PUBLIC_ORIGIN=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_FALLBACK_MODEL=$GEMINI_FALLBACK_MODEL,GEMINI_SECRET_NAME=$GEMINI_SECRET_NAME" \
+            --set-secrets "GEMINI_API_KEY=$GEMINI_SECRET_NAME:latest"
           APP_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --platform managed --format='value(status.url)')
           test -n "$APP_URL" || { echo '::error::Google Cloud application URL missing after deployment'; exit 1; }
           echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
@@ -166,7 +177,6 @@ jobs:
         run: |
           node <<'NODE'
           const base=process.env.APP_URL;
-          const expectGemini=process.env.GEMINI_CONFIGURED==='true';
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
           let last;
           for(let attempt=0;attempt<40;attempt++){
@@ -191,11 +201,11 @@ jobs:
               if(!geminiResponse.ok)throw new Error(`/api/gemini/health ${geminiResponse.status}: ${geminiText.slice(0,500)}`);
               const gemini=JSON.parse(geminiText);
               if(gemini.keyExposedToBrowser!==false)throw new Error('Gemini health contract must explicitly keep the key server-side');
-              if(expectGemini&&!gemini.configured)throw new Error('Gemini secret exists but deployed gateway reports configured=false');
+              if(gemini.configured!==true)throw new Error('Gemini is mandatory for this deployment but the live gateway reports configured=false');
               if(gemini.quotaPolicy!=='provider-managed-no-artificial-hourly-or-daily-cap')throw new Error(`Unexpected Gemini quota policy ${gemini.quotaPolicy}`);
               if(gemini.applicationHourlyCap!==null||gemini.applicationDailyCap!==null)throw new Error('FXGA must not impose artificial Gemini hourly/daily caps');
               if(gemini.firestoreCaching!==true||gemini.duplicateRequestCoalescing!==true)throw new Error('Gemini quota-conservation controls are missing');
-              console.log('Google Cloud macro API live:',base,'assets=',dashboard.market.length,'monitoringMode=',usage.monitoringMode,'geminiConfigured=',gemini.configured,'geminiModel=',gemini.model,'geminiQuotaPolicy=',gemini.quotaPolicy);
+              console.log('Google Cloud macro API + Gemini live:',base,'assets=',dashboard.market.length,'monitoringMode=',usage.monitoringMode,'geminiConfigured=',gemini.configured,'geminiModel=',gemini.model,'geminiQuotaPolicy=',gemini.quotaPolicy);
               process.exit(0);
             }catch(error){last=error;await sleep(3000);}
           }
@@ -211,7 +221,8 @@ jobs:
           echo "Firestore capacity API: $APP_URL/api/tradingview/firestore-usage"
           echo "Gemini health: $APP_URL/api/gemini/health"
           echo "Gemini analysis: $APP_URL/api/gemini/analyze"
-          echo "Gemini configured: ${GEMINI_CONFIGURED:-false}"
+          echo "Gemini configured: true (required and live-verified)"
+          echo "Gemini credential source: Google Secret Manager; GitHub Actions GEMINI_API_KEY can bootstrap the missing secret without exposing it"
           echo "Gemini quota: Google provider/project/model limits only; no FXGA hourly or daily request cap"
           echo "Gemini quota conservation: Firestore TTL cache + same-instance duplicate request coalescing"
           echo "Frontend bundled into API container: NO"
