@@ -82,9 +82,17 @@ async function consumeGeminiStream(
   }
   buffer+=decoder.decode();
   if(buffer.trim())consumeFrame(buffer);
-  if(streamedError)throw new FxgaRequestError(streamedError,streamedError.technical?.httpStatus||500);
-  if(!finalResult)throw new Error('Gemini streaming request ended without a completed result');
-  return finalResult;
+
+  // Assignments happen inside consumeFrame(), so use explicit post-stream aliases
+  // to prevent TypeScript control-flow analysis from incorrectly narrowing these
+  // closure-mutated variables to never.
+  const finalStreamError = streamedError as FriendlyFxgaError | null;
+  if(finalStreamError){
+    throw new FxgaRequestError(finalStreamError,finalStreamError.technical?.httpStatus||500);
+  }
+  const completedResult = finalResult as GeminiChat | null;
+  if(!completedResult)throw new Error('Gemini streaming request ended without a completed result');
+  return completedResult;
 }
 
 export async function streamFxga(
