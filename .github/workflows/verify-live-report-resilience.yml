@@ -2,6 +2,9 @@ name: Verify FXGA Live Report Resilience
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Deploy FXGA Google Cloud Application"]
+    types: [completed]
   push:
     branches: [main]
     paths:
@@ -10,11 +13,16 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: fxga-live-report-resilience
+  cancel-in-progress: true
+
 env:
   API_BASE: https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app
 
 jobs:
   verify:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
