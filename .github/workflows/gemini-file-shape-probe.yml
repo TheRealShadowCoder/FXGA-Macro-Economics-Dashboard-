@@ -1,0 +1,62 @@
+name: Gemini File Request Shape Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'diagnostics/gemini-file-shape-probe-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  MODEL: gemini-3.5-flash-lite
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Test stable and beta file request shapes
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const key=String(process.env.GEMINI_API_KEY||'').trim();
+          const model=process.env.MODEL||'gemini-3.5-flash-lite';
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          const timeout=ms=>AbortSignal.timeout(ms);
+          const result={schema:'fxga.gemini.file-shape-probe.v1',runId:Number(process.env.GITHUB_RUN_ID||0),model,startedAt:new Date().toISOString()};
+          const save=()=>fs.writeFileSync('/tmp/result.json',JSON.stringify(result,null,2)+'\n'); save();
+          if(!key){result.fatal='missing_key';save();process.exit(0);}
+          let uri='';
+          try{
+            const csv=Buffer.from('field,value\nprobe,FXGA_FILE_SHAPE_OK\n');
+            const start=await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files',{method:'POST',signal:timeout(30000),headers:{'x-goog-api-key':key,'X-Goog-Upload-Protocol':'resumable','X-Goog-Upload-Command':'start','X-Goog-Upload-Header-Content-Length':String(csv.length),'X-Goog-Upload-Header-Content-Type':'text/csv','Content-Type':'application/json'},body:JSON.stringify({file:{display_name:'fxga-file-shape-probe.csv'}})});
+            const uploadUrl=start.headers.get('x-goog-upload-url')||''; result.uploadStartHttp=start.status;
+            const finish=await fetch(uploadUrl,{method:'POST',signal:timeout(30000),headers:{'Content-Length':String(csv.length),'Content-Type':'text/csv','X-Goog-Upload-Offset':'0','X-Goog-Upload-Command':'upload, finalize'},body:csv});
+            const p=await finish.json().catch(()=>({})); const f=p.file||p||{}; uri=String(f.uri||''); let state=String(f.state||'UNKNOWN');
+            for(let i=0;i<15&&f.name&&state!=='ACTIVE'&&state!=='FAILED';i++){await sleep(1000);const m=await fetch(`https://generativelanguage.googleapis.com/v1beta/${f.name}`,{signal:timeout(15000),headers:{'x-goog-api-key':key}});const d=await m.json().catch(()=>({}));state=String(d.state||'UNKNOWN');}
+            result.uploadHttp=finish.status; result.fileState=state; result.hasUri=Boolean(uri);
+          }catch(e){result.uploadException=String(e?.message||e).slice(0,300);save();process.exit(0);}
+
+          async function call(url,input){const t=Date.now();try{const r=await fetch(url,{method:'POST',signal:timeout(30000),headers:{'x-goog-api-key':key,'Content-Type':'application/json'},body:JSON.stringify({model,input,store:false,generation_config:{max_output_tokens:32}})});const d=await r.json().catch(()=>({}));const answer=Array.isArray(d.steps)?d.steps.flatMap(s=>s?.type==='model_output'&&Array.isArray(s.content)?s.content.filter(x=>x?.type==='text').map(x=>String(x.text||'')):[]).join(''):'';return{http:r.status,durationMs:Date.now()-t,retryAfter:r.headers.get('retry-after')||null,errorStatus:d?.error?.status||null,errorMessage:d?.error?.message?String(d.error.message).slice(0,500):null,answer};}catch(e){return{http:0,durationMs:Date.now()-t,errorStatus:e?.name||'NETWORK_EXCEPTION',errorMessage:String(e?.message||e).slice(0,300),answer:''};}}
+
+          if(uri){
+            result.stableV1UserInput=await call('https://generativelanguage.googleapis.com/v1/interactions',[{type:'user_input',content:[{type:'document',uri,mime_type:'text/csv'},{type:'text',text:'Reply with exactly the probe value.'}]}]); save();
+            await sleep(5_000);
+            result.betaRawContent=await call('https://generativelanguage.googleapis.com/v1beta/interactions',[{type:'text',text:'Reply with exactly the probe value.'},{type:'document',uri,mime_type:'text/csv'}]); save();
+          }
+          result.completedAt=new Date().toISOString(); save(); console.log(JSON.stringify(result,null,2));
+          NODE
+
+      - name: Persist sanitized result
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs=require('fs');const path='diagnostics/gemini-file-shape-latest.json';const raw=fs.existsSync('/tmp/result.json')?fs.readFileSync('/tmp/result.json','utf8'):JSON.stringify({schema:'fxga.gemini.file-shape-probe.v1',fatal:'no_result'});let sha;try{const x=await github.rest.repos.getContent({owner:context.repo.owner,repo:context.repo.repo,path,ref:'main'});if(!Array.isArray(x.data))sha=x.data.sha;}catch(e){if(e.status!==404)throw e;}await github.rest.repos.createOrUpdateFileContents({owner:context.repo.owner,repo:context.repo.repo,path,message:'Record Gemini file shape probe [skip ci]',content:Buffer.from(raw).toString('base64'),branch:'main',...(sha?{sha}:{})});
