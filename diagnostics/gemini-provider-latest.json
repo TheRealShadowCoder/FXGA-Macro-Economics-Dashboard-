@@ -1,0 +1,15 @@
+{
+  "schema": "fxga.gemini.provider-probe.v4",
+  "runId": 32855589449,
+  "startedAt": "2026-08-25T13:48:46Z",
+  "bypasses": [
+    "Cloud Run",
+    "Firestore",
+    "FXGA routing",
+    "frontend"
+  ],
+  "file": {
+    "startCurlExit": 0,
+    "uploadUrlReturned": true
+  }
+}
