@@ -1,0 +1,89 @@
+name: Diagnose Live vs Direct Gemini
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'diagnostics/gemini-live-correlation-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  API_BASE: https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app
+  PRIMARY_MODEL: gemini-3.5-flash-lite
+
+jobs:
+  correlate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Compare deployed route with Gemini directly
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const base = process.env.API_BASE;
+          const key = String(process.env.GEMINI_API_KEY || '');
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          const result = {schema:'fxga.gemini.live-correlation.v1',runId:Number(process.env.GITHUB_RUN_ID),startedAt:new Date().toISOString(),primaryModel:process.env.PRIMARY_MODEL};
+
+          async function jsonGet(url) {
+            const started=Date.now();
+            try { const r=await fetch(url,{signal:AbortSignal.timeout(20000),headers:{Accept:'application/json'}}); const text=await r.text(); let data=null; try{data=JSON.parse(text)}catch{} return {http:r.status,durationMs:Date.now()-started,data}; }
+            catch(e){ return {http:0,durationMs:Date.now()-started,error:String(e?.message||e)}; }
+          }
+          function parseSse(raw){
+            let answer='', model='', error=null; const phases=[]; let retryAfter=null; let degraded=false;
+            for(const frame of raw.split(/\r?\n\r?\n/)){
+              const lines=frame.split(/\r?\n/); const event=(lines.find(x=>x.startsWith('event: '))||'').slice(7).trim();
+              const dataText=lines.filter(x=>x.startsWith('data: ')).map(x=>x.slice(6)).join('\n'); if(!event||!dataText) continue;
+              let d; try{d=JSON.parse(dataText)}catch{continue}
+              if(event==='status'){ if(d.phase) phases.push(d.phase); if(d.retryAfterSeconds!=null) retryAfter=Number(d.retryAfterSeconds); }
+              if(event==='delta') answer+=String(d.text??'');
+              if(event==='done'){ model=String(d?.result?.model||model||''); degraded=Boolean(d?.result?.degraded); if(d?.result?.retryAfterSeconds!=null) retryAfter=Number(d.result.retryAfterSeconds); }
+              if(event==='error'){ error=d?.friendlyError||d; if(error?.retryAfterSeconds!=null) retryAfter=Number(error.retryAfterSeconds); }
+            }
+            return {model,answerLength:answer.length,answerPreview:answer.slice(0,300),phases,error,degraded,retryAfterSeconds:retryAfter,localFallback:model.startsWith('fxga-local-')};
+          }
+
+          result.fileStatusBefore=await jsonGet(`${base}/api/gemini/file-context-status`);
+          const nonce=`${Date.now()}-${process.env.GITHUB_RUN_ID}`;
+          const liveStart=Date.now();
+          try{
+            const r=await fetch(`${base}/api/gemini/chat-stream`,{method:'POST',signal:AbortSignal.timeout(190000),headers:{'Content-Type':'application/json',Accept:'text/event-stream'},body:JSON.stringify({question:`Correlation probe ${nonce}. Give a concise current action report from stored evidence and respect WAIT, WATCH and PREPARE.`,task:'live-intelligence-report'})});
+            const raw=await r.text(); result.live={http:r.status,durationMs:Date.now()-liveStart,...parseSse(raw)};
+          }catch(e){ result.live={http:0,durationMs:Date.now()-liveStart,error:String(e?.message||e)}; }
+
+          result.fileStatusAfter=await jsonGet(`${base}/api/gemini/file-context-status`);
+          const waitSeconds = result.live?.retryAfterSeconds || (result.live?.localFallback ? 50 : 12);
+          result.waitedBeforeDirectSeconds=Math.max(12,Math.min(55,waitSeconds));
+          await sleep(result.waitedBeforeDirectSeconds*1000);
+
+          const directStart=Date.now();
+          if(!key){ result.direct={http:0,error:'missing protected key'}; }
+          else try{
+            const r=await fetch('https://generativelanguage.googleapis.com/v1/interactions',{method:'POST',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify({model:process.env.PRIMARY_MODEL,input:'Reply with exactly: FXGA_DIRECT_CURRENT_OK',store:false,generation_config:{max_output_tokens:32}})});
+            const retry=r.headers.get('retry-after'); const text=await r.text(); let body={}; try{body=JSON.parse(text)}catch{}
+            const answer=(body?.steps||[]).filter(s=>s?.type==='model_output').flatMap(s=>s.content||[]).filter(c=>c?.type==='text').map(c=>c.text||'').join('').trim();
+            result.direct={http:r.status,durationMs:Date.now()-directStart,retryAfter:retry||null,errorStatus:body?.error?.status||null,errorMessage:body?.error?.message?.slice(0,300)||null,answer};
+          }catch(e){ result.direct={http:0,durationMs:Date.now()-directStart,error:String(e?.message||e)}; }
+
+          result.completedAt=new Date().toISOString();
+          fs.writeFileSync('/tmp/live-correlation.json',JSON.stringify(result,null,2));
+          console.log(JSON.stringify(result,null,2));
+          NODE
+
+      - name: Persist sanitized correlation result
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const path = 'diagnostics/live-gemini-current.json';
+            const raw = fs.readFileSync('/tmp/live-correlation.json','utf8');
+            let sha;
+            try { const x=await github.rest.repos.getContent({owner:context.repo.owner,repo:context.repo.repo,path,ref:'main'}); if(!Array.isArray(x.data)) sha=x.data.sha; } catch(e){ if(e.status!==404) throw e; }
+            await github.rest.repos.createOrUpdateFileContents({owner:context.repo.owner,repo:context.repo.repo,path,message:'Record current live Gemini correlation [skip ci]',content:Buffer.from(raw).toString('base64'),branch:'main',...(sha?{sha}:{})});
