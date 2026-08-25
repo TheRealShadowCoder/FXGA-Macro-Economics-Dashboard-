@@ -79,9 +79,18 @@ if (!errorGuide.includes('__FXGA_GOOGLE_CLOUD_API_BASE__') || !errorGuide.includ
 if (/AIza[A-Za-z0-9_-]{20,}/.test(errorGuide)) throw new Error('A Google credential pattern appeared in the public error guide');
 
 const dockerfile = requireFile('google-cloud-app/Dockerfile');
+const startup = requireFile('google-cloud-app/startup.js');
+const bootstrap = requireFile('google-cloud-app/gemini-bootstrap.js');
 if (!dockerfile.includes('COPY google-cloud-app/prompts ./prompts')) throw new Error('Cloud Run image does not copy the prompt library');
-if (!dockerfile.includes('--import", "./fxga-intelligence-extension.js')) throw new Error('Cloud Run image does not load the intelligence extension');
+if (!dockerfile.includes('CMD ["node", "startup.js"]')) throw new Error('Cloud Run image must start through the sequential Gemini bootstrap entrypoint');
+const bootstrapIndex = startup.indexOf("import('./gemini-bootstrap.js')");
+const hookIndex = startup.indexOf("import('./gemini-hook.js')");
+const extensionIndex = startup.indexOf("import('./fxga-intelligence-extension.js')");
+const serverIndex = startup.indexOf("import('./server.js')");
+if (bootstrapIndex < 0 || hookIndex <= bootstrapIndex || extensionIndex <= hookIndex || serverIndex <= extensionIndex) throw new Error('Cloud Run startup must resolve credentials before loading Gemini intelligence modules and server');
+if (!bootstrap.includes('secretmanager.googleapis.com') || !bootstrap.includes('process.env.GEMINI_API_KEY')) throw new Error('Gemini Secret Manager bootstrap contract is missing');
+if (/console\.log\([^\n]*GEMINI_API_KEY/.test(bootstrap)) throw new Error('Gemini credential must never be logged');
 
 const categories = FXGA_PROMPTS.reduce((acc, prompt) => ((acc[prompt.category || 'uncategorized'] = (acc[prompt.category || 'uncategorized'] || 0) + 1), acc), {});
-console.log(`FXGA intelligence architecture verified: 100 advanced prompts, 4 real-time trade managers, ${requiredErrors.length} friendly error classes.`);
+console.log(`FXGA intelligence architecture verified: 100 advanced prompts, 4 real-time trade managers, ${requiredErrors.length} friendly error classes, sequential Secret Manager bootstrap.`);
 console.log('Prompt categories:', categories);
