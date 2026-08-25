@@ -1,0 +1,121 @@
+name: Gemini Provider Probe V4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'diagnostics/gemini-provider-probe-v4-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PRIMARY_MODEL: gemini-3.5-flash-lite
+  RESERVE_MODEL: gemini-3.7-flash
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe Gemini directly
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        shell: bash
+        run: |
+          set +e
+          set +o pipefail
+          R=/tmp/provider.json
+          jq -nc --arg run "$GITHUB_RUN_ID" '{schema:"fxga.gemini.provider-probe.v4",runId:($run|tonumber),startedAt:(now|todate),bypasses:["Cloud Run","Firestore","FXGA routing","frontend"]}' > "$R"
+
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            jq '.fatal="missing_gemini_api_key" | .completedAt=(now|todate)' "$R" > /tmp/x && mv /tmp/x "$R"
+            exit 0
+          fi
+
+          printf 'field,value\nprobe,FXGA_FILE_PROVIDER_OK\n' > /tmp/probe.csv
+          BYTES=$(wc -c < /tmp/probe.csv | tr -d ' ')
+
+          # 1) FILE UPLOAD FIRST
+          curl -sS --connect-timeout 15 --max-time 60 -D /tmp/start.h -o /tmp/start.body \
+            -X POST 'https://generativelanguage.googleapis.com/upload/v1beta/files' \
+            -H "x-goog-api-key: ${GEMINI_API_KEY}" \
+            -H 'X-Goog-Upload-Protocol: resumable' \
+            -H 'X-Goog-Upload-Command: start' \
+            -H "X-Goog-Upload-Header-Content-Length: ${BYTES}" \
+            -H 'X-Goog-Upload-Header-Content-Type: text/csv' \
+            -H 'Content-Type: application/json' \
+            --data '{"file":{"display_name":"fxga-direct-provider-probe.csv"}}'
+          START_EXIT=$?
+          UPLOAD_URL=$(awk 'BEGIN{IGNORECASE=1} /^x-goog-upload-url:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}' /tmp/start.h 2>/dev/null)
+          jq --argjson e "$START_EXIT" --arg u "$UPLOAD_URL" '.file={startCurlExit:$e,uploadUrlReturned:($u!="")}' "$R" > /tmp/x && mv /tmp/x "$R"
+
+          FILE_NAME=''; FILE_URI=''; FILE_STATE='NO_UPLOAD_URL'
+          if [ -n "$UPLOAD_URL" ]; then
+            UPLOAD_HTTP=$(curl -sS --connect-timeout 15 --max-time 60 -o /tmp/upload.json -w '%{http_code}' \
+              -X POST "$UPLOAD_URL" \
+              -H "Content-Length: ${BYTES}" \
+              -H 'Content-Type: text/csv' \
+              -H 'X-Goog-Upload-Offset: 0' \
+              -H 'X-Goog-Upload-Command: upload, finalize' \
+              --data-binary @/tmp/probe.csv)
+            UPLOAD_EXIT=$?
+            FILE_NAME=$(jq -r '.file.name // empty' /tmp/upload.json 2>/dev/null)
+            FILE_URI=$(jq -r '.file.uri // empty' /tmp/upload.json 2>/dev/null)
+            FILE_STATE=$(jq -r '.file.state // "UNKNOWN"' /tmp/upload.json 2>/dev/null)
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              [ "$FILE_STATE" = 'ACTIVE' ] && break
+              [ "$FILE_STATE" = 'FAILED' ] && break
+              [ -z "$FILE_NAME" ] && break
+              META=$(curl -sS --connect-timeout 10 --max-time 30 -H "x-goog-api-key: ${GEMINI_API_KEY}" "https://generativelanguage.googleapis.com/v1beta/${FILE_NAME}")
+              FILE_STATE=$(printf '%s' "$META" | jq -r '.state // "UNKNOWN"' 2>/dev/null)
+              sleep 1
+            done
+            jq --arg h "$UPLOAD_HTTP" --argjson e "$UPLOAD_EXIT" --arg s "$FILE_STATE" '.file.uploadHttp=($h|tonumber?//0)|.file.uploadCurlExit=$e|.file.state=$s' "$R" > /tmp/x && mv /tmp/x "$R"
+          fi
+
+          # Respect the current provider Retry-After before any inference call.
+          sleep 50
+
+          # 2) FILE-BACKED INTERACTION ON PRIMARY
+          if [ "$FILE_STATE" = 'ACTIVE' ] && [ -n "$FILE_URI" ]; then
+            jq -nc --arg m "$PRIMARY_MODEL" --arg u "$FILE_URI" '{model:$m,input:[{type:"document",uri:$u,mime_type:"text/csv"},{type:"text",text:"Reply with exactly the probe value."}],store:false,generation_config:{max_output_tokens:32}}' > /tmp/file.req
+            FILE_HTTP=$(curl -sS --connect-timeout 15 --max-time 120 -D /tmp/file.h -o /tmp/file.body -w '%{http_code}' -X POST 'https://generativelanguage.googleapis.com/v1/interactions' -H "x-goog-api-key: ${GEMINI_API_KEY}" -H 'Content-Type: application/json' --data-binary @/tmp/file.req)
+            FILE_EXIT=$?
+            FILE_RETRY=$(awk 'BEGIN{IGNORECASE=1} /^retry-after:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}' /tmp/file.h 2>/dev/null)
+            FILE_ERR_STATUS=$(jq -r '.error.status // empty' /tmp/file.body 2>/dev/null)
+            FILE_ERR_MSG=$(jq -r '.error.message // empty' /tmp/file.body 2>/dev/null | head -c 300)
+            FILE_ANSWER=$(jq -r '[.steps[]? | select(.type=="model_output") | .content[]? | select(.type=="text") | .text]|join("")' /tmp/file.body 2>/dev/null)
+            jq --arg h "$FILE_HTTP" --argjson e "$FILE_EXIT" --arg r "$FILE_RETRY" --arg s "$FILE_ERR_STATUS" --arg m "$FILE_ERR_MSG" --arg a "$FILE_ANSWER" '.fileInteraction={model:"gemini-3.5-flash-lite",http:($h|tonumber?//0),curlExit:$e,retryAfter:($r|select(length>0)//null),errorStatus:($s|select(length>0)//null),errorMessage:($m|select(length>0)//null),answer:$a}' "$R" > /tmp/x && mv /tmp/x "$R"
+          fi
+
+          sleep 10
+
+          # 3) NORMAL INLINE PRIMARY
+          jq -nc --arg m "$PRIMARY_MODEL" '{model:$m,input:"Reply with exactly: FXGA_INLINE_PROVIDER_OK",store:false,generation_config:{max_output_tokens:32}}' > /tmp/primary.req
+          P_HTTP=$(curl -sS --connect-timeout 15 --max-time 120 -D /tmp/p.h -o /tmp/p.body -w '%{http_code}' -X POST 'https://generativelanguage.googleapis.com/v1/interactions' -H "x-goog-api-key: ${GEMINI_API_KEY}" -H 'Content-Type: application/json' --data-binary @/tmp/primary.req)
+          P_EXIT=$?; P_RETRY=$(awk 'BEGIN{IGNORECASE=1} /^retry-after:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}' /tmp/p.h 2>/dev/null); P_STATUS=$(jq -r '.error.status // empty' /tmp/p.body 2>/dev/null); P_MSG=$(jq -r '.error.message // empty' /tmp/p.body 2>/dev/null | head -c 300); P_ANSWER=$(jq -r '[.steps[]? | select(.type=="model_output") | .content[]? | select(.type=="text") | .text]|join("")' /tmp/p.body 2>/dev/null)
+          jq --arg h "$P_HTTP" --argjson e "$P_EXIT" --arg r "$P_RETRY" --arg s "$P_STATUS" --arg m "$P_MSG" --arg a "$P_ANSWER" '.inlinePrimary={model:"gemini-3.5-flash-lite",http:($h|tonumber?//0),curlExit:$e,retryAfter:($r|select(length>0)//null),errorStatus:($s|select(length>0)//null),errorMessage:($m|select(length>0)//null),answer:$a}' "$R" > /tmp/x && mv /tmp/x "$R"
+
+          sleep 10
+
+          # 4) NORMAL INLINE RESERVE
+          jq -nc --arg m "$RESERVE_MODEL" '{model:$m,input:"Reply with exactly: FXGA_INLINE_PROVIDER_OK",store:false,generation_config:{max_output_tokens:32}}' > /tmp/reserve.req
+          Q_HTTP=$(curl -sS --connect-timeout 15 --max-time 120 -D /tmp/q.h -o /tmp/q.body -w '%{http_code}' -X POST 'https://generativelanguage.googleapis.com/v1/interactions' -H "x-goog-api-key: ${GEMINI_API_KEY}" -H 'Content-Type: application/json' --data-binary @/tmp/reserve.req)
+          Q_EXIT=$?; Q_RETRY=$(awk 'BEGIN{IGNORECASE=1} /^retry-after:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}' /tmp/q.h 2>/dev/null); Q_STATUS=$(jq -r '.error.status // empty' /tmp/q.body 2>/dev/null); Q_MSG=$(jq -r '.error.message // empty' /tmp/q.body 2>/dev/null | head -c 300); Q_ANSWER=$(jq -r '[.steps[]? | select(.type=="model_output") | .content[]? | select(.type=="text") | .text]|join("")' /tmp/q.body 2>/dev/null)
+          jq --arg h "$Q_HTTP" --argjson e "$Q_EXIT" --arg r "$Q_RETRY" --arg s "$Q_STATUS" --arg m "$Q_MSG" --arg a "$Q_ANSWER" '.inlineReserve={model:"gemini-3.7-flash",http:($h|tonumber?//0),curlExit:$e,retryAfter:($r|select(length>0)//null),errorStatus:($s|select(length>0)//null),errorMessage:($m|select(length>0)//null),answer:$a}|.completedAt=(now|todate)' "$R" > /tmp/x && mv /tmp/x "$R"
+          cat "$R"
+
+      - name: Persist sanitized provider result
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const path = 'diagnostics/gemini-provider-latest.json';
+            const raw = fs.existsSync('/tmp/provider.json') ? fs.readFileSync('/tmp/provider.json','utf8') : JSON.stringify({schema:'fxga.gemini.provider-probe.v4',runId:Number(process.env.GITHUB_RUN_ID),fatal:'no_result'});
+            let sha;
+            try { const x=await github.rest.repos.getContent({owner:context.repo.owner,repo:context.repo.repo,path,ref:'main'}); if(!Array.isArray(x.data)) sha=x.data.sha; } catch(e){ if(e.status!==404) throw e; }
+            await github.rest.repos.createOrUpdateFileContents({owner:context.repo.owner,repo:context.repo.repo,path,message:'Record Gemini provider probe v4 [skip ci]',content:Buffer.from(raw).toString('base64'),branch:'main',...(sha?{sha}:{})});
