@@ -1,0 +1,27 @@
+{
+  "schema": "fxga.gemini.file-shape-probe.v1",
+  "runId": 32856494172,
+  "model": "gemini-3.5-flash-lite",
+  "startedAt": "2026-08-25T13:57:37.814Z",
+  "uploadStartHttp": 200,
+  "uploadHttp": 200,
+  "fileState": "ACTIVE",
+  "hasUri": true,
+  "stableV1UserInput": {
+    "http": 200,
+    "durationMs": 917,
+    "retryAfter": null,
+    "errorStatus": null,
+    "errorMessage": null,
+    "answer": "FXGA_FILE_SHAPE_OK"
+  },
+  "betaRawContent": {
+    "http": 200,
+    "durationMs": 1245,
+    "retryAfter": null,
+    "errorStatus": null,
+    "errorMessage": null,
+    "answer": "probe,FXGA_FILE_SHAPE_OK"
+  },
+  "completedAt": "2026-08-25T13:57:46.490Z"
+}
