@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 env:
@@ -42,7 +42,9 @@ jobs:
           npm run check
           node --check price-cache.js
           node --check mt5-smc-engine.js
+          node --check scanner-universe-hook.js
           node --check server.js
+          grep -Fq 'CMD ["node","--import","./scanner-universe-hook.js","server.js"]' Dockerfile || { echo '::error::Scanner route hook is not preloaded by the production MT5 image'; exit 1; }
           ! grep -Eq "FXGA_MT5_TOKEN_SHA256\|\|'[a-f0-9]{64}'" server.js || { echo '::error::Repository-static MT5 credential fallback detected'; exit 1; }
 
       - id: config
@@ -74,8 +76,6 @@ jobs:
           if ! gcloud secrets describe "$MT5_SECRET_NAME" >/dev/null 2>&1; then
             VALUE="${OPTIONAL_BOOTSTRAP_HASH:-}"
             if [ -z "$VALUE" ] && gcloud run services describe "$SERVICE" --region "$GCP_REGION" >/dev/null 2>&1; then
-              # One-time migration from the currently deployed Cloud Run revision. The value
-              # is captured into a shell variable and is never echoed to Actions logs.
               VALUE=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format=json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const x=JSON.parse(s);const env=x?.spec?.template?.spec?.containers?.[0]?.env||[];process.stdout.write(String(env.find(e=>e.name==='FXGA_MT5_TOKEN_SHA256')?.value||''))})")
             fi
             printf '%s' "$VALUE" | grep -Eq '^[A-Fa-f0-9]{64}$' || { echo '::error::No valid MT5 token hash exists to migrate. Set GitHub secret FXGA_MT5_TOKEN_SHA256 once for bootstrap.'; exit 1; }
@@ -128,8 +128,9 @@ jobs:
           echo "MT5_URL=$MT5_URL" >> "$GITHUB_ENV"
           echo "url=$MT5_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Verify 60-day canonical M1 FIFO and SMC fusion contract
+      - name: Verify 60-day canonical M1 FIFO, SMC fusion and broker scanner contracts
         run: |
+          set -euo pipefail
           curl --fail --silent --show-error "$MT5_URL/health" -o /tmp/health.json
           node <<'NODE'
           const fs=require('fs');
@@ -162,59 +163,37 @@ jobs:
           curl --fail --silent --show-error "$MT5_URL/api/mt5/smc-snapshot" -o /tmp/smc.json
           node -e "const fs=require('fs');const s=JSON.parse(fs.readFileSync('/tmp/smc.json','utf8'));if(s.canonicalTimeframe!=='M1'||s.methodology!=='canonical-mt5-m1-reconstructed-multi-timeframe-smc'||!s.counts)process.exit(1);console.log('SMC fusion verified',s.counts)"
 
+          curl --fail --silent --show-error "$MT5_URL/api/mt5/scanner-universe" -o /tmp/scanner-universe.json
+          curl --fail --silent --show-error "$MT5_URL/api/mt5/scanner-signals" -o /tmp/scanner-signals.json
+          node <<'NODE'
+          const fs=require('fs');
+          const universe=JSON.parse(fs.readFileSync('/tmp/scanner-universe.json','utf8'));
+          const signals=JSON.parse(fs.readFileSync('/tmp/scanner-signals.json','utf8'));
+          if(universe?.error) throw new Error(`Broker universe endpoint error: ${universe.error}`);
+          if(universe?.schema!=='fxga.mt5.scanner-universe.v1'||universe?.source!=='MetaTrader5'||universe?.engine!=='FXGA_SMC2000') throw new Error('Broker universe contract mismatch');
+          if(!Array.isArray(universe.symbols)||typeof universe.terminalTotal!=='number'||typeof universe.scanUniverseTotal!=='number') throw new Error('Broker universe shape mismatch');
+          if(signals?.error) throw new Error(`Broker scanner-signals endpoint error: ${signals.error}`);
+          if(signals?.stream!=='fxga_smc2000_mt5_multi_asset'||!Array.isArray(signals.signals)||typeof signals.count!=='number'||typeof signals.totalMatched!=='number') throw new Error('Broker scanner-signals contract mismatch');
+          console.log('Broker scanner routes verified',{terminalTotal:universe.terminalTotal,scanUniverseTotal:universe.scanUniverseTotal,signals:signals.count,totalMatched:signals.totalMatched});
+          NODE
+
           code=$(curl -sS -o /tmp/reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/webhook")
           test "$code" -eq 403 || { cat /tmp/reject.json; exit 1; }
           code=$(curl -sS -o /tmp/cache-reject.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$MT5_URL/api/mt5/price-cache")
           test "$code" -eq 403 || { cat /tmp/cache-reject.json; exit 1; }
 
-      - name: Publish resolved MT5 endpoint
+      - name: Verify stable MT5 discovery document
         run: |
-          mkdir -p runtime public
-          printf '%s\n' "$MT5_URL/api/mt5/webhook" > runtime/mt5-cloud-url.txt
-          node - <<'NODE'
+          set -euo pipefail
+          node <<'NODE'
           const fs=require('fs');
-          const base=process.env.MT5_URL;
-          const symbols=['DXY','EURUSD','GBPUSD','USDJPY','USDZAR','US2Y','US10Y','SPX','NASDAQ','DJI','VIX','GOLD','WTI','BRENT','BTCUSD','ETHUSD'];
-          const payload={
-            service:'fxga-mt5-signal-ingress',
-            project:process.env.GCP_PROJECT_ID,
-            region:process.env.GCP_REGION,
-            baseUrl:base,
-            webhookUrl:`${base}/api/mt5/webhook`,
-            healthUrl:`${base}/health`,
-            priceCacheIngestUrl:`${base}/api/mt5/price-cache`,
-            priceCacheStatusUrl:`${base}/api/mt5/price-cache/status`,
-            priceQueryUrl:`${base}/api/mt5/prices`,
-            smcSnapshotUrl:`${base}/api/mt5/smc-snapshot`,
-            priceCache:{
-              source:'MetaTrader5',
-              symbols,
-              sourceTimeframe:'M1',
-              retentionDays:60,
-              maximumM1BarsPer24x7Asset:86400,
-              incrementalBarsPerSync:160,
-              syncSeconds:300,
-              envelopeBytes:200000000,
-              payloadHardBytes:190000000,
-              evictionTargetBytes:175000000,
-              policy:'rolling 60-day canonical M1 + gzip + timestamp dedupe + time FIFO + capacity FIFO + integrity diagnostics + deterministic higher-timeframe reconstruction'
-            },
-            authentication:{mode:'google-secret-manager-backed-sha256-token',repositoryFallback:false},
-            updatedAt:new Date().toISOString(),
-            cloudflareProcessing:false
-          };
-          fs.writeFileSync('runtime/mt5-cloud.json',JSON.stringify(payload,null,2)+'\n');
-          fs.writeFileSync('public/mt5-cloud.json',JSON.stringify(payload,null,2)+'\n');
+          const d=JSON.parse(fs.readFileSync('public/mt5-cloud.json','utf8'));
+          const base=String(process.env.MT5_URL||'').replace(/\/$/,'');
+          if(String(d.baseUrl||'').replace(/\/$/,'')!==base) throw new Error(`Committed MT5 discovery baseUrl is stale: ${d.baseUrl} != ${base}`);
+          if(d.cloudflareProcessing!==false) throw new Error('MT5 discovery document must declare cloudflareProcessing=false');
+          if(d.authentication?.repositoryFallback!==false) throw new Error('MT5 discovery document must forbid repository credential fallback');
+          console.log('Stable MT5 discovery document verified without mutating main');
           NODE
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add runtime/mt5-cloud-url.txt runtime/mt5-cloud.json public/mt5-cloud.json
-          if git diff --cached --quiet; then
-            echo "Resolved MT5 endpoint is unchanged."
-          else
-            git commit -m "Record current MT5 Cloud Run endpoint [skip ci]"
-            git push origin HEAD:main
-          fi
 
       - name: Production summary
         run: |
@@ -223,9 +202,12 @@ jobs:
           echo "MT5 price ingest: $MT5_URL/api/mt5/price-cache"
           echo "MT5 price query: $MT5_URL/api/mt5/prices"
           echo "MT5 SMC snapshot: $MT5_URL/api/mt5/smc-snapshot"
+          echo "MT5 broker universe: $MT5_URL/api/mt5/scanner-universe"
+          echo "MT5 broker-wide signals: $MT5_URL/api/mt5/scanner-signals"
           echo "Authentication: Google Secret Manager-backed SHA-256 token digest; no repository fallback"
           echo "Canonical cache: rolling 60 calendar days of M1 for the 16 website assets; 160-bar overlap every 300 seconds"
           echo "Maximum 24/7 M1 observations per asset: 86,400; session-limited instruments retain fewer bars over the same 60-day clock window"
           echo "Storage: time FIFO first; 200 MB envelope / 190 MB payload hard ceiling / 175 MB capacity FIFO target"
           echo "SMC: M1 canonical; M5/M15/M30/H1/H4/D1 reconstructed deterministically"
+          echo "Deployment does not commit runtime timestamps or endpoint files back to main"
           echo "Cloudflare processing: NONE"
