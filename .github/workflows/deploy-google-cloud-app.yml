@@ -24,8 +24,9 @@ env:
   DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
   RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
   GEMINI_SECRET_NAME: gemini-api-key
-  GEMINI_MODEL: gemini-3.7-flash
-  GEMINI_FALLBACK_MODEL: gemini-3.5-flash-lite
+  GEMINI_MODEL: gemini-3.5-flash-lite
+  GEMINI_FALLBACK_MODEL: gemini-3.1-flash-lite
+  GEMINI_RESERVE_MODEL: gemini-3.7-flash
 
 jobs:
   deploy:
@@ -53,7 +54,9 @@ jobs:
           node -e "const p=require('./package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies['@google-cloud/monitoring']||!p.dependencies.ws) process.exit(1)"
           ! grep -REn "AQ\.[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}" . --exclude='package-lock.json' || { echo '::error::Possible Gemini/Google credential committed to google-cloud-app'; exit 1; }
           ! grep -REn "GEMINI_REQUESTS_PER_HOUR|MAX_REQUESTS_PER_HOUR" . --exclude='package-lock.json' || { echo '::error::Artificial Gemini hourly cap detected in Google Cloud application'; exit 1; }
-          echo 'API validation complete. Gemini quota is provider-managed; frontend compilation belongs to the Cloudflare workflow.'
+          grep -q "instant-model-failover-plus-per-model-cooldown" fxga-intelligence-extension.js || { echo '::error::Gemini 429 resilience policy missing'; exit 1; }
+          grep -q "if (!raw) return null" fxga-intelligence-extension.js || { echo '::error::Missing Retry-After must not be reported as zero seconds'; exit 1; }
+          echo 'API validation complete. Gemini quota is provider-managed with adaptive model failover; frontend compilation belongs to the Cloudflare workflow.'
 
       - id: config
         name: Resolve Google authentication
@@ -165,7 +168,7 @@ jobs:
             --min 0 \
             --max 3 \
             --timeout 3600 \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting,FXGA_PUBLIC_ORIGIN=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_FALLBACK_MODEL=$GEMINI_FALLBACK_MODEL,GEMINI_SECRET_NAME=$GEMINI_SECRET_NAME" \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting,FXGA_PUBLIC_ORIGIN=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_FALLBACK_MODEL=$GEMINI_FALLBACK_MODEL,GEMINI_RESERVE_MODEL=$GEMINI_RESERVE_MODEL,GEMINI_SECRET_NAME=$GEMINI_SECRET_NAME" \
             --set-secrets "GEMINI_API_KEY=$GEMINI_SECRET_NAME:latest"
           APP_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --platform managed --format='value(status.url)')
           test -n "$APP_URL" || { echo '::error::Google Cloud application URL missing after deployment'; exit 1; }
@@ -205,7 +208,12 @@ jobs:
               if(gemini.quotaPolicy!=='provider-managed-no-artificial-hourly-or-daily-cap')throw new Error(`Unexpected Gemini quota policy ${gemini.quotaPolicy}`);
               if(gemini.applicationHourlyCap!==null||gemini.applicationDailyCap!==null)throw new Error('FXGA must not impose artificial Gemini hourly/daily caps');
               if(gemini.firestoreCaching!==true||gemini.duplicateRequestCoalescing!==true)throw new Error('Gemini quota-conservation controls are missing');
-              console.log('Google Cloud macro API + Gemini live:',base,'assets=',dashboard.market.length,'monitoringMode=',usage.monitoringMode,'geminiConfigured=',gemini.configured,'geminiModel=',gemini.model,'geminiQuotaPolicy=',gemini.quotaPolicy);
+              const intelligenceResponse=await fetch(base+'/api/gemini/intelligence-health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+              if(!intelligenceResponse.ok)throw new Error(`Intelligence health ${intelligenceResponse.status}`);
+              const intelligence=await intelligenceResponse.json();
+              if(intelligence.rateLimitStrategy!=='instant-model-failover-plus-per-model-cooldown')throw new Error('Gemini adaptive 429 resilience policy is not active');
+              if(!intelligence.reserveModel)throw new Error('Gemini reserve model is not configured');
+              console.log('Google Cloud macro API + Gemini live:',base,'assets=',dashboard.market.length,'monitoringMode=',usage.monitoringMode,'geminiConfigured=',gemini.configured,'geminiModel=',gemini.model,'intelligencePrimary=',intelligence.model,'fallback=',intelligence.fallbackModel,'reserve=',intelligence.reserveModel,'geminiQuotaPolicy=',gemini.quotaPolicy);
               process.exit(0);
             }catch(error){last=error;await sleep(3000);}
           }
@@ -223,7 +231,9 @@ jobs:
           echo "Gemini analysis: $APP_URL/api/gemini/analyze"
           echo "Gemini configured: true (required and live-verified)"
           echo "Gemini credential source: Google Secret Manager; GitHub Actions GEMINI_API_KEY can bootstrap the missing secret without exposing it"
+          echo "Gemini routing: $GEMINI_MODEL -> $GEMINI_FALLBACK_MODEL -> $GEMINI_RESERVE_MODEL"
+          echo "Gemini 429 strategy: immediate model failover plus per-model cooldown; provider Retry-After honored when supplied"
           echo "Gemini quota: Google provider/project/model limits only; no FXGA hourly or daily request cap"
-          echo "Gemini quota conservation: Firestore TTL cache + same-instance duplicate request coalescing"
+          echo "Gemini quota conservation: Firestore TTL cache + same-instance duplicate request coalescing + reduced evidence payloads"
           echo "Frontend bundled into API container: NO"
           echo "Cloudflare application processing: NONE"
