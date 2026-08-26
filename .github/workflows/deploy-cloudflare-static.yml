@@ -79,6 +79,10 @@ jobs:
             echo 'No package-lock.json found; using npm install for this build.'
             npm install --no-audit --no-fund
           fi
+          node --check worker/src/index.js
+          node --check worker/src/r0-entry.js
+          node --check scripts/r0-collect-market.mjs
+          node --check scripts/r0-collect-macro.mjs
           npm run build
           test -f dist/index.html
           grep -R -F "Ask FXGA AI" dist >/dev/null || { echo '::error::Compiled frontend is missing Ask FXGA AI'; exit 1; }
@@ -114,7 +118,7 @@ jobs:
           const config=JSON.parse(fs.readFileSync('wrangler.jsonc','utf8'));
           const db=config.d1_databases?.find(x=>x.binding==='DB');
           if(!db?.database_id)throw new Error('R0 D1 binding was not created');
-          if(config.main!=='./worker/src/index.js')throw new Error('R0 Worker main entry is missing');
+          if(config.main!=='./worker/src/r0-entry.js')throw new Error('R0 compatibility Worker main entry is missing');
           if(!config.assets?.run_worker_first?.includes('/api/*'))throw new Error('/api/* must execute Worker first');
           console.log('R0 config ready with D1 binding',db.database_name);
           NODE
@@ -140,7 +144,7 @@ jobs:
             printf '%s' "$FXGA_MT5_REPORT_SECRET" | npx wrangler@latest secret put FXGA_MT5_REPORT_SECRET --config wrangler.jsonc
           fi
 
-      - name: Verify R0 runtime and preserved AI
+      - name: Verify R0 runtime, website contracts and preserved AI
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -159,13 +163,37 @@ jobs:
               if(health.architecture!=='cloudflare-r0')throw new Error('R0 architecture health contract mismatch');
               if(health.googleCloudRuntime!==false)throw new Error('Google Cloud runtime is still enabled');
               if(health.database!=='Cloudflare D1 Free')throw new Error('D1 runtime is not active');
+
+              const dashboard=await getJson('/api/dashboard');
+              if(!Array.isArray(dashboard.macro)||!Array.isArray(dashboard.market)||!Array.isArray(dashboard.calendar)||!Array.isArray(dashboard.sources)||!Array.isArray(dashboard.errors))throw new Error('Dashboard compatibility contract is invalid');
+              if(dashboard._r0?.architecture!=='cloudflare-r0'||dashboard._r0?.googleCloudRuntime!==false)throw new Error('Dashboard is not reporting the R0 runtime');
+
+              const analysis=await getJson('/api/analysis');
+              if(!Array.isArray(analysis.dimensions)||!analysis.regime||!analysis.policy||!analysis.coverage)throw new Error('Macro analysis compatibility contract is invalid');
+
+              const sessions=await getJson('/api/session-signals');
+              if(!Array.isArray(sessions.sessions)||sessions.sessions.length<5)throw new Error('Session signal compatibility contract is invalid');
+
+              const fred=await getJson('/api/fred/catalog');
+              if(!Array.isArray(fred.categories)||!Array.isArray(fred.series))throw new Error('FRED compatibility contract is invalid');
+
+              const technical=await getJson('/api/technical');
+              if(!technical.counts||!technical.assets||typeof technical.assets!=='object')throw new Error('Technical compatibility contract is invalid');
+
+              const quality=await getJson('/api/data-quality');
+              if(!quality.macro?.coverage||!quality.market||!quality.technical||!quality.calendar)throw new Error('Data-quality compatibility contract is invalid');
+
               const ai=await getJson('/api/gemini/health');
               if(!ai.configured)throw new Error('Gemini AI secret is not active');
               const prompts=await getJson('/api/gemini/prompts');
               if(!Array.isArray(prompts.prompts)||prompts.prompts.length<6)throw new Error('FXGA AI prompt registry is incomplete');
+
               const root=await fetch(site+'/?r0='+Date.now(),{cache:'no-store'});
               if(!root.ok)throw new Error(`Website HTTP ${root.status}`);
-              console.log('VERIFIED: FXGA is live on Cloudflare R0 runtime; Gemini AI preserved; promptCount=',prompts.prompts.length);
+              const html=await root.text();
+              if(!html.includes('<div id="root"'))throw new Error('Website root HTML is missing the React mount point');
+
+              console.log('VERIFIED: website + dashboard + sessions + FRED + technical + data quality + Gemini are live on Cloudflare R0; macro=',dashboard.macro.length,'market=',dashboard.market.length,'sources=',dashboard.sources.length,'promptCount=',prompts.prompts.length);
               process.exit(0);
             }catch(error){last=error;console.log(`Verification ${i}/20:`,String(error?.message||error));await sleep(3000);}
           }
