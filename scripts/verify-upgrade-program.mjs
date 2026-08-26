@@ -17,6 +17,7 @@ const required = [
   'google-cloud-app/optimize-server.js',
   'worker/src/index.js',
   'worker/src/r0-entry.js',
+  'worker/src/auth-gateway.js',
   'wrangler.jsonc',
 ];
 for (const path of required) if (!fs.existsSync(path)) throw new Error(`3000-upgrade foundation missing ${path}`);
@@ -31,11 +32,16 @@ for(let i=0;i<program.domainsIndex.length;i++){
 }
 const wranglerText=fs.readFileSync('wrangler.jsonc','utf8');
 const wrangler=JSON.parse(wranglerText);
-if(wrangler.main!=='./worker/src/r0-entry.js')throw new Error('Cloudflare R0 Worker main must be ./worker/src/r0-entry.js');
+if(wrangler.main!=='./worker/src/auth-gateway.js')throw new Error('Cloudflare R0 Worker main must be ./worker/src/auth-gateway.js');
 if(wrangler.assets?.binding!=='ASSETS')throw new Error('Cloudflare R0 static assets binding is missing');
-if(!wrangler.assets?.run_worker_first?.includes('/api/*'))throw new Error('Cloudflare R0 must route /api/* through the Worker before static assets');
+if(!wrangler.assets?.run_worker_first?.includes('/*'))throw new Error('All application routes must pass through the member auth gateway');
+if(wrangler.vars?.AUTH_ENFORCED!=='auto')throw new Error('Member auth must be configured for safe automatic activation');
+if(!String(wrangler.vars?.AUTH_PORTAL_URL||'').includes('/member'))throw new Error('Member auth portal is not configured');
 if(wrangler.r2_buckets)throw new Error('R2 must not be a production dependency in strict R0 mode');
 for(const forbidden of ['durable_objects','queues','services'])if(wranglerText.includes(`"${forbidden}"`))throw new Error(`Unexpected Cloudflare application binding in strict R0 mode: ${forbidden}`);
+const authGateway=fs.readFileSync('worker/src/auth-gateway.js','utf8');
+if(!authGateway.includes("import r0Worker from './r0-entry.js'"))throw new Error('Member gateway must delegate to the R0 compatibility runtime');
+for(const needle of ['/api/auth/status','/api/auth/exchange','/api/auth/introspect-session','authentication_required','member_auth_enforced'])if(!authGateway.includes(needle))throw new Error(`Member auth gateway missing ${needle}`);
 const r0Entry=fs.readFileSync('worker/src/r0-entry.js','utf8');
 if(!r0Entry.includes("import coreWorker from './index.js'"))throw new Error('R0 compatibility entry must delegate preserved core Worker routes to worker/src/index.js');
 for(const needle of ['/api/dashboard','/api/analysis','/api/session-signals','/api/live'])if(!r0Entry.includes(needle))throw new Error(`R0 frontend compatibility gate missing ${needle}`);
@@ -57,4 +63,4 @@ const optimizer=fs.readFileSync('google-cloud-app/optimize-server.js','utf8');
 for(const needle of ['/api/event-pattern-backtests','eventBacktests','validatedOnly'])if(!optimizer.includes(needle))throw new Error(`Public OOS API gate missing ${needle}`);
 const eventUi=fs.readFileSync('src/components/EventBacktestValidation.tsx','utf8');
 for(const needle of ['Out-of-Sample Validation','q-value','cost assumption','validated candidate'])if(!eventUi.includes(needle))throw new Error(`Event validation UI gate missing ${needle}`);
-console.log(JSON.stringify({ok:true,schema:program.schema,totalUpgrades:program.totalUpgrades,domains:program.domains,cloudflareR0:true,workerRuntime:true,compatibilityEntry:true,d1Ready:true,foundations:program.implementation.foundationBatch.capabilities.length,oosValidation:true,realtimeResilience:true,eventEvidence:true,simpleActionReport:true},null,2));
+console.log(JSON.stringify({ok:true,schema:program.schema,totalUpgrades:program.totalUpgrades,domains:program.domains,cloudflareR0:true,workerRuntime:true,compatibilityEntry:true,memberAuthGateway:true,ownerApprovedAccess:true,d1Ready:true,foundations:program.implementation.foundationBatch.capabilities.length,oosValidation:true,realtimeResilience:true,eventEvidence:true,simpleActionReport:true},null,2));
