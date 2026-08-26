@@ -58,6 +58,35 @@ jobs:
           grep -q 'X-FXGA-Agent-Admin-Key' admin-server.js
           echo 'Telegram member agent persistence and secure settings contracts verified.'
 
+      - name: Verify protected Telegram bot settings
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          FXGA_AGENT_ADMIN_KEY: ${{ secrets.FXGA_AGENT_ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${TELEGRAM_BOT_TOKEN:-}" || { echo '::error::TELEGRAM_BOT_TOKEN is not configured in GitHub Actions secrets'; exit 1; }
+          echo 'TELEGRAM_BOT_TOKEN is configured in GitHub Actions.'
+          if [ -n "${FXGA_AGENT_ADMIN_KEY:-}" ]; then
+            test "${#FXGA_AGENT_ADMIN_KEY}" -ge 16 || { echo '::error::FXGA_AGENT_ADMIN_KEY must be at least 16 characters'; exit 1; }
+            echo 'FXGA_AGENT_ADMIN_KEY is configured.'
+          else
+            echo '::warning::FXGA_AGENT_ADMIN_KEY is not configured yet; the settings service will remain locked until it is added.'
+          fi
+          node <<'NODE'
+          const token = process.env.TELEGRAM_BOT_TOKEN;
+          const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
+            headers: { Accept: 'application/json' },
+            cache: 'no-store'
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok || payload?.ok !== true || !payload?.result) {
+            console.error('::error::Telegram rejected TELEGRAM_BOT_TOKEN');
+            process.exit(1);
+          }
+          const username = payload.result.username ? `@${payload.result.username}` : '(no username)';
+          console.log(`Telegram Bot API verified: ${username}; bot id ${payload.result.id}.`);
+          NODE
+
       - name: Enforce direct-add-only Telegram contract
         working-directory: agents/telegram-member-agent
         run: |
