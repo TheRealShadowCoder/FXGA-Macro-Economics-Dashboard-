@@ -1,14 +1,12 @@
-name: Deploy FXGA Cloudflare Static Website
+name: Deploy FXGA R0 Cloudflare Runtime
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ['Deploy FXGA Google Cloud Application']
-    types: [completed]
   push:
     branches: [main]
     paths:
       - 'src/**'
+      - 'worker/**'
       - 'public/**'
       - 'index.html'
       - 'vite.config.ts'
@@ -19,222 +17,134 @@ on:
       - '.github/workflows/deploy-cloudflare-static.yml'
 
 concurrency:
-  group: fxga-cloudflare-static-website
+  group: fxga-r0-cloudflare-runtime
   cancel-in-progress: true
 
 permissions:
   contents: read
-  id-token: write
 
 env:
-  GCP_PROJECT_ID: fxglobalavengerstradingacademy
-  GCP_REGION: us-central1
-  GCP_APP_SERVICE: fxga-macro-dashboard
-  GCP_DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
-  CLOUDFLARE_ACCOUNT_ID: 4f260a0775a3df407e08512610c9898b
   CLOUDFLARE_SITE_URL: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
-  RELEASE_NAME: cross-asset-mt5-60d-event-research
+  D1_DATABASE_NAME: fxga-free-db
+  WRANGLER_VERSION: '4.123.0'
 
 jobs:
-  deploy-static-site:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+  deploy-r0-runtime:
     runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      FXGA_INGEST_TOKEN: ${{ secrets.FXGA_INGEST_TOKEN }}
+      FXGA_MT5_REPORT_SECRET: ${{ secrets.FXGA_MT5_REPORT_SECRET }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: main
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+          cache: npm
 
-      - id: release
-        name: Resolve release commit
+      - name: Validate R0 deployment secrets
         run: |
           set -euo pipefail
-          RELEASE_SHA=$(git rev-parse HEAD)
-          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
-          echo "RELEASE_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
-          echo "Deploying current main release: $RELEASE_SHA"
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo '::error::CLOUDFLARE_API_TOKEN must be added under repository Actions secrets'; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo '::error::CLOUDFLARE_ACCOUNT_ID must be added under repository Actions secrets'; exit 1; }
+          test -n "$GEMINI_API_KEY" || { echo '::error::GEMINI_API_KEY must be added under repository Actions secrets to preserve Ask FXGA AI'; exit 1; }
 
-      - id: config
-        name: Resolve Google Cloud authentication
-        env:
-          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
-          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+      - name: Install and build frontend
         run: |
           set -euo pipefail
-          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
-          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
-          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
-
-      - uses: google-github-actions/auth@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
-          service_account: ${{ env.GCP_DEPLOY_SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Resolve and warm the Google Cloud API
-        run: |
-          set -euo pipefail
-          gcloud config set project "$GCP_PROJECT_ID"
-          APP_URL=$(gcloud run services describe "$GCP_APP_SERVICE" \
-            --region "$GCP_REGION" \
-            --platform managed \
-            --format='value(status.url)')
-          test -n "$APP_URL" || { echo '::error::Google Cloud application URL is missing'; exit 1; }
-          echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
-          echo "APP_SERVICE=$GCP_APP_SERVICE" >> "$GITHUB_ENV"
-          echo "VITE_GOOGLE_CLOUD_API_BASE=$APP_URL" >> "$GITHUB_ENV"
-
-          APP_URL="$APP_URL" node <<'NODE'
-          const base=process.env.APP_URL;
-          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          async function timed(url,ms){
-            const controller=new AbortController();
-            const timer=setTimeout(()=>controller.abort(),ms);
-            try{return await fetch(url,{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store',signal:controller.signal});}
-            finally{clearTimeout(timer);}
-          }
-          let last;
-          for(let attempt=1;attempt<=24;attempt++){
-            try{
-              const healthResponse=await timed(base+'/api/health',30000);
-              if(!healthResponse.ok)throw new Error(`/api/health ${healthResponse.status}`);
-              const h=await healthResponse.json();
-              if(h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')throw new Error('Google Cloud health contract mismatch');
-
-              const dashboardResponse=await timed(base+'/api/dashboard',45000);
-              if(!dashboardResponse.ok)throw new Error(`/api/dashboard ${dashboardResponse.status}`);
-              const d=await dashboardResponse.json();
-              if(!Array.isArray(d.market)||!Array.isArray(d.sources))throw new Error('Dashboard payload contract missing market/sources');
-              console.log('Google Cloud macro API ready:',base,'assets=',d.market.length,'attempt=',attempt);
-              process.exit(0);
-            }catch(error){
-              last=error;
-              console.log(`Backend warm-up attempt ${attempt}/24 failed:`,String(error?.message||error));
-              await sleep(5000);
-            }
-          }
-          throw last||new Error('Google Cloud macro API did not become ready');
-          NODE
-
-      - name: Build Cloudflare static frontend and stamp release
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs=require('fs');
-          const marker={
-            commit:process.env.RELEASE_SHA,
-            builtAt:new Date().toISOString(),
-            release:process.env.RELEASE_NAME,
-            backendService:process.env.APP_SERVICE||null,
-            backendUrl:process.env.APP_URL||null,
-            features:[
-              'cross-asset-tabs',
-              'mt5-data-smc-fusion',
-              '60-day-canonical-m1',
-              'incremental-mt5-sync',
-              'event-price-research',
-              'pre-news-price-action',
-              'time-signatures',
-              'pattern-profiling',
-              'cold-start-aware-api-client',
-              'live-signal-intelligence',
-              'smc2000-indicator-signals',
-              '100-advanced-ai-prompts',
-              'realtime-trade-management',
-              'sticky-cross-asset-tabs',
-              'gemini-direct-cloudrun-routing',
-              'gemini-transient-502-recovery'
-            ]
-          };
-          fs.writeFileSync('public/fxga-build.json',JSON.stringify(marker,null,2)+'\n');
-          NODE
-
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run build
+          test -f dist/index.html
+          grep -R -F "Ask FXGA AI" dist >/dev/null || { echo '::error::Compiled frontend is missing Ask FXGA AI'; exit 1; }
 
-          grep -R -F "$APP_URL" dist >/dev/null || { echo '::error::Frontend build is not pinned to the discovered Google Cloud API'; exit 1; }
-          grep -R -F "compatibility-fallback" dist >/dev/null || { echo '::error::Compiled frontend is missing Gemini transient 502 recovery'; exit 1; }
-          grep -R -F "MT5 Data + SMC Fusion" dist >/dev/null || { echo '::error::Compiled frontend is missing the Cross Asset MT5 Data + SMC Fusion tab'; exit 1; }
-          grep -R -F "Cross Asset Board" dist >/dev/null || { echo '::error::Compiled frontend is missing the Cross Asset Board tab'; exit 1; }
-          grep -R -F "Event Study & Backtesting" dist >/dev/null || { echo '::error::Compiled frontend is missing Event Study & Backtesting'; exit 1; }
-          grep -R -F "Price action before and after every economic release" dist >/dev/null || { echo '::error::Compiled frontend is missing the pre/post-news event-price research workspace'; exit 1; }
-          grep -R -F "Live Signal Intelligence" dist >/dev/null || { echo '::error::Compiled frontend is missing Live Signal Intelligence navigation'; exit 1; }
-          grep -R -F "Ask FXGA AI" dist >/dev/null || { echo '::error::Compiled frontend is missing the FXGA AI chatbot'; exit 1; }
-          test -f dist/fxga-intelligence-live.html || { echo '::error::Compiled frontend is missing the live intelligence journal'; exit 1; }
-          grep -F "Ask anything about FXGA" dist/fxga-intelligence-live.html >/dev/null || { echo '::error::Live intelligence journal is missing its program chatbot'; exit 1; }
-          test -f dist/fxga-build.json || { echo '::error::Release marker was not copied into the static build'; exit 1; }
-
-          node <<'NODE'
-          const fs=require('fs');
-          const marker=JSON.parse(fs.readFileSync('dist/fxga-build.json','utf8'));
-          if(marker.commit!==process.env.RELEASE_SHA)throw new Error(`Build marker commit mismatch: ${marker.commit}`);
-          if(marker.release!==process.env.RELEASE_NAME)throw new Error(`Unexpected release marker: ${marker.release}`);
-          for(const feature of ['60-day-canonical-m1','event-price-research','pre-news-price-action','cold-start-aware-api-client','smc2000-indicator-signals','100-advanced-ai-prompts','realtime-trade-management','gemini-direct-cloudrun-routing','gemini-transient-502-recovery']){
-            if(!marker.features?.includes(feature))throw new Error(`Release marker missing ${feature}`);
-          }
-          console.log('VERIFIED BEFORE DEPLOY:',marker);
-          NODE
-
-      - name: Enforce static-only Cloudflare configuration
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Provision or attach free D1 database
         run: |
           set -euo pipefail
-          test -n "$CLOUDFLARE_API_TOKEN" || { echo '::error::CLOUDFLARE_API_TOKEN is missing'; exit 1; }
+          npx wrangler@"$WRANGLER_VERSION" d1 list --json > "$RUNNER_TEMP/d1-list.json"
+          D1_ID=$(node - <<'NODE'
+          const fs=require('fs');
+          const rows=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/d1-list.json','utf8'));
+          const row=(Array.isArray(rows)?rows:[]).find(x=>x.name===process.env.D1_DATABASE_NAME);
+          process.stdout.write(row?.uuid || row?.id || '');
+          NODE
+          )
+
+          if [ -z "$D1_ID" ]; then
+            echo "Creating D1 database $D1_DATABASE_NAME"
+            npx wrangler@"$WRANGLER_VERSION" d1 create "$D1_DATABASE_NAME" --binding DB --update-config --config wrangler.jsonc
+          else
+            echo "Attaching existing D1 database $D1_DATABASE_NAME ($D1_ID)"
+            D1_ID="$D1_ID" node <<'NODE'
+          const fs=require('fs');
+          const path='wrangler.jsonc';
+          const config=JSON.parse(fs.readFileSync(path,'utf8'));
+          config.d1_databases=[{binding:'DB',database_name:process.env.D1_DATABASE_NAME,database_id:process.env.D1_ID}];
+          fs.writeFileSync(path,JSON.stringify(config,null,2)+'\n');
+          NODE
+          fi
+
           node <<'NODE'
           const fs=require('fs');
           const config=JSON.parse(fs.readFileSync('wrangler.jsonc','utf8'));
-          if(config.main)throw new Error('Cloudflare must not have a Worker script');
-          if(config.assets?.directory!=='./dist')throw new Error('Cloudflare must serve only the compiled static frontend');
-          if(config.assets?.not_found_handling!=='single-page-application')throw new Error('SPA static fallback is required');
-          const forbidden=['durable_objects','kv_namespaces','r2_buckets','d1_databases','services','queues','triggers','browser','ai','vectorize','workflows','vars'];
-          for(const key of forbidden)if(config[key]!==undefined)throw new Error(`Cloudflare static host must not configure ${key}`);
-          if(fs.existsSync('worker'))throw new Error('Cloudflare application Worker source must not exist');
-          console.log('Cloudflare contract verified: static asset hosting only; zero application processing.');
+          const db=config.d1_databases?.find(x=>x.binding==='DB');
+          if(!db?.database_id)throw new Error('R0 D1 binding was not created');
+          if(config.main!=='./worker/src/index.js')throw new Error('R0 Worker main entry is missing');
+          if(!config.assets?.run_worker_first?.includes('/api/*'))throw new Error('/api/* must execute Worker first');
+          console.log('R0 config ready with D1 binding',db.database_name);
           NODE
 
-      - name: Deploy static website to Cloudflare
-        uses: cloudflare/wrangler-action@v4
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: '4.123.0'
-          command: deploy
-
-      - name: Verify exact release is live on Cloudflare
+      - name: Apply D1 schema
         run: |
+          set -euo pipefail
+          npx wrangler@"$WRANGLER_VERSION" d1 execute "$D1_DATABASE_NAME" --remote --file=worker/schema.sql --yes --config wrangler.jsonc
+
+      - name: Deploy Worker and static assets
+        run: |
+          set -euo pipefail
+          npx wrangler@"$WRANGLER_VERSION" deploy --config wrangler.jsonc
+
+      - name: Configure Gemini and optional ingestion secrets
+        run: |
+          set -euo pipefail
+          printf '%s' "$GEMINI_API_KEY" | npx wrangler@"$WRANGLER_VERSION" secret put GEMINI_API_KEY --config wrangler.jsonc
+          if [ -n "${FXGA_INGEST_TOKEN:-}" ]; then
+            printf '%s' "$FXGA_INGEST_TOKEN" | npx wrangler@"$WRANGLER_VERSION" secret put FXGA_INGEST_TOKEN --config wrangler.jsonc
+          fi
+          if [ -n "${FXGA_MT5_REPORT_SECRET:-}" ]; then
+            printf '%s' "$FXGA_MT5_REPORT_SECRET" | npx wrangler@"$WRANGLER_VERSION" secret put FXGA_MT5_REPORT_SECRET --config wrangler.jsonc
+          fi
+
+      - name: Verify R0 runtime and preserved AI
+        run: |
+          set -euo pipefail
           node <<'NODE'
           const site=process.env.CLOUDFLARE_SITE_URL;
-          const api=process.env.APP_URL;
-          const sha=process.env.RELEASE_SHA;
-          const release=process.env.RELEASE_NAME;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          let root,marker,last;
-          for(let i=0;i<60;i++){
-            try{
-              root=await fetch(site+'/?release='+encodeURIComponent(sha),{headers:{'Cache-Control':'no-cache'},cache:'no-store'});
-              const markerResponse=await fetch(site+'/fxga-build.json?release='+encodeURIComponent(sha),{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
-              if(root.ok&&markerResponse.ok){
-                const candidate=await markerResponse.json();
-                if(candidate.commit===sha&&candidate.release===release&&candidate.features?.includes('100-advanced-ai-prompts')&&candidate.features?.includes('realtime-trade-management')&&candidate.features?.includes('gemini-direct-cloudrun-routing')&&candidate.features?.includes('gemini-transient-502-recovery')){
-                  marker=candidate;
-                  break;
-                }
-                last=new Error(`Cloudflare still serves another release: ${candidate.commit||'unknown'} / ${candidate.release||'unknown'}`);
-              }
-            }catch(error){last=error;}
-            await sleep(2000);
+          async function getJson(path){
+            const r=await fetch(site+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
+            const body=await r.json().catch(()=>({}));
+            if(!r.ok)throw new Error(`${path} HTTP ${r.status}: ${JSON.stringify(body)}`);
+            return body;
           }
-          if(!root?.ok)throw new Error('Cloudflare static website did not become ready');
-          if(!marker)throw last||new Error('Exact hardened Gemini frontend release marker did not become live');
-
-          const cloud=await fetch(api+'/api/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
-          const h=await cloud.json();
-          if(!cloud.ok||h.compute!=='Google Cloud Run'||h.state!=='Google Cloud Firestore')throw new Error('Google Cloud processing contract failed');
-          console.log('VERIFIED LIVE RELEASE:',marker);
+          let last;
+          for(let i=1;i<=20;i++){
+            try{
+              const health=await getJson('/api/health');
+              if(health.architecture!=='cloudflare-r0')throw new Error('R0 architecture health contract mismatch');
+              if(health.googleCloudRuntime!==false)throw new Error('Google Cloud runtime is still enabled');
+              if(health.database!=='Cloudflare D1 Free')throw new Error('D1 runtime is not active');
+              const ai=await getJson('/api/gemini/health');
+              if(!ai.configured)throw new Error('Gemini AI secret is not active');
+              const prompts=await getJson('/api/gemini/prompts');
+              if(!Array.isArray(prompts.prompts)||prompts.prompts.length<50)throw new Error('FXGA AI prompt registry is incomplete');
+              const root=await fetch(site+'/?r0='+Date.now(),{cache:'no-store'});
+              if(!root.ok)throw new Error(`Website HTTP ${root.status}`);
+              console.log('VERIFIED: FXGA is live on Cloudflare R0 runtime; Gemini AI preserved; promptCount=',prompts.prompts.length);
+              process.exit(0);
+            }catch(error){last=error;console.log(`Verification ${i}/20:`,String(error?.message||error));await sleep(3000);}
+          }
+          throw last||new Error('R0 runtime did not become ready');
           NODE
