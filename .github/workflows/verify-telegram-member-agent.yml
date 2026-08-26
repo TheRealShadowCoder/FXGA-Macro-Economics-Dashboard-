@@ -1,0 +1,52 @@
+name: Verify FXGA Telegram Member Agent
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'agents/telegram-member-agent/**'
+      - 'agents/README.md'
+      - '.github/workflows/deploy-telegram-member-agent.yml'
+      - '.github/workflows/verify-telegram-member-agent.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install and validate
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npm run check
+          node -e "const p=require('./package.json'); if(p.version !== '1.1.0') process.exit(1); if(!p.dependencies.teleproto || !p.dependencies['@google-cloud/firestore']) process.exit(1)"
+
+      - name: Reject credentials and member datasets in source
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          ! grep -REn "(api[_-]?hash|session)[[:space:]]*[:=][[:space:]]*['\"][A-Za-z0-9_=-]{20,}" . \
+            --exclude='package-lock.json' || { echo '::error::Possible Telegram credential committed to source'; exit 1; }
+          ! find . -maxdepth 3 \( -name '*.xlsx' -o -name '*.xls' -o -name '*.csv' -o -name '*.session' \) -print -quit | grep -q . \
+            || { echo '::error::Member/source data must not be committed under the agent directory'; exit 1; }
+
+      - name: Verify persistence and safety contracts
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          grep -q 'dailyAdded' index.js
+          grep -q 'missingInvitees' index.js
+          grep -q 'MAX_ATTEMPTS_PER_RUN' index.js
+          grep -q 'FLOOD_WAIT' index.js
+          grep -q 'PEER_FLOOD' index.js
+          grep -q 'lastImportedAt' scripts/import-members.mjs
+          echo 'Telegram member agent verification complete.'
