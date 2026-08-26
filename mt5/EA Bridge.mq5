@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//| EA Bridge v13.41 - FXGA 60-Day Elliott + Macro AI Dossier        |
+//| EA Bridge v13.50 - FXGA 60-Day Elliott + RSI/BB + Macro AI Dossier        |
 //| Authenticated, on-demand, non-focus-stealing MT5 worker bridge.  |
 //+------------------------------------------------------------------+
 #property copyright "FX Global Avengers Trading Academy"
-#property version   "13.41"
+#property version   "13.50"
 #property strict
-#property description "FXGA EA Bridge v13.41 - strict non-repaint evidence handshake, 60-day history and 21-chart dossier capture."
+#property description "FXGA EA Bridge v13.50 - strict dual-engine non-repaint evidence handshake, 60-day history and 21-chart dossier capture."
 
 input group "WEBSITE • FXGA 60-Day Elliott AI Dossier"
 input bool   InpWebsiteReportBridge=true;
@@ -22,6 +22,8 @@ input int    InpWebsiteReportMaxRetries=3;
 input int    InpWebsiteReportHistoryDays=60; // forced to >=60
 input string InpWebsiteReportTemplateName="FXGA_Elliott_Web_Report_AUTO.tpl";
 input bool   InpWebsiteReportBackgroundCapture=true;
+input bool   InpWebsiteReportRequireRSIBBEvidence=true; // Require RSI/BB v2.32 local evidence on every worker timeframe.
+input int    InpWebsiteReportRSIBBTimeoutSeconds=90; // Hard wait ceiling for secondary confirmation evidence.
 input bool   InpWebsiteReportVerbose=true;
 
 enum ENUM_FXGA_WEB_STAGE
@@ -84,6 +86,8 @@ string ChildKey(const long id)      { return "FXGA_EW_REPORT_CHILD_"+IntegerToSt
 string ReadyKey(const long id)      { return "FXGA_EW_REPORT_READY_"+IntegerToString(id); }
 string EvidenceReadyKey(const long id){ return "FXGA_EW_AI_EVIDENCE_READY_"+IntegerToString(id); }
 string EvidenceFile(const long id)  { return "FXGA_EW_AI_EVIDENCE_"+IntegerToString(id)+".json"; }
+string RSIEvidenceReadyKey(const long id){ return "FXGA_RSI_BB_AI_EVIDENCE_READY_"+IntegerToString(id); }
+string RSIEvidenceFile(const long id) { return "FXGA_RSI_BB_AI_EVIDENCE_"+IntegerToString(id)+".json"; }
 string HistoryFile()                { return "FXGA_EW_60D_HISTORY_"+IntegerToString(ChartID())+".csv"; }
 
 string JsonString(const string json,const string key)
@@ -156,12 +160,12 @@ bool Config()
    if(!InpWebsiteReportBridge) return false;
    if(gApi=="" || (StringFind(gApi,"https://")!=0 && StringFind(gApi,"http://")!=0))
      {
-      Print("EA Bridge v13.41 | invalid API base");
+      Print("EA Bridge v13.50 | invalid API base");
       return false;
      }
    if(StringLen(gSecret)<16)
      {
-      Print("EA Bridge v13.41 | paste the exact strong FXGA_MT5_REPORT_SECRET into InpWebsiteReportSecret");
+      Print("EA Bridge v13.50 | paste the exact strong FXGA_MT5_REPORT_SECRET into InpWebsiteReportSecret");
       return false;
      }
    if(InpWebsiteReportPollSeconds<1 || InpWebsiteReportHttpTimeoutMs<1000 ||
@@ -175,7 +179,7 @@ void Guide()
   {
    if(gWarned) return;
    gWarned=true;
-   Print("EA Bridge v13.41 | CONFIGURATION REQUIRED | API=",InpWebsiteReportApiBase,
+   Print("EA Bridge v13.50 | CONFIGURATION REQUIRED | API=",InpWebsiteReportApiBase,
          " | paste FXGA_MT5_REPORT_SECRET into EA Inputs");
    Print("EA Bridge | Whitelist the Cloud Run URL under MT5 Tools > Options > Expert Advisors > Allow WebRequest for listed URL. EA remains safely attached/passive.");
   }
@@ -304,6 +308,8 @@ void ClearWorkerHandshake(const long id)
    FileDelete(EvidenceFile(id));
    GlobalVariableDel(ReadyKey(id));
    GlobalVariableDel(EvidenceReadyKey(id));
+   GlobalVariableDel(RSIEvidenceReadyKey(id));
+   FileDelete(RSIEvidenceFile(id));
   }
 
 void CloseWorker()
@@ -478,20 +484,35 @@ bool CaptureCurrent()
   {
    if(gWorker<=0 || gTFIndex>=gTFCount) return false;
    string name=gTFs[gTFIndex];
-   string eFile=EvidenceFile(gWorker);
-   char evidence[];
-   if(!ReadFile(eFile,evidence,8*1024*1024))
+   string eFile=EvidenceFile(gWorker),rFile=RSIEvidenceFile(gWorker);
+   char evidenceBytes[],rsiBytes[];
+   if(!ReadFile(eFile,evidenceBytes,8*1024*1024))
      {
-      if(InpWebsiteReportVerbose) Print("EA Bridge | evidence not readable yet | ",eFile);
+      if(InpWebsiteReportVerbose) Print("EA Bridge | Elliott evidence not readable yet | ",eFile);
+      return false;
+     }
+   if(InpWebsiteReportRequireRSIBBEvidence && !ReadFile(rFile,rsiBytes,8*1024*1024))
+     {
+      if(InpWebsiteReportVerbose) Print("EA Bridge | RSI/BB evidence not readable yet | ",rFile);
       return false;
      }
 
-   int st=-1;
-   string body="";
-   if(!Http("POST","/api/elliott-ai/evidence?jobId="+gJob+"&timeframe="+name+"&terminalId="+InpWebsiteReportTerminalId,
-            "application/json",evidence,st,body))
+   string elliott=CharArrayToString(evidenceBytes,0,-1,CP_UTF8);
+   string combined=elliott;
+   if(InpWebsiteReportRequireRSIBBEvidence)
      {
-      if(InpWebsiteReportVerbose) Print("EA Bridge | Elliott evidence upload failed | ",name," HTTP=",st," body=",body);
+      string rsi=CharArrayToString(rsiBytes,0,-1,CP_UTF8);
+      StringTrimLeft(elliott); StringTrimRight(elliott);
+      StringTrimLeft(rsi); StringTrimRight(rsi);
+      int n=StringLen(elliott);
+      if(n<2 || StringSubstr(elliott,n-1,1)!="}" || StringLen(rsi)<2 || StringSubstr(rsi,0,1)!="{" || StringSubstr(rsi,StringLen(rsi)-1,1)!="}") return false;
+      combined=StringSubstr(elliott,0,n-1)+",\"rsi_bb_confirmation\":{\"schema_version\":\"FXGA_RSI_BB_AI_EVIDENCE_1\",\"role\":\"SECONDARY_CONFIRMATION_FILTER_ONLY\",\"evidence\":"+rsi+"}}";
+     }
+
+   int st=-1; string body="";
+   if(!HttpJson("POST","/api/elliott-ai/evidence?jobId="+gJob+"&timeframe="+name+"&terminalId="+InpWebsiteReportTerminalId,combined,st,body))
+     {
+      if(InpWebsiteReportVerbose) Print("EA Bridge | dual-engine evidence upload failed | ",name," HTTP=",st," body=",body);
       return false;
      }
 
@@ -508,16 +529,15 @@ bool CaptureCurrent()
    char png[];
    if(!ReadFile(gShot,png,8*1024*1024)) return false;
 
-   st=-1;
-   body="";
+   st=-1; body="";
    bool ok=Http("POST","/api/elliott-reports/upload?jobId="+gJob+"&timeframe="+name+"&terminalId="+InpWebsiteReportTerminalId,
                 "image/png",png,st,body);
    if(ok)
      {
-      FileDelete(gShot);
-      gShot="";
-      FileDelete(eFile); // delete only after BOTH evidence and PNG succeeded
-      if(InpWebsiteReportVerbose) Print("EA Bridge | uploaded strict Elliott evidence + screenshot ",name);
+      FileDelete(gShot); gShot="";
+      FileDelete(eFile);
+      if(InpWebsiteReportRequireRSIBBEvidence) FileDelete(rFile);
+      if(InpWebsiteReportVerbose) Print("EA Bridge | uploaded Elliott + RSI/BB evidence + screenshot ",name);
      }
    else if(InpWebsiteReportVerbose)
       Print("EA Bridge | screenshot upload failed | ",name," HTTP=",st," body=",body);
@@ -585,7 +605,7 @@ void Poll()
    if(!gAuthConfirmed)
      {
       gAuthConfirmed=true;
-      Print("EA Bridge v13.41 CONNECTED + AUTHENTICATED | terminal=",InpWebsiteReportTerminalId,
+      Print("EA Bridge v13.50 CONNECTED + AUTHENTICATED | terminal=",InpWebsiteReportTerminalId,
             " | API=",gApi," | strict 60-day dossier capture ready");
      }
    if(JobNull(body)) return;
@@ -601,40 +621,38 @@ void ProcessWorker()
      }
 
    ulong elapsed=GetTickCount64()-gOpenedMs;
-   int minLoad=(InpWebsiteReportChartLoadSeconds<2 ? 2 : InpWebsiteReportChartLoadSeconds);
    int hardTimeout=(InpWebsiteReportRenderTimeoutSeconds<10 ? 10 : InpWebsiteReportRenderTimeoutSeconds);
+   if(InpWebsiteReportRequireRSIBBEvidence && InpWebsiteReportRSIBBTimeoutSeconds>hardTimeout)
+      hardTimeout=InpWebsiteReportRSIBBTimeoutSeconds;
    if(elapsed>=(ulong)hardTimeout*1000)
      {
-      Fail("Timed out waiting for strict Elliott evidence on "+gTFs[gTFIndex]);
+      Fail("Timed out waiting for strict Elliott + RSI/BB evidence on "+gTFs[gTFIndex]+". Capture template must contain Elliott v13.30+ and RSI/BB v2.32+.");
       return;
      }
 
-   bool reportReady=false;
-   bool evidenceReady=false;
-   string reportKey=ReadyKey(gWorker);
-   string evidenceKey=EvidenceReadyKey(gWorker);
-   if(GlobalVariableCheck(reportKey))
+   bool renderReady=false,elliottReady=false,rsiReady=!InpWebsiteReportRequireRSIBBEvidence;
+   if(GlobalVariableCheck(ReadyKey(gWorker)))
      {
-      datetime published=(datetime)(long)GlobalVariableGet(reportKey);
-      reportReady=(published>=gOpenedLocal);
+      datetime published=(datetime)(long)GlobalVariableGet(ReadyKey(gWorker));
+      renderReady=(published>=gOpenedLocal);
      }
-   if(GlobalVariableCheck(evidenceKey))
+   if(GlobalVariableCheck(EvidenceReadyKey(gWorker)))
      {
-      datetime publishedEvidence=(datetime)(long)GlobalVariableGet(evidenceKey);
-      evidenceReady=(publishedEvidence>=gOpenedLocal);
+      datetime published=(datetime)(long)GlobalVariableGet(EvidenceReadyKey(gWorker));
+      elliottReady=(published>=gOpenedLocal && FileExistsReadable(EvidenceFile(gWorker)));
      }
-
-   bool evidenceFileReady=FileExistsReadable(EvidenceFile(gWorker));
-   bool handshakeReady=(reportReady && evidenceReady && evidenceFileReady);
-   bool safeFallback=(elapsed>=(ulong)minLoad*1000 && evidenceFileReady && evidenceReady);
-   if(!handshakeReady && !safeFallback) return;
+   if(InpWebsiteReportRequireRSIBBEvidence && GlobalVariableCheck(RSIEvidenceReadyKey(gWorker)))
+     {
+      datetime published=(datetime)(long)GlobalVariableGet(RSIEvidenceReadyKey(gWorker));
+      rsiReady=(published>=gOpenedLocal && FileExistsReadable(RSIEvidenceFile(gWorker)));
+     }
+   if(!(renderReady && elliottReady && rsiReady)) return;
 
    if(!CaptureCurrent())
      {
       gRetry++;
       int maxRetry=(InpWebsiteReportMaxRetries<1 ? 1 : InpWebsiteReportMaxRetries);
-      if(gRetry>=maxRetry)
-         Fail("Evidence/screenshot upload failed for "+gTFs[gTFIndex]);
+      if(gRetry>=maxRetry) Fail("Dual-engine evidence/screenshot upload failed for "+gTFs[gTFIndex]);
       return;
      }
 
@@ -660,7 +678,7 @@ void Complete()
    if(ok && st==200)
      {
       Print("EA Bridge READY | job=",gJob," | ",gSymbol,
-            " | 60-day history + 21 charts + strict Elliott evidence -> ONE AI dossier PDF");
+            " | 60-day history + 21 charts + strict Elliott + RSI/BB evidence -> ONE AI dossier PDF");
       ResetJob();
       return;
      }
@@ -678,13 +696,13 @@ int OnInit()
    gChildMode=GlobalVariableCheck(ChildKey(ChartID()));
    if(gChildMode)
      {
-      if(InpWebsiteReportVerbose) Print("EA Bridge v13.41 | passive worker child | chart=",ChartID());
+      if(InpWebsiteReportVerbose) Print("EA Bridge v13.50 | passive worker child | chart=",ChartID());
       return INIT_SUCCEEDED;
      }
    EventSetTimer(1);
    if(!InpWebsiteReportBridge)
      {
-      Print("EA Bridge v13.41 | loaded, bridge disabled");
+      Print("EA Bridge v13.50 | loaded, bridge disabled");
       return INIT_SUCCEEDED;
      }
    gConfigReady=Config();
@@ -694,7 +712,7 @@ int OnInit()
       return INIT_SUCCEEDED;
      }
    Acquire();
-   Print("EA Bridge v13.41 | READY | terminal=",InpWebsiteReportTerminalId,
+   Print("EA Bridge v13.50 | READY | terminal=",InpWebsiteReportTerminalId,
          " | strict 60-day background capture ONLY after website Analyze");
    return INIT_SUCCEEDED;
   }

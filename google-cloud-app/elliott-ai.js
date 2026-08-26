@@ -5,7 +5,7 @@ const REPORTS='fxga_elliott_reports';
 const BLOBS='fxga_elliott_report_blobs';
 const EVIDENCE='fxga_elliott_ai_evidence';
 const ANALYSES='fxga_elliott_ai_analyses';
-const DOSSIER_PREFIX='FXGA_60D_AI_DOSSIER_2';
+const DOSSIER_PREFIX='FXGA_60D_AI_DOSSIER_3';
 const EVIDENCE_SCHEMA='FXGA_EW_AI_EVIDENCE_1';
 const MIN_HISTORY_DAYS=60;
 const TIMEFRAMES=['M1','M2','M3','M4','M5','M6','M10','M12','M15','M20','M30','H1','H2','H3','H4','H6','H8','H12','D1','W1','MN1'];
@@ -17,7 +17,7 @@ const AI_TIMEOUT_MS=90000;
 const REQUEST_WINDOW_MS=60000;
 const REQUESTS_PER_WINDOW=4;
 const API_URL='https://generativelanguage.googleapis.com/v1beta/interactions';
-const PROMPT_VERSION='EW-DOSSIER-AI-3';
+const PROMPT_VERSION='EW-DOSSIER-AI-4-DUAL-ENGINE';
 
 function safeId(value,max=100){return String(value??'').trim().replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,max);}
 function requestIp(req){return String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'unknown').split(',')[0].trim();}
@@ -89,7 +89,7 @@ function normalizeDecision(raw,report){
 async function invokeGemini({pdfBytes,reportId,symbol}){
   const apiKey=String(process.env.GEMINI_API_KEY||'').trim();
   if(!apiKey)throw Object.assign(new Error('Gemini API key is not configured'),{statusCode:503});
-  const instruction=`Read the attached FXGA 60-Day Elliott + Macro AI Dossier for ${symbol||'the requested market'} (report ${reportId}). The PDF is the ONE canonical evidence input. Follow its embedded evidence hierarchy and strict non-repaint rules. Do not invent missing facts. Economic releases are contextual catalysts only and can never legalize an invalid Elliott count. Return ONLY the structured trade decision.`;
+  const instruction=`Read the attached FXGA 60-Day Elliott + Macro AI Dossier for ${symbol||'the requested market'} (report ${reportId}). The PDF is the ONE canonical evidence input. Follow its embedded evidence hierarchy and strict non-repaint rules. Elliott hard structure remains authoritative. RSI/Bollinger is a secondary confirmation and execution-quality filter: it may veto or downgrade timing, but it may never legalize a hard-invalid Elliott count. Do not invent missing facts. Economic releases are contextual catalysts only and can never legalize an invalid Elliott count. Return ONLY the structured trade decision.`;
   const input=[{type:'text',text:instruction},{type:'document',data:pdfBytes.toString('base64'),mime_type:'application/pdf'}];
   let lastError=null;
   for(const model of modelOrder()){
