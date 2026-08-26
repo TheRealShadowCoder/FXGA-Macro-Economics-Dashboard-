@@ -1,0 +1,36 @@
+CREATE TABLE IF NOT EXISTS state_snapshots (
+  name TEXT PRIMARY KEY,
+  payload TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS gemini_cache (
+  cache_key TEXT PRIMARY KEY,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_gemini_cache_created_at
+  ON gemini_cache(created_at);
+
+CREATE TABLE IF NOT EXISTS mt5_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  symbol_count INTEGER NOT NULL DEFAULT 0,
+  payload TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mt5_batches_received_at
+  ON mt5_batches(received_at DESC);
+
+CREATE TABLE IF NOT EXISTS live_signals (
+  id TEXT PRIMARY KEY,
+  payload TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS runtime_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
