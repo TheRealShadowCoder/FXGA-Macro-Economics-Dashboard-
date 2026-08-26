@@ -7,11 +7,14 @@ RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY google-cloud-app/*.js ./
 COPY google-cloud-app/prompts ./prompts
 
-# Inject latency-sensitive API fast paths at image-build time. The source server
-# remains the canonical readable implementation, while the production image skips
-# unrelated Firestore state fan-out for dashboard/analysis/news requests.
-RUN node optimize-server.js \
+# Install the on-demand Elliott Wave PDF report API into the canonical server,
+# then inject the existing latency-sensitive fast paths. MT5 screenshots are
+# captured only after the website creates an Analyze job.
+RUN node install-elliott-reports.js \
+ && node optimize-server.js \
  && node --check server.js \
+ && node --check elliott-reports.js \
+ && node --check install-elliott-reports.js \
  && node --check gemini-bootstrap.js \
  && node --check startup.js \
  && node --check gemini-legacy-resilience.js \
