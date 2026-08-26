@@ -98,6 +98,8 @@ The settings service is deployed only when `FXGA_AGENT_ADMIN_KEY` is configured.
 
 If `TELEGRAM_BOT_TOKEN` is not configured in GitHub, that is fine: the workflow creates the Secret Manager container without a value. Open the Agents Settings page, enter the admin key and bot token, then select **Test & save**. Future replacements can be done from the same page without committing credentials or editing workflow files.
 
+Do not put a bot token that has already been exposed in chat, source code, logs, or another public location into the repository. Regenerate exposed tokens in BotFather before long-term use.
+
 The bot token is intentionally isolated from the direct-add worker. Changing it cannot enable invitation links, DMs, or message-first fallbacks.
 
 ## Import the member list
