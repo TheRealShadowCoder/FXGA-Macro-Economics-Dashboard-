@@ -1,7 +1,7 @@
 {
   "schema": "fxga.live-report-resilience.verification.v1",
-  "runId": 32957996777,
-  "checkedAt": "2026-08-26T10:23:31.517Z",
+  "runId": 32988986026,
+  "checkedAt": "2026-08-26T16:32:52.894Z",
   "fatal": "verification_step_failed_before_result",
   "responseSchema": null,
   "error": null
