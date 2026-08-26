@@ -28,7 +28,6 @@ env:
   GEMINI_FALLBACK_MODEL: gemini-3.1-flash-lite
   GEMINI_RESERVE_MODEL: gemini-3.7-flash
   REPORT_SECRET_NAME: fxga-mt5-report-secret
-  FXGA_REPORT_BUCKET: fxglobalavengerstradingacademy-fxga-elliott-reports
 
 jobs:
   deploy:
@@ -55,13 +54,14 @@ jobs:
           node --check startup.js
           node --check gemini-hook.js
           node --check fxga-intelligence-extension.js
-          node -e "const p=require('./package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies['@google-cloud/monitoring']||!p.dependencies['@google-cloud/storage']||!p.dependencies['pdf-lib']||!p.dependencies.ws) process.exit(1)"
+          node -e "const p=require('./package.json'); if(!p.dependencies['@google-cloud/firestore']||!p.dependencies['@google-cloud/monitoring']||!p.dependencies['pdf-lib']||!p.dependencies.ws) process.exit(1)"
           ! grep -REn "AQ\.[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}" . --exclude='package-lock.json' || { echo '::error::Possible Gemini/Google credential committed to google-cloud-app'; exit 1; }
           ! grep -REn "GEMINI_REQUESTS_PER_HOUR|MAX_REQUESTS_PER_HOUR" . --exclude='package-lock.json' || { echo '::error::Artificial Gemini hourly cap detected in Google Cloud application'; exit 1; }
           grep -q "instant-model-failover-plus-per-model-cooldown" fxga-intelligence-extension.js || { echo '::error::Gemini 429 resilience policy missing'; exit 1; }
           grep -q "if (!raw) return null" fxga-intelligence-extension.js || { echo '::error::Missing Retry-After must not be reported as zero seconds'; exit 1; }
           grep -q "DEFAULT_TIMEFRAMES=.*M1.*MN1" elliott-reports.js || { echo '::error::Elliott all-timeframe report bridge is missing'; exit 1; }
-          echo 'API validation complete. Gemini quota is provider-managed and the Elliott report bridge is validated; frontend compilation belongs to the Cloudflare workflow.'
+          grep -q "firestore-private-chunks" elliott-reports.js || { echo '::error::Elliott private Firestore chunk storage is missing'; exit 1; }
+          echo 'API validation complete. Gemini quota is provider-managed and the Elliott report bridge uses existing private Firestore storage; frontend compilation belongs to the Cloudflare workflow.'
 
       - id: config
         name: Resolve Google authentication
@@ -106,7 +106,7 @@ jobs:
           gcloud run services list --region "$GCP_REGION" --platform managed --format='table(metadata.name,status.url)' || true
           echo 'Artifact Registry repository:'
           if ! gcloud artifacts repositories describe "$GAR_REPOSITORY" --location "$GCP_REGION" --format='value(name)' ; then
-            echo "::error::Artifact Registry repository $GAR_REPOSITORY is missing. The existing MT5 deployment is expected to use this repository too."
+            echo "::error::Artifact Registry repository $GAR_REPOSITORY is missing."
             exit 1
           fi
           echo 'Using existing Cloud Run / Artifact Registry / Firestore project resources.'
@@ -142,7 +142,7 @@ jobs:
           elif [ "$SECRET_EXISTS" = 'true' ]; then
             echo 'GitHub Actions GEMINI_API_KEY is not set; retaining the existing Google Secret Manager credential.'
           else
-            echo '::error::Gemini is required but no credential is configured. Add repository Actions secret GEMINI_API_KEY, or create Secret Manager secret gemini-api-key in project fxglobalavengerstradingacademy, then rerun this workflow.'
+            echo '::error::Gemini is required but no credential is configured.'
             exit 1
           fi
 
@@ -154,7 +154,7 @@ jobs:
           ACCESS_STATUS=$?
           set -e
           if [ "$ACCESS_STATUS" -ne 0 ]; then
-            echo '::warning::Could not grant secretAccessor automatically. Deployment will still verify the live Gemini health contract; if the runtime identity lacks access the workflow will fail rather than silently ship disabled AI.'
+            echo '::warning::Could not grant Gemini secretAccessor automatically. Live health verification will catch an unusable binding.'
           fi
 
           echo 'configured=true' >> "$GITHUB_OUTPUT"
@@ -193,20 +193,7 @@ jobs:
             --role="roles/secretmanager.secretAccessor" \
             --quiet
 
-          if ! gcloud storage buckets describe "gs://$FXGA_REPORT_BUCKET" >/dev/null 2>&1; then
-            gcloud storage buckets create "gs://$FXGA_REPORT_BUCKET" \
-              --project="$GCP_PROJECT_ID" \
-              --location="$GCP_REGION" \
-              --uniform-bucket-level-access
-            echo "Created private Elliott report bucket gs://$FXGA_REPORT_BUCKET"
-          else
-            echo "Using existing private Elliott report bucket gs://$FXGA_REPORT_BUCKET"
-          fi
-
-          gcloud storage buckets add-iam-policy-binding "gs://$FXGA_REPORT_BUCKET" \
-            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
-            --role="roles/storage.objectAdmin"
-
+          echo 'Elliott screenshots and PDFs use private Firestore chunk storage; no new Cloud Storage bucket or project-level IAM grant is required.'
           echo 'ELLIOTT_REPORT_CONFIGURED=true' >> "$GITHUB_ENV"
 
       - name: Verify Gemini credential against current Interactions API
@@ -245,7 +232,6 @@ jobs:
 
           if [ "$SUCCESS" != 'true' ]; then
             echo "::error::Gemini credential/provider smoke test failed. $LAST_ERROR"
-            echo '::error::Use a current Gemini Auth key from Google AI Studio. Unrestricted Standard keys are rejected now and Standard keys stop working in September 2026.'
             exit 1
           fi
 
@@ -276,7 +262,7 @@ jobs:
             --min 0 \
             --max 3 \
             --timeout 3600 \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting,FXGA_PUBLIC_ORIGIN=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_FALLBACK_MODEL=$GEMINI_FALLBACK_MODEL,GEMINI_RESERVE_MODEL=$GEMINI_RESERVE_MODEL,GEMINI_SECRET_NAME=$GEMINI_SECRET_NAME,FXGA_REPORT_BUCKET=$FXGA_REPORT_BUCKET" \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,FXGA_ARCHITECTURE=google-cloud-processing-cloudflare-static-hosting,FXGA_PUBLIC_ORIGIN=https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_FALLBACK_MODEL=$GEMINI_FALLBACK_MODEL,GEMINI_RESERVE_MODEL=$GEMINI_RESERVE_MODEL,GEMINI_SECRET_NAME=$GEMINI_SECRET_NAME" \
             --set-secrets "GEMINI_API_KEY=$GEMINI_SECRET_NAME:latest,FXGA_MT5_REPORT_SECRET=$REPORT_SECRET_NAME:latest"
           APP_URL=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --platform managed --format='value(status.url)')
           test -n "$APP_URL" || { echo '::error::Google Cloud application URL missing after deployment'; exit 1; }
@@ -298,21 +284,27 @@ jobs:
               const health=JSON.parse(healthText);
               if(health.compute!=='Google Cloud Run'||health.state!=='Google Cloud Firestore')throw new Error('Macro API health contract not active');
               if(health.elliottReports?.enabled!==true||health.elliottReports?.defaultTimeframes!==21)throw new Error('Elliott PDF report bridge health contract not active');
+              if(!String(health.elliottReports?.storage||'').toLowerCase().includes('firestore'))throw new Error('Elliott report bridge is not using Firestore private storage');
+
               const dashboardResponse=await fetch(base+'/api/dashboard',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
               const dashboardText=await dashboardResponse.text();
               if(!dashboardResponse.ok)throw new Error(`/api/dashboard ${dashboardResponse.status}: ${dashboardText.slice(0,500)}`);
               const dashboard=JSON.parse(dashboardText);
               if(!Array.isArray(dashboard.market)||!Array.isArray(dashboard.sources))throw new Error('Dashboard payload contract missing market/sources');
+
               const reportResponse=await fetch(base+'/api/elliott-reports',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
               const reportText=await reportResponse.text();
               if(!reportResponse.ok)throw new Error(`/api/elliott-reports ${reportResponse.status}: ${reportText.slice(0,500)}`);
               const reportState=JSON.parse(reportText);
               if(!Array.isArray(reportState.reports)||!Array.isArray(reportState.timeframes)||reportState.timeframes.length!==21)throw new Error('Elliott report listing contract is invalid');
+              if(reportState.storage!=='firestore-private-chunks')throw new Error(`Unexpected Elliott storage ${reportState.storage}`);
+
               const usageResponse=await fetch(base+'/api/tradingview/firestore-usage',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
               if(!usageResponse.ok)throw new Error(`Firestore capacity endpoint ${usageResponse.status}`);
               const usage=await usageResponse.json();
               if(String(usage.monitoringError||'').match(/PERMISSION_DENIED|Permission denied/i))throw new Error('Raw Cloud Monitoring IAM error leaked through public telemetry contract');
               if(!['cloud-monitoring','firestore-ledger-fallback'].includes(String(usage.monitoringMode||'')))throw new Error(`Unexpected Firestore monitoring mode ${usage.monitoringMode}`);
+
               const geminiResponse=await fetch(base+'/api/gemini/health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
               const geminiText=await geminiResponse.text();
               if(!geminiResponse.ok)throw new Error(`/api/gemini/health ${geminiResponse.status}: ${geminiText.slice(0,500)}`);
@@ -322,12 +314,14 @@ jobs:
               if(gemini.quotaPolicy!=='provider-managed-no-artificial-hourly-or-daily-cap')throw new Error(`Unexpected Gemini quota policy ${gemini.quotaPolicy}`);
               if(gemini.applicationHourlyCap!==null||gemini.applicationDailyCap!==null)throw new Error('FXGA must not impose artificial Gemini hourly/daily caps');
               if(gemini.firestoreCaching!==true||gemini.duplicateRequestCoalescing!==true)throw new Error('Gemini quota-conservation controls are missing');
+
               const intelligenceResponse=await fetch(base+'/api/gemini/intelligence-health',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
               if(!intelligenceResponse.ok)throw new Error(`Intelligence health ${intelligenceResponse.status}`);
               const intelligence=await intelligenceResponse.json();
               if(intelligence.rateLimitStrategy!=='instant-model-failover-plus-per-model-cooldown')throw new Error('Gemini adaptive 429 resilience policy is not active');
               if(!intelligence.reserveModel)throw new Error('Gemini reserve model is not configured');
-              console.log('Google Cloud macro API + Gemini + Elliott PDF bridge live:',base,'assets=',dashboard.market.length,'monitoringMode=',usage.monitoringMode,'elliottReports=',reportState.reports.length,'elliottTimeframes=',reportState.timeframes.length,'geminiConfigured=',gemini.configured,'geminiModel=',gemini.model,'intelligencePrimary=',intelligence.model,'fallback=',intelligence.fallbackModel,'reserve=',intelligence.reserveModel,'geminiQuotaPolicy=',gemini.quotaPolicy);
+
+              console.log('Google Cloud macro API + Gemini + Elliott PDF bridge live:',base,'assets=',dashboard.market.length,'monitoringMode=',usage.monitoringMode,'elliottReports=',reportState.reports.length,'elliottTimeframes=',reportState.timeframes.length,'elliottStorage=',reportState.storage,'geminiConfigured=',gemini.configured,'geminiModel=',gemini.model,'intelligencePrimary=',intelligence.model,'fallback=',intelligence.fallbackModel,'reserve=',intelligence.reserveModel,'geminiQuotaPolicy=',gemini.quotaPolicy);
               process.exit(0);
             }catch(error){last=error;await sleep(3000);}
           }
@@ -343,7 +337,7 @@ jobs:
           echo "Elliott report list: $APP_URL/api/elliott-reports"
           echo "Elliott Analyze job: POST $APP_URL/api/elliott-reports/request"
           echo "Elliott MT5 bridge poll: GET $APP_URL/api/elliott-reports/jobs/next"
-          echo "Elliott private PDF bucket: gs://$FXGA_REPORT_BUCKET"
+          echo "Elliott report storage: private Google Cloud Firestore chunk storage"
           echo "Elliott MT5 secret: GitHub Actions FXGA_MT5_REPORT_SECRET -> Secret Manager $REPORT_SECRET_NAME -> Cloud Run secret env"
           echo "Firestore capacity API: $APP_URL/api/tradingview/firestore-usage"
           echo "Gemini health: $APP_URL/api/gemini/health"
