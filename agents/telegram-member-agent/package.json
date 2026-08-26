@@ -1,12 +1,13 @@
 {
   "name": "fxga-telegram-member-agent",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "Persistent Google Cloud Run Job that processes the FXGA Telegram member queue.",
+  "description": "Persistent Google Cloud Telegram member agent with secure administrative settings.",
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js && node --check scripts/create-session.mjs && node --check scripts/import-members.mjs",
+    "admin": "node admin-server.js",
+    "check": "node --check index.js && node --check admin-server.js && node --check scripts/create-session.mjs && node --check scripts/import-members.mjs",
     "session": "node scripts/create-session.mjs",
     "import": "node scripts/import-members.mjs"
   },
@@ -15,6 +16,7 @@
   },
   "dependencies": {
     "@google-cloud/firestore": "9.0.0",
+    "@google-cloud/secret-manager": "7.0.0",
     "big-integer": "1.6.52",
     "teleproto": "1.228.5"
   }
