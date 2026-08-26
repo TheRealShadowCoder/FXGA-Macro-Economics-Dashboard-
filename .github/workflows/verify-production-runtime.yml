@@ -118,8 +118,21 @@ jobs:
             '.github/workflows/backfill-event-studies.yml',
             '.github/workflows/refresh-event-research-after-collector.yml',
             '.github/workflows/refresh-fred-coverage-after-deploy.yml',
+            '.github/workflows/diagnose-cloud-run-v414.yml',
+            '.github/workflows/diagnose-v414-private-live.yml',
+            '.github/workflows/finalize-intelligence-v414.yml',
+            '.github/workflows/verify-intelligence-after-deploy.yml',
+            '.github/workflows/verify-intelligence-v414-live.yml',
+            '.github/workflows/verify-full-macro-data-quality.yml',
+            '.github/workflows/capture-refresh-intelligence-error.yml',
+            '.github/workflows/record-collector-deploy-status.yml',
+            '.github/workflows/record-fred-coverage-refresh-status.yml',
+            '.github/workflows/verify-google-cloud-only-architecture.yml',
+            '.github/workflows/canary-firestore-v9-write.yml',
+            '.github/workflows/canary-firestore-v9.yml',
+            '.github/workflows/test-firestore-v9-compatibility.yml',
           ];
-          for(const file of retired) assert(!fs.existsSync(file),`Retired paid deployment path still exists: ${file}`);
+          for(const file of retired) assert(!fs.existsSync(file),`Retired Google Cloud runtime path still exists: ${file}`);
 
           const workflowDir='.github/workflows';
           const workflowFiles=fs.readdirSync(workflowDir).filter((name)=>/\.ya?ml$/i.test(name));
