@@ -7,16 +7,20 @@ on:
     paths:
       - 'src/**'
       - 'worker/**'
+      - 'scripts/r0-*.mjs'
       - 'wrangler.jsonc'
       - '.github/workflows/deploy-cloudflare-static.yml'
+      - '.github/workflows/r0-free-market-collector.yml'
       - '.github/workflows/verify-production-runtime.yml'
   push:
     branches: [main]
     paths:
       - 'src/**'
       - 'worker/**'
+      - 'scripts/r0-*.mjs'
       - 'wrangler.jsonc'
       - '.github/workflows/deploy-cloudflare-static.yml'
+      - '.github/workflows/r0-free-market-collector.yml'
       - '.github/workflows/verify-production-runtime.yml'
 
 permissions:
@@ -44,14 +48,17 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
           node --check worker/src/index.js
+          node --check scripts/r0-collect-market.mjs
+          node --check scripts/r0-collect-macro.mjs
 
       - name: Verify R0 architecture contracts
         run: |
           set -euo pipefail
           node <<'NODE'
           const fs=require('fs');
+          const path=require('path');
           const assert=(condition,message)=>{if(!condition)throw new Error(message)};
-          const read=(path)=>fs.readFileSync(path,'utf8');
+          const read=(file)=>fs.readFileSync(file,'utf8');
 
           const wrangler=JSON.parse(read('wrangler.jsonc'));
           assert(wrangler.main==='./worker/src/index.js','Wrangler main must be the R0 Worker');
@@ -71,32 +78,36 @@ jobs:
             '/api/gemini/analyze',
             '/api/errors/catalog',
             '/api/mt5/batch',
+            '/api/internal/state/',
           ]) assert(worker.includes(route),`Required R0 route missing: ${route}`);
           assert(worker.includes("googleCloudRuntime:false"),'Worker health must explicitly report Google Cloud runtime disabled');
           assert(worker.includes('env.DB'),'Worker must use the D1 binding');
           assert(worker.includes('GEMINI_API_KEY'),'Gemini AI feature must remain configured server-side');
 
           const schema=read('worker/schema.sql');
-          for(const table of ['state_snapshots','gemini_cache','mt5_batches']) {
-            assert(schema.includes(table),`D1 schema missing ${table}`);
-          }
+          for(const table of ['state_snapshots','gemini_cache','mt5_batches']) assert(schema.includes(table),`D1 schema missing ${table}`);
 
           const routing=read('src/google-cloud-routing.ts');
           assert(routing.includes('same-origin'),'Browser API routing must default to same-origin Worker routes');
 
           const deploy=read('.github/workflows/deploy-cloudflare-static.yml');
-          for(const required of ['wrangler@latest d1','wrangler@latest deploy','GEMINI_API_KEY','Cloudflare D1 Free']) {
-            assert(deploy.includes(required),`R0 deployment workflow missing ${required}`);
+          for(const required of ['wrangler@latest d1','wrangler@latest deploy','GEMINI_API_KEY','Cloudflare D1 Free']) assert(deploy.includes(required),`R0 deployment workflow missing ${required}`);
+          for(const forbidden of ['google-github-actions/auth','google-github-actions/setup-gcloud','gcloud run deploy','gcloud scheduler','artifactregistry.googleapis.com','cloudtasks.googleapis.com','@google-cloud/firestore']) assert(!deploy.includes(forbidden),`Paid Google runtime dependency reintroduced in deployment workflow: ${forbidden}`);
+
+          const collectors=read('.github/workflows/r0-free-market-collector.yml');
+          assert(collectors.includes("cron: '*/15 * * * *'"),'Free market collector must run every 15 minutes');
+          assert(collectors.includes("cron: '17 * * * *'"),'Free macro collector must run hourly');
+          assert(collectors.includes('scripts/r0-collect-market.mjs'),'Free market collector script is not wired');
+          assert(collectors.includes('scripts/r0-collect-macro.mjs'),'Free macro collector script is not wired');
+          assert(collectors.includes('FRED_API_KEY'),'FRED free macro key is not wired');
+
+          const marketScript=read('scripts/r0-collect-market.mjs');
+          const macroScript=read('scripts/r0-collect-macro.mjs');
+          for(const script of [marketScript,macroScript]) {
+            assert(script.includes('/api/internal/state/'),'R0 collector must write through Worker state ingestion');
+            assert(script.includes('FXGA_INGEST_TOKEN') || script.includes('FXGA_MT5_REPORT_SECRET'),'R0 collector must authenticate ingestion');
           }
-          for(const forbidden of [
-            'google-github-actions/auth',
-            'google-github-actions/setup-gcloud',
-            'gcloud run deploy',
-            'gcloud scheduler',
-            'artifactregistry.googleapis.com',
-            'cloudtasks.googleapis.com',
-            '@google-cloud/firestore',
-          ]) assert(!deploy.includes(forbidden),`Paid Google runtime dependency reintroduced in deployment workflow: ${forbidden}`);
+          assert(macroScript.includes('FRED_BASE_IDS'),'Macro collector must reuse the FXGA FRED universe');
 
           const retired=[
             '.github/workflows/deploy-cloud-run-collector.yml',
@@ -104,13 +115,36 @@ jobs:
             '.github/workflows/deploy-google-cloud-mt5-ingress.yml',
             '.github/workflows/fxga-dual-engine-final-deploy.yml',
             '.github/workflows/configure-event-research-schedule.yml',
+            '.github/workflows/backfill-event-studies.yml',
+            '.github/workflows/refresh-event-research-after-collector.yml',
+            '.github/workflows/refresh-fred-coverage-after-deploy.yml',
           ];
-          for(const path of retired) assert(!fs.existsSync(path),`Retired paid deployment path still exists: ${path}`);
+          for(const file of retired) assert(!fs.existsSync(file),`Retired paid deployment path still exists: ${file}`);
+
+          const workflowDir='.github/workflows';
+          const workflowFiles=fs.readdirSync(workflowDir).filter((name)=>/\.ya?ml$/i.test(name));
+          const forbiddenActive=[
+            'google-github-actions/auth',
+            'google-github-actions/setup-gcloud',
+            'gcloud run deploy',
+            'gcloud scheduler jobs create',
+            'gcloud scheduler jobs update',
+            'gcloud tasks',
+          ];
+          const violations=[];
+          for(const name of workflowFiles){
+            const text=read(path.join(workflowDir,name));
+            for(const marker of forbiddenActive){
+              if(text.includes(marker))violations.push(`${name}: ${marker}`);
+            }
+          }
+          assert(violations.length===0,`Active workflow still depends on Google Cloud runtime:\n${violations.join('\n')}`);
 
           console.log('PASS: R0 architecture contracts verified');
           console.log('Compute: Cloudflare Workers');
           console.log('Database: Cloudflare D1');
           console.log('Frontend: Cloudflare static assets');
+          console.log('Collectors: public/free providers through GitHub Actions');
           console.log('AI: Gemini Developer API retained');
           console.log('Paid Google Cloud deployment paths: absent');
           NODE
