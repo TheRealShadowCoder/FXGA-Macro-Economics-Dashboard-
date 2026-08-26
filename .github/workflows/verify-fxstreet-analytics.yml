@@ -1,9 +1,14 @@
 name: Verify FXGA Production Data Contract R0
 
 on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ['Deploy FXGA R0 Cloudflare Runtime']
+    types: [completed]
   push:
     branches: [main]
-  workflow_dispatch:
+    paths:
+      - '.github/workflows/verify-fxstreet-analytics.yml'
 
 permissions:
   contents: read
@@ -14,6 +19,7 @@ concurrency:
 
 jobs:
   verify:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -22,11 +28,12 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Verify live R0 production data contract
+      - name: Verify live R0 production and frontend contracts
         run: |
           set -euo pipefail
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
           async function getJson(path) {
             const response = await fetch(`${base}${path}`, {
@@ -39,69 +46,103 @@ jobs:
             catch { throw new Error(`${path} returned invalid JSON: ${text.slice(0, 400)}`); }
           }
 
-          const [health, market, technical, quality, ai, prompts, mt5] = await Promise.all([
-            getJson('/api/health'),
-            getJson('/api/market-prices'),
-            getJson('/api/technical'),
-            getJson('/api/data-quality'),
-            getJson('/api/gemini/intelligence-health'),
-            getJson('/api/gemini/prompts'),
-            getJson('/api/mt5/latest'),
-          ]);
+          async function verifyOnce() {
+            const [health, dashboard, analysis, sessions, market, technical, quality, ai, prompts, mt5] = await Promise.all([
+              getJson('/api/health'),
+              getJson('/api/dashboard'),
+              getJson('/api/analysis'),
+              getJson('/api/session-signals'),
+              getJson('/api/market-prices'),
+              getJson('/api/technical'),
+              getJson('/api/data-quality'),
+              getJson('/api/gemini/intelligence-health'),
+              getJson('/api/gemini/prompts'),
+              getJson('/api/mt5/latest'),
+            ]);
 
-          if (health.architecture !== 'cloudflare-r0') throw new Error(`Architecture mismatch: ${health.architecture}`);
-          if (health.compute !== 'Cloudflare Workers Free') throw new Error(`Compute mismatch: ${health.compute}`);
-          if (health.database !== 'Cloudflare D1 Free') throw new Error(`Database mismatch: ${health.database}`);
-          if (health.staticHosting !== 'Cloudflare Workers Static Assets') throw new Error(`Static hosting mismatch: ${health.staticHosting}`);
-          if (health.googleCloudRuntime !== false) throw new Error('Google Cloud runtime must remain disabled');
+            if (health.architecture !== 'cloudflare-r0') throw new Error(`Architecture mismatch: ${health.architecture}`);
+            if (health.compute !== 'Cloudflare Workers Free') throw new Error(`Compute mismatch: ${health.compute}`);
+            if (health.database !== 'Cloudflare D1 Free') throw new Error(`Database mismatch: ${health.database}`);
+            if (health.staticHosting !== 'Cloudflare Workers Static Assets') throw new Error(`Static hosting mismatch: ${health.staticHosting}`);
+            if (health.googleCloudRuntime !== false) throw new Error('Google Cloud runtime must remain disabled');
 
-          if (market.schema !== 'fxga.r0.market-data.v1') throw new Error(`Market schema mismatch: ${market.schema || 'none'}`);
-          if (market?._r0?.source !== 'cloudflare-d1') throw new Error('Market state is not served from Cloudflare D1');
-          if (!Array.isArray(market.canonicalFx) || market.canonicalFx.length < 4) throw new Error(`Canonical FX coverage too small: ${market.canonicalFx?.length || 0}`);
-          const fxIds = new Set();
-          for (const asset of market.canonicalFx) {
-            if (!asset?.id || fxIds.has(asset.id)) throw new Error(`Duplicate or missing canonical FX ID: ${asset?.id || 'missing'}`);
-            fxIds.add(asset.id);
-            if (typeof asset.price !== 'number' || !Number.isFinite(asset.price)) throw new Error(`${asset.id} has no finite price`);
+            if (dashboard?._r0?.architecture !== 'cloudflare-r0') throw new Error('Dashboard is not served by the R0 compatibility runtime');
+            if (dashboard?._r0?.googleCloudRuntime !== false) throw new Error('Dashboard unexpectedly reports a Google Cloud runtime');
+            for (const key of ['macro','market','calendar','sources','errors']) {
+              if (!Array.isArray(dashboard[key])) throw new Error(`Dashboard ${key} contract is invalid`);
+            }
+            if (dashboard.macro.length < 1) throw new Error('Dashboard macro data is empty');
+            if (dashboard.market.length < 1) throw new Error('Dashboard market data is empty');
+
+            if (!analysis?.regime || !analysis?.policy || !analysis?.coverage || !Array.isArray(analysis?.dimensions)) throw new Error('Analysis compatibility contract is invalid');
+            if (!Array.isArray(sessions?.sessions) || sessions.sessions.length < 5) throw new Error('Session compatibility contract is invalid');
+
+            if (market.schema !== 'fxga.r0.market-data.v1') throw new Error(`Market schema mismatch: ${market.schema || 'none'}`);
+            if (market?._r0?.source !== 'cloudflare-d1') throw new Error('Market state is not served from Cloudflare D1');
+            if (!Array.isArray(market.canonicalFx) || market.canonicalFx.length < 4) throw new Error(`Canonical FX coverage too small: ${market.canonicalFx?.length || 0}`);
+            const fxIds = new Set();
+            for (const asset of market.canonicalFx) {
+              if (!asset?.id || fxIds.has(asset.id)) throw new Error(`Duplicate or missing canonical FX ID: ${asset?.id || 'missing'}`);
+              fxIds.add(asset.id);
+              if (typeof asset.price !== 'number' || !Number.isFinite(asset.price)) throw new Error(`${asset.id} has no finite price`);
+            }
+            if (!Array.isArray(market.contextAssets) || market.contextAssets.length < 1) throw new Error('Risk context assets are empty');
+            if (!Array.isArray(market.microstructureAssets) || market.microstructureAssets.length < 1) throw new Error('Public microstructure assets are empty');
+            const providersHealthy = Object.values(market.sources || {}).filter((source) => source?.ok === true).length;
+            if (providersHealthy < 1) throw new Error('No healthy free market provider is recorded');
+
+            if (!technical?.counts || typeof technical?.assets !== 'object' || Array.isArray(technical.assets)) throw new Error('Frontend technical compatibility contract is invalid');
+            if (Number(technical.counts.assets || 0) < 1) throw new Error('Frontend technical snapshot has no assets');
+
+            if (quality?.architecture !== 'cloudflare-r0') throw new Error(`Data-quality architecture mismatch: ${quality?.architecture || 'none'}`);
+            if (!quality?.macro?.coverage || !quality?.market || !quality?.technical || !quality?.calendar) throw new Error('Frontend data-quality compatibility contract is invalid');
+            if (quality?.budget?.firestore !== false) throw new Error('Firestore dependency must remain disabled in R0 data collection');
+            if (quality?.budget?.mode !== 'deterministic-r0-schedule') throw new Error(`Unexpected free-tier budget mode: ${quality?.budget?.mode}`);
+
+            if (ai.configured !== true) throw new Error('Gemini AI is not configured');
+            if (Number(ai.promptCount || 0) < 6) throw new Error(`Gemini prompt registry too small: ${ai.promptCount || 0}`);
+            if (!Array.isArray(prompts.prompts) || prompts.prompts.length < 6) throw new Error('Prompt endpoint is incomplete');
+            if (prompts.schema !== 'fxga.prompt-registry.v1') throw new Error(`Prompt schema mismatch: ${prompts.schema || 'none'}`);
+
+            if (mt5.ok !== true) throw new Error('MT5 compatibility endpoint is unhealthy');
+            if (mt5.available !== false && !mt5.data) throw new Error('MT5 latest endpoint returned an invalid available state');
+
+            const root = await fetch(`${base}/?contract=${Date.now()}`, { cache: 'no-store' });
+            if (!root.ok) throw new Error(`Static application returned HTTP ${root.status}`);
+            const html = await root.text();
+            if (!html.includes('<div id="root"')) throw new Error('Static application is missing the React mount point');
+
+            return {
+              architecture: health.architecture,
+              compute: health.compute,
+              database: health.database,
+              googleCloudRuntime: health.googleCloudRuntime,
+              dashboardMacro: dashboard.macro.length,
+              dashboardMarket: dashboard.market.length,
+              canonicalFx: market.canonicalFx.length,
+              contextAssets: market.contextAssets.length,
+              microstructureAssets: market.microstructureAssets.length,
+              providersHealthy,
+              technicalAssets: technical.counts.assets,
+              firestoreDependency: quality.budget.firestore,
+              geminiConfigured: ai.configured,
+              promptCount: ai.promptCount,
+              mt5Available: mt5.available,
+            };
           }
-          if (!Array.isArray(market.contextAssets) || market.contextAssets.length < 1) throw new Error('Risk context assets are empty');
-          if (!Array.isArray(market.microstructureAssets) || market.microstructureAssets.length < 1) throw new Error('Public microstructure assets are empty');
 
-          if (technical.schema !== 'fxga.r0.technical-market-context.v1') throw new Error(`Technical schema mismatch: ${technical.schema || 'none'}`);
-          if (technical?._r0?.source !== 'cloudflare-d1') throw new Error('Technical state is not served from Cloudflare D1');
-          if (!Array.isArray(technical.canonicalFx) || technical.canonicalFx.length < 4) throw new Error('Technical canonical FX context is incomplete');
-
-          if (quality.schema !== 'fxga.r0.data-quality.v1') throw new Error(`Data-quality schema mismatch: ${quality.schema || 'none'}`);
-          if (quality?._r0?.source !== 'cloudflare-d1') throw new Error('Data-quality state is not served from Cloudflare D1');
-          if (Number(quality?.counts?.providersHealthy || 0) < 1) throw new Error('No healthy free market provider is recorded');
-          if (quality?.budget?.firestore !== false) throw new Error('Firestore dependency must remain disabled in R0 data collection');
-          if (quality?.budget?.mode !== 'deterministic-r0-schedule') throw new Error(`Unexpected free-tier budget mode: ${quality?.budget?.mode}`);
-
-          if (ai.configured !== true) throw new Error('Gemini AI is not configured');
-          if (Number(ai.promptCount || 0) < 6) throw new Error(`Gemini prompt registry too small: ${ai.promptCount || 0}`);
-          if (!Array.isArray(prompts.prompts) || prompts.prompts.length < 6) throw new Error('Prompt endpoint is incomplete');
-          if (prompts.schema !== 'fxga.prompt-registry.v1') throw new Error(`Prompt schema mismatch: ${prompts.schema || 'none'}`);
-
-          if (mt5.ok !== true) throw new Error('MT5 compatibility endpoint is unhealthy');
-          if (mt5.available !== false && !mt5.data) throw new Error('MT5 latest endpoint returned an invalid available state');
-
-          const root = await fetch(`${base}/?contract=${Date.now()}`, { cache: 'no-store' });
-          if (!root.ok) throw new Error(`Static application returned HTTP ${root.status}`);
-
-          console.log(JSON.stringify({
-            ok: true,
-            architecture: health.architecture,
-            compute: health.compute,
-            database: health.database,
-            googleCloudRuntime: health.googleCloudRuntime,
-            canonicalFx: market.canonicalFx.length,
-            contextAssets: market.contextAssets.length,
-            microstructureAssets: market.microstructureAssets.length,
-            providersHealthy: quality.counts.providersHealthy,
-            firestoreDependency: quality.budget.firestore,
-            geminiConfigured: ai.configured,
-            promptCount: ai.promptCount,
-            mt5Available: mt5.available,
-          }, null, 2));
-          console.log('PRODUCTION R0 DATA CONTRACT PASSED');
+          let lastError;
+          for (let attempt = 1; attempt <= 12; attempt += 1) {
+            try {
+              const result = await verifyOnce();
+              console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+              console.log('PRODUCTION R0 FRONTEND + DATA CONTRACT PASSED');
+              process.exit(0);
+            } catch (error) {
+              lastError = error;
+              console.log(`Contract verification ${attempt}/12: ${String(error?.message || error)}`);
+              if (attempt < 12) await sleep(5000);
+            }
+          }
+          throw lastError || new Error('Production R0 contract did not become ready');
           NODE
