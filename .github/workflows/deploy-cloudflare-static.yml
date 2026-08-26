@@ -43,12 +43,31 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Validate R0 deployment secrets
+      - name: Resolve and validate R0 deployment credentials
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo '::error::CLOUDFLARE_API_TOKEN must be added under repository Actions secrets'; exit 1; }
-          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo '::error::CLOUDFLARE_ACCOUNT_ID must be added under repository Actions secrets or Actions variables'; exit 1; }
           test -n "$GEMINI_API_KEY" || { echo '::error::GEMINI_API_KEY must be added under repository Actions secrets to preserve Ask FXGA AI'; exit 1; }
+
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo 'CLOUDFLARE_ACCOUNT_ID was not injected by GitHub; resolving it from the existing Cloudflare API token.'
+            npx wrangler@latest whoami --json > "$RUNNER_TEMP/cloudflare-whoami.json"
+            RESOLVED_ACCOUNT_ID=$(node - <<'NODE'
+          const fs = require('fs');
+          const info = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/cloudflare-whoami.json', 'utf8'));
+          if (info?.loggedIn === false) throw new Error('Cloudflare API token did not authenticate');
+          const accounts = Array.isArray(info?.accounts) ? info.accounts : [];
+          const id = accounts[0]?.id;
+          if (!id) throw new Error('Wrangler authenticated but did not return an accessible Cloudflare account');
+          process.stdout.write(id);
+          NODE
+            )
+            echo "::add-mask::$RESOLVED_ACCOUNT_ID"
+            echo "CLOUDFLARE_ACCOUNT_ID=$RESOLVED_ACCOUNT_ID" >> "$GITHUB_ENV"
+            echo 'Cloudflare account resolved from API token.'
+          else
+            echo 'Cloudflare account ID supplied by GitHub Actions configuration.'
+          fi
 
       - name: Install and build frontend
         run: |
