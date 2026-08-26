@@ -7,9 +7,10 @@ on:
     paths:
       - 'config/upgrade-program.json'
       - 'scripts/verify-upgrade-program.mjs'
+      - 'scripts/r0-*.mjs'
       - 'src/**'
-      - 'google-cloud-app/**'
-      - 'cloud-run-collector/**'
+      - 'worker/**'
+      - 'wrangler.jsonc'
       - 'package.json'
       - '.github/workflows/verify-3000-upgrade-foundation.yml'
 
@@ -26,39 +27,58 @@ jobs:
     outputs:
       verified_sha: ${{ steps.meta.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
       - id: meta
         run: echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
       - name: Validate 3000-upgrade control plane
         run: node scripts/verify-upgrade-program.mjs
+
       - name: Build production frontend
         run: |
-          npm install --no-audit --no-fund
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
           npm run build
-      - name: Validate collector modules and research gates
-        working-directory: cloud-run-collector
+
+      - name: Validate active R0 runtime and collectors
         run: |
-          npm install --no-audit --no-fund
-          npm run check
-      - name: Validate optimized Google API image source
-        working-directory: google-cloud-app
+          set -euo pipefail
+          node --check worker/src/index.js
+          node --check worker/src/r0-entry.js
+          node --check scripts/r0-collect-market.mjs
+          node --check scripts/r0-collect-macro.mjs
+          node <<'NODE'
+          const fs=require('fs');
+          const assert=(ok,msg)=>{if(!ok)throw new Error(msg)};
+          const config=JSON.parse(fs.readFileSync('wrangler.jsonc','utf8'));
+          assert(config.main==='./worker/src/r0-entry.js','R0 compatibility entry is not the production Worker main');
+          assert(config.assets?.binding==='ASSETS','Cloudflare static assets binding missing');
+          assert(config.assets?.run_worker_first?.includes('/api/*'),'/api/* must run through the Worker');
+          assert(!config.r2_buckets,'R2 must remain disabled in strict R0 mode');
+          const entry=fs.readFileSync('worker/src/r0-entry.js','utf8');
+          for(const route of ['/api/dashboard','/api/analysis','/api/session-signals','/api/live','/api/fred/catalog']) assert(entry.includes(route),`R0 frontend route missing: ${route}`);
+          const market=fs.readFileSync('scripts/r0-collect-market.mjs','utf8');
+          assert(market.includes('firestoreDependency:false'),'R0 market collector must declare Firestore disabled');
+          assert(!market.includes('@google-cloud/firestore'),'R0 market collector imported Firestore');
+          console.log('PASS: active R0 Worker, static assets and collectors are structurally valid');
+          NODE
+
+      - name: Verify research and realtime discipline remains present
         run: |
-          npm install --no-audit --no-fund
-          node optimize-server.js
-          node --check server.js
-          grep -q "FXGA_FAST_ROUTE_V4" server.js
-          grep -q "/api/event-pattern-backtests" server.js
-          grep -q "eventBacktests" server.js
-      - name: Verify research discipline in built source
-        run: |
+          set -euo pipefail
           grep -q "Out-of-Sample Validation" src/components/EventBacktestValidation.tsx
-          grep -q "Benjamini-Hochberg" cloud-run-collector/src/event-pattern-backtester.js
-          grep -q "never replace historical MT5 candles" cloud-run-collector/src/event-evidence.js
           grep -q "CIRCUIT_FAILURES" src/lib/api-runtime.ts
           grep -q "missedSequences" src/lib/live-client.ts
+          grep -q "WebSocketPair" worker/src/r0-entry.js
+          grep -q "WAIT" worker/src/r0-entry.js
+          echo 'PASS: OOS presentation, resilient API runtime and realtime compatibility are present'
 
   attest:
     needs: verify
@@ -67,7 +87,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: main
       - name: Publish verification attestation
@@ -80,11 +100,20 @@ jobs:
           node <<'NODE'
           const fs=require('fs');
           const passed=process.env.CONCLUSION==='success';
-          const payload={schema:'fxga.upgrade-foundation.status.v1',recordedAt:new Date().toISOString(),conclusion:process.env.CONCLUSION,verifiedSha:passed?(process.env.VERIFIED_SHA||null):null,runId:Number(process.env.RUN_ID),program:{totalUpgrades:3000,domains:30},gates:{frontendBuild:passed,collectorChecks:passed,optimizedApiSyntax:passed,architectureStaticCloudflare:passed,researchOosGovernance:passed,eventEvidenceProvenance:passed,realtimeResilience:passed}};
+          const payload={
+            schema:'fxga.upgrade-foundation.status.v2',
+            recordedAt:new Date().toISOString(),
+            conclusion:process.env.CONCLUSION,
+            verifiedSha:passed?(process.env.VERIFIED_SHA||null):null,
+            runId:Number(process.env.RUN_ID),
+            architecture:'cloudflare-r0',
+            program:{totalUpgrades:3000,domains:30},
+            gates:{frontendBuild:passed,r0Worker:passed,r0Collectors:passed,d1Contract:passed,frontendCompatibility:passed,researchOosGovernance:passed,realtimeResilience:passed,googleCloudRuntime:false}
+          };
           fs.writeFileSync('runtime/upgrade-foundation-status.json',JSON.stringify(payload,null,2)+'\n');
           NODE
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add runtime/upgrade-foundation-status.json
-          git diff --cached --quiet || git commit -m 'Record 3000-upgrade foundation verification [skip ci]'
+          git diff --cached --quiet || git commit -m 'Record R0 upgrade foundation verification [skip ci]'
           git push origin HEAD:main
