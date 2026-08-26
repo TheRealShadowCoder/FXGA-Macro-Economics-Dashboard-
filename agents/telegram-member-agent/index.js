@@ -3,7 +3,7 @@ import bigInt from "big-integer";
 import { Api, TelegramClient } from "teleproto";
 import { StringSession } from "teleproto/sessions";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const db = new Firestore();
 
 const config = Object.freeze({
@@ -13,6 +13,7 @@ const config = Object.freeze({
   channel: required("TELEGRAM_CHANNEL"),
   dailyTargetMin: boundedInt("DAILY_TARGET_MIN", 20, 1, 50),
   dailyTargetMax: boundedInt("DAILY_TARGET_MAX", 50, 1, 50),
+  maxAttemptsPerRun: boundedInt("MAX_ATTEMPTS_PER_RUN", 100, 1, 500),
   attemptDelayMs: boundedInt("ATTEMPT_DELAY_MS", 5000, 1000, 60000),
   unknownRetries: boundedInt("UNKNOWN_ERROR_RETRIES", 2, 0, 3),
   unknownRetryDelayMs: boundedInt("UNKNOWN_RETRY_DELAY_MS", 5000, 1000, 60000),
@@ -20,7 +21,8 @@ const config = Object.freeze({
   queueCollection: process.env.FIRESTORE_QUEUE_COLLECTION || "telegram_member_queue",
   stateCollection: process.env.FIRESTORE_STATE_COLLECTION || "agent_state",
   stateDocument: process.env.FIRESTORE_STATE_DOCUMENT || "telegram-member-agent",
-  lockMinutes: boundedInt("LOCK_MINUTES", 55, 5, 55),
+  timeZone: process.env.TIME_ZONE || "Africa/Johannesburg",
+  lockMinutes: boundedInt("LOCK_MINUTES", 65, 5, 120),
   scanPageSize: boundedInt("SCAN_PAGE_SIZE", 200, 50, 500),
   dryRun: /^true$/i.test(process.env.DRY_RUN || "false")
 });
@@ -40,6 +42,8 @@ const PERMANENT_SKIPS = new Map([
   ["USER_ID_INVALID", "invalid_user"],
   ["USER_CHANNELS_TOO_MUCH", "user_channel_limit"],
   ["USER_BLOCKED", "blocked"],
+  ["USER_IS_BLOCKED", "blocked"],
+  ["YOU_BLOCKED_USER", "blocked"],
   ["USER_KICKED", "kicked"],
   ["USER_BANNED_IN_CHANNEL", "banned"],
   ["USER_BOT", "bot_account"],
@@ -51,7 +55,16 @@ const FATAL_CHANNEL_ERRORS = new Set([
   "CHAT_WRITE_FORBIDDEN",
   "CHANNEL_PRIVATE",
   "CHANNEL_INVALID",
-  "CHANNEL_PUBLIC_GROUP_NA"
+  "CHANNEL_PUBLIC_GROUP_NA",
+  "CHANNEL_MONOFORUM_UNSUPPORTED",
+  "USERS_TOO_MUCH",
+  "BOTS_TOO_MUCH",
+  "BOT_GROUPS_BLOCKED"
+]);
+
+const FATAL_ACCOUNT_ERRORS = new Set([
+  "USER_RESTRICTED",
+  "FROZEN_METHOD_INVALID"
 ]);
 
 const runId = `${new Date().toISOString()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -61,14 +74,18 @@ const summary = {
   startedAt: new Date().toISOString(),
   targetMin: config.dailyTargetMin,
   targetMax: config.dailyTargetMax,
+  maxAttemptsPerRun: config.maxAttemptsPerRun,
+  timeZone: config.timeZone,
   dryRun: config.dryRun,
   added: 0,
+  dryRunCandidates: 0,
   alreadyMember: 0,
   skipped: 0,
   deferred: 0,
   attempted: 0,
   scanned: 0,
   stoppedByRateLimit: false,
+  stoppedByAttemptLimit: false,
   minimumGoalReached: false,
   errors: {}
 };
@@ -76,6 +93,8 @@ const summary = {
 let lockHeld = false;
 let client;
 let inputChannel;
+let dailyDate = calendarDayKey();
+let dailyAddedBeforeRun = 0;
 
 try {
   lockHeld = await acquireLock();
@@ -84,7 +103,21 @@ try {
     process.exitCode = 0;
   } else {
     const state = await getState();
-    if (state.blockedUntil && state.blockedUntil.toDate() > new Date()) {
+    const daily = await initializeDailyCounter(state);
+    dailyDate = daily.date;
+    dailyAddedBeforeRun = daily.added;
+    summary.dailyDate = dailyDate;
+    summary.dailyAddedBeforeRun = dailyAddedBeforeRun;
+
+    if (dailyTargetReached()) {
+      console.log(JSON.stringify({
+        event: "daily_target_already_reached",
+        runId,
+        dailyDate,
+        dailyAdded: dailyAddedBeforeRun,
+        targetMax: config.dailyTargetMax
+      }));
+    } else if (state.blockedUntil && state.blockedUntil.toDate() > new Date()) {
       summary.stoppedByRateLimit = true;
       summary.blockedUntil = state.blockedUntil.toDate().toISOString();
       console.log(JSON.stringify({ event: "rate_limit_window_active", ...summary }));
@@ -103,7 +136,7 @@ try {
 
       inputChannel = await resolveInputChannel(config.channel);
       await processDueRetries();
-      if (!summary.stoppedByRateLimit && summary.added < config.dailyTargetMax) {
+      if (shouldContinue()) {
         await processFreshQueue(state.nextSequence || 1);
       }
     }
@@ -115,7 +148,10 @@ try {
   console.error(JSON.stringify({ event: "agent_fatal", runId, error: normalized.code, message: summary.fatalMessage }));
   process.exitCode = 1;
 } finally {
-  summary.minimumGoalReached = summary.added >= config.dailyTargetMin;
+  summary.dailyDate = dailyDate;
+  summary.dailyAddedTotal = dailyAddedBeforeRun + summary.added;
+  summary.minimumGoalReached = summary.dailyAddedTotal >= config.dailyTargetMin;
+  summary.stoppedByAttemptLimit = !dailyTargetReached() && summary.attempted >= config.maxAttemptsPerRun;
   summary.finishedAt = new Date().toISOString();
 
   if (client) {
@@ -129,16 +165,32 @@ try {
   console.log(JSON.stringify({ event: "agent_summary", ...summary }));
 }
 
+async function initializeDailyCounter(state) {
+  const today = calendarDayKey();
+  if (state.dailyDate === today) {
+    const added = Math.max(0, Number(state.dailyAdded || 0));
+    return { date: today, added: Number.isFinite(added) ? added : 0 };
+  }
+
+  await stateRef.set({
+    dailyDate: today,
+    dailyAdded: 0,
+    dailyResetAt: FieldValue.serverTimestamp()
+  }, { merge: true });
+  return { date: today, added: 0 };
+}
+
 async function processDueRetries() {
   const now = Timestamp.now();
+  const limit = Math.min(config.maxAttemptsPerRun, Math.max(1, remainingDailyCapacity()));
   const snap = await queue
     .where("nextRetryAt", "<=", now)
     .orderBy("nextRetryAt", "asc")
-    .limit(config.dailyTargetMax)
+    .limit(limit)
     .get();
 
   for (const doc of snap.docs) {
-    if (summary.added >= config.dailyTargetMax || summary.stoppedByRateLimit) break;
+    if (!shouldContinue()) break;
     const data = doc.data();
     if (data.status !== "retry_wait") continue;
     await processMember(doc, data, { advanceCursor: false, source: "retry" });
@@ -148,7 +200,7 @@ async function processDueRetries() {
 async function processFreshQueue(startSequence) {
   let cursor = Number(startSequence) || 1;
 
-  while (summary.added < config.dailyTargetMax && !summary.stoppedByRateLimit) {
+  while (shouldContinue()) {
     const snap = await queue
       .where("sequence", ">=", cursor)
       .orderBy("sequence", "asc")
@@ -158,7 +210,7 @@ async function processFreshQueue(startSequence) {
     if (snap.empty) break;
 
     for (const doc of snap.docs) {
-      if (summary.added >= config.dailyTargetMax || summary.stoppedByRateLimit) break;
+      if (!shouldContinue()) break;
       const data = doc.data();
       const sequence = Number(data.sequence);
       if (!Number.isFinite(sequence)) continue;
@@ -185,6 +237,7 @@ async function processFreshQueue(startSequence) {
 }
 
 async function processMember(doc, member, context) {
+  if (!shouldContinue()) return;
   summary.attempted += 1;
 
   if (!member.userId && !member.username) {
@@ -193,6 +246,7 @@ async function processMember(doc, member, context) {
   }
 
   if (config.dryRun) {
+    summary.dryRunCandidates += 1;
     console.log(JSON.stringify({ event: "dry_run_candidate", id: doc.id, sequence: member.sequence, username: member.username || null }));
     if (context.advanceCursor) await persistCursor(context.nextSequence, doc.id);
     return;
@@ -200,17 +254,36 @@ async function processMember(doc, member, context) {
 
   let lastError;
   for (let attempt = 0; attempt <= config.unknownRetries; attempt += 1) {
+    let inviteInvoked = false;
     try {
       const inputUser = await resolveInputUser(member);
-      await client.invoke(new Api.channels.InviteToChannel({
+      inviteInvoked = true;
+      const result = await client.invoke(new Api.channels.InviteToChannel({
         channel: inputChannel,
         users: [inputUser]
       }));
 
+      const missingInvitees = extractMissingInvitees(result);
+      if (missingInvitees.length > 0) {
+        const outcome = classifyMissingInvitee(missingInvitees[0]);
+        summary.skipped += 1;
+        bumpError(outcome.errorCode);
+        await writeOutcome(doc, member, outcome.status, outcome.errorCode, context);
+        console.log(JSON.stringify({
+          event: "member_not_added",
+          id: doc.id,
+          sequence: member.sequence,
+          username: member.username || null,
+          reason: outcome.errorCode
+        }));
+        return;
+      }
+
       summary.added += 1;
-      await writeOutcome(doc, member, "added", null, context, { addedAt: FieldValue.serverTimestamp() });
+      await writeOutcome(doc, member, "added", null, context, {
+        addedAt: FieldValue.serverTimestamp()
+      }, true);
       console.log(JSON.stringify({ event: "member_added", id: doc.id, sequence: member.sequence, username: member.username || null }));
-      await delay(config.attemptDelayMs);
       return;
     } catch (error) {
       lastError = error;
@@ -229,7 +302,7 @@ async function processMember(doc, member, context) {
         return;
       }
 
-      if (FATAL_CHANNEL_ERRORS.has(normalized.code)) {
+      if (FATAL_CHANNEL_ERRORS.has(normalized.code) || FATAL_ACCOUNT_ERRORS.has(normalized.code)) {
         await stateRef.set({ lastError: normalized.code, lastErrorAt: FieldValue.serverTimestamp() }, { merge: true });
         throw error;
       }
@@ -252,6 +325,8 @@ async function processMember(doc, member, context) {
         await delay(config.unknownRetryDelayMs);
         continue;
       }
+    } finally {
+      if (inviteInvoked) await delay(config.attemptDelayMs);
     }
   }
 
@@ -259,6 +334,28 @@ async function processMember(doc, member, context) {
   const retryAt = new Date(Date.now() + config.transientRetryHours * 3600 * 1000);
   summary.deferred += 1;
   await deferMember(doc, member, normalized.code, retryAt, context);
+}
+
+function extractMissingInvitees(result) {
+  const value = result?.missingInvitees ?? result?.missing_invitees;
+  return Array.isArray(value) ? value : [];
+}
+
+function classifyMissingInvitee(missing) {
+  const premiumWouldAllowInvite = Boolean(
+    missing?.premiumWouldAllowInvite ?? missing?.premium_would_allow_invite
+  );
+  const premiumRequiredForPm = Boolean(
+    missing?.premiumRequiredForPm ?? missing?.premium_required_for_pm
+  );
+
+  if (premiumWouldAllowInvite) {
+    return { status: "premium_required", errorCode: "MISSING_INVITEE_PREMIUM_REQUIRED" };
+  }
+  if (premiumRequiredForPm) {
+    return { status: "privacy_restricted", errorCode: "MISSING_INVITEE_PRIVACY_PREMIUM_PM" };
+  }
+  return { status: "privacy_restricted", errorCode: "MISSING_INVITEE_PRIVACY" };
 }
 
 async function resolveInputChannel(reference) {
@@ -296,7 +393,7 @@ async function resolveInputUser(member) {
   });
 }
 
-async function writeOutcome(doc, member, status, errorCode, context, extras = {}) {
+async function writeOutcome(doc, member, status, errorCode, context, extras = {}, incrementDaily = false) {
   const patch = {
     status,
     attempts: Number(member.attempts || 0) + 1,
@@ -307,12 +404,20 @@ async function writeOutcome(doc, member, status, errorCode, context, extras = {}
   };
   const batch = db.batch();
   batch.set(doc.ref, patch, { merge: true });
+
+  const statePatch = {};
   if (context.advanceCursor) {
-    batch.set(stateRef, {
-      nextSequence: context.nextSequence,
-      lastProcessedId: doc.id,
-      lastProgressAt: FieldValue.serverTimestamp()
-    }, { merge: true });
+    statePatch.nextSequence = context.nextSequence;
+    statePatch.lastProcessedId = doc.id;
+    statePatch.lastProgressAt = FieldValue.serverTimestamp();
+  }
+  if (incrementDaily) {
+    statePatch.dailyDate = dailyDate;
+    statePatch.dailyAdded = FieldValue.increment(1);
+    statePatch.lastAddedAt = FieldValue.serverTimestamp();
+  }
+  if (Object.keys(statePatch).length > 0) {
+    batch.set(stateRef, statePatch, { merge: true });
   }
   await batch.commit();
 }
@@ -380,14 +485,42 @@ async function getState() {
   return snap.exists ? snap.data() : {};
 }
 
+function shouldContinue() {
+  return !summary.stoppedByRateLimit && !dailyTargetReached() && summary.attempted < config.maxAttemptsPerRun;
+}
+
+function dailyTargetReached() {
+  if (config.dryRun) {
+    return summary.dryRunCandidates >= remainingDailyCapacity();
+  }
+  return dailyAddedBeforeRun + summary.added >= config.dailyTargetMax;
+}
+
+function remainingDailyCapacity() {
+  return Math.max(0, config.dailyTargetMax - dailyAddedBeforeRun);
+}
+
+function calendarDayKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: config.timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function normalizeError(error) {
   const raw = String(error?.errorMessage || error?.message || error?.constructor?.name || "UNKNOWN").toUpperCase();
   const explicit = [
     "USER_ALREADY_PARTICIPANT", "USER_PRIVACY_RESTRICTED", "USER_NOT_MUTUAL_CONTACT",
     "INPUT_USER_DEACTIVATED", "USER_DEACTIVATED", "USER_ID_INVALID", "USER_CHANNELS_TOO_MUCH",
-    "USER_BLOCKED", "USER_KICKED", "USER_BANNED_IN_CHANNEL", "USER_BOT", "CHAT_MEMBER_ADD_FAILED",
-    "CHAT_ADMIN_REQUIRED", "CHAT_WRITE_FORBIDDEN", "CHANNEL_PRIVATE", "CHANNEL_INVALID",
-    "CHANNEL_PUBLIC_GROUP_NA", "PEER_FLOOD", "FLOOD_WAIT", "USERNAME_NOT_OCCUPIED", "USERNAME_INVALID"
+    "USER_BLOCKED", "USER_IS_BLOCKED", "YOU_BLOCKED_USER", "USER_KICKED", "USER_BANNED_IN_CHANNEL",
+    "USER_BOT", "CHAT_MEMBER_ADD_FAILED", "CHAT_ADMIN_REQUIRED", "CHAT_WRITE_FORBIDDEN",
+    "CHANNEL_PRIVATE", "CHANNEL_INVALID", "CHANNEL_PUBLIC_GROUP_NA", "CHANNEL_MONOFORUM_UNSUPPORTED",
+    "USERS_TOO_MUCH", "BOTS_TOO_MUCH", "BOT_GROUPS_BLOCKED", "USER_RESTRICTED", "FROZEN_METHOD_INVALID",
+    "PEER_FLOOD", "FLOOD_WAIT", "USERNAME_NOT_OCCUPIED", "USERNAME_INVALID"
   ].find(code => raw.includes(code));
 
   let code = explicit || (raw.match(/\b[A-Z][A-Z0-9_]{3,}\b/)?.[0] || "UNKNOWN");
