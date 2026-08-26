@@ -61,16 +61,18 @@ function normalizeDecision(raw,report){
   const chartsOk=Array.isArray(report?.timeframes)&&report.timeframes.length>=EXPECTED_TIMEFRAMES;
   const dossierOk=String(report?.dossierVersion||'').startsWith(DOSSIER_PREFIX)&&report?.aiInputMode==='single-pdf-dossier';
   const strictOk=report?.strictNonRepaintComplete===true;
+  const rsiBbOk=report?.rsiBbEvidenceComplete===true&&report?.rsiBbStrictNonRepaintComplete===true;
   if(!coverageOk)out.missingEvidence.unshift(`60-day H1 price-history coverage is incomplete (${Number(report?.historyDays||0).toFixed(2)} observed days).`);
   if(!evidenceOk)out.missingEvidence.unshift(`Indicator evidence is incomplete: ${Number(report?.evidenceCount||0)}/${EXPECTED_TIMEFRAMES} timeframe snapshots.`);
   if(!chartsOk||!dossierOk)out.missingEvidence.unshift('The canonical single-PDF dossier contract is incomplete or from an older report version.');
-  if(!strictOk)out.missingEvidence.unshift('Strict non-repaint evidence validation did not pass for every required timeframe.');
+  if(!strictOk)out.missingEvidence.unshift('Strict non-repaint Elliott evidence validation did not pass for every required timeframe.');
+  if(!rsiBbOk)out.missingEvidence.unshift('Strict RSI/Bollinger secondary evidence is incomplete on one or more required timeframes.');
 
   const exactEntry=out.entry.price;
   const validZone=out.entry.zoneLow!==null&&out.entry.zoneHigh!==null&&out.entry.zoneLow<=out.entry.zoneHigh;
   const entryReference=exactEntry!==null?exactEntry:validZone?(out.entry.zoneLow+out.entry.zoneHigh)/2:null;
   const exactTp=out.takeProfits.find(tp=>tp.price!==null)?.price??null;
-  const executableEvidence=coverageOk&&evidenceOk&&chartsOk&&dossierOk&&strictOk;
+  const executableEvidence=coverageOk&&evidenceOk&&chartsOk&&dossierOk&&strictOk&&rsiBbOk;
   if(out.status==='TRADE_SETUP'&&!executableEvidence)out.status='WAIT';
   if(out.status==='TRADE_SETUP'&&(out.direction==='NEUTRAL'||entryReference===null||out.stopLoss.price===null||exactTp===null||out.elliott.invalidation===null)){
     out.status='WAIT';

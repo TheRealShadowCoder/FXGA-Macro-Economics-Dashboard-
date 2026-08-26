@@ -7,7 +7,7 @@
 #property strict
 #property description "FXGA EA Bridge v13.50 - strict dual-engine non-repaint evidence handshake, 60-day history and 21-chart dossier capture."
 
-input group "WEBSITE • FXGA 60-Day Elliott AI Dossier"
+input group "WEBSITE • FXGA 60-Day Elliott + RSI/BB AI Dossier"
 input bool   InpWebsiteReportBridge=true;
 input string InpWebsiteReportApiBase="https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app";
 input string InpWebsiteReportSecret=""; // exact FXGA_MT5_REPORT_SECRET; never commit the value
