@@ -1,0 +1,111 @@
+name: FXGA Dual Engine Contract Hardening
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fxga-dual-engine-contract-hardening.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Harden RSI/BB completeness and live bridge metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p=Path('google-cloud-app/elliott-reports.js')
+          s=p.read_text()
+          s=s.replace('FXGA_60D_Elliott_Macro_Dossier_', 'FXGA_60D_Elliott_RSI_BB_Macro_Dossier_')
+          s=s.replace("bridgeVersion:'13.41'", "bridgeVersion:'13.50'")
+
+          strict_anchor="function strictSnapshot(e){const n=e?.strict_non_repaint||e?.nonRepaint||{};return Boolean((n.enabled??n.strict)===true&&(n.closed_bar_pivots??n.closedBarPivots)===true&&(n.freeze_confirmed_pivots??n.freezeConfirmedPivots)===true&&(n.closed_bar_indicators??n.closedBarIndicators)===true&&(n.closed_bar_signals??n.closedBarSignals)===true&&(n.replay_parity??n.replayParity)===true);}\n"
+          strict_add="function rsiBbStrictSnapshot(e){const p=e?.rsi_bb_confirmation?.evidence||e?.rsi_bb_confirmation||null,n=p?.strict_non_repaint||{};return Boolean(p&&n.closed_bar_signals===true&&n.bar0_projection_only===true&&n.append_only_evidence===true&&n.historical_side_rewrite_forbidden===true&&n.future_lookahead_forbidden===true);}\n"
+          if 'function rsiBbStrictSnapshot' not in s:
+            assert strict_anchor in s
+            s=s.replace(strict_anchor,strict_anchor+strict_add,1)
+
+          old="utcQuality:d.utcQuality||null,pdfBytes:Number(d.byteLength||0)};}"
+          new="utcQuality:d.utcQuality||null,pdfBytes:Number(d.byteLength||0),rsiBbEvidenceComplete:Boolean(d.rsiBbEvidenceComplete),rsiBbStrictNonRepaintComplete:Boolean(d.rsiBbStrictNonRepaintComplete)};}"
+          if 'rsiBbEvidenceComplete:Boolean' not in s:
+            assert old in s
+            s=s.replace(old,new,1)
+
+          old="mappedEvents=events.map(event=>({event,reaction:eventReaction(event,history),pivot:nearestPivot(event,pivots),leg:surroundingLeg(event,pivots)})),executive=chooseExecutiveEvidence(evidenceRows),strictComplete=evidenceRows.length===(job.timeframes||DEFAULT_TIMEFRAMES).length&&evidenceRows.every(row=>row.strictNonRepaint);"
+          new="mappedEvents=events.map(event=>({event,reaction:eventReaction(event,history),pivot:nearestPivot(event,pivots),leg:surroundingLeg(event,pivots)})),executive=chooseExecutiveEvidence(evidenceRows),strictComplete=evidenceRows.length===(job.timeframes||DEFAULT_TIMEFRAMES).length&&evidenceRows.every(row=>row.strictNonRepaint),rsiBbComplete=evidenceRows.length===(job.timeframes||DEFAULT_TIMEFRAMES).length&&evidenceRows.every(row=>Boolean(row?.evidence?.rsi_bb_confirmation?.evidence||row?.evidence?.rsi_bb_confirmation)),rsiBbStrictComplete=evidenceRows.length===(job.timeframes||DEFAULT_TIMEFRAMES).length&&evidenceRows.every(row=>rsiBbStrictSnapshot(row?.evidence));"
+          if 'rsiBbComplete=evidenceRows.length' not in s:
+            assert old in s
+            s=s.replace(old,new,1)
+
+          cover_old="`Strict non-repaint snapshots: ${evidenceRows.filter(r=>r.strictNonRepaint).length}/${job.timeframes?.length||DEFAULT_TIMEFRAMES.length} | complete=${strictComplete?'YES':'NO'}`,`Chart screenshots:"
+          cover_new="`Strict non-repaint Elliott snapshots: ${evidenceRows.filter(r=>r.strictNonRepaint).length}/${job.timeframes?.length||DEFAULT_TIMEFRAMES.length} | complete=${strictComplete?'YES':'NO'}`,`RSI/BB evidence snapshots: ${evidenceRows.filter(r=>Boolean(r?.evidence?.rsi_bb_confirmation?.evidence||r?.evidence?.rsi_bb_confirmation)).length}/${job.timeframes?.length||DEFAULT_TIMEFRAMES.length} | strict=${rsiBbStrictComplete?'YES':'NO'}`,`Chart screenshots:"
+          if 'RSI/BB evidence snapshots:' not in s:
+            assert cover_old in s
+            s=s.replace(cover_old,cover_new,1)
+
+          ret_old="strictNonRepaintComplete:strictComplete,utcQuality:history.meta.utc_quality||'CURRENT_SERVER_OFFSET_ESTIMATE',aiInputMode:'single-pdf-dossier'};"
+          ret_new="strictNonRepaintComplete:strictComplete,rsiBbEvidenceComplete:rsiBbComplete,rsiBbStrictNonRepaintComplete:rsiBbStrictComplete,utcQuality:history.meta.utc_quality||'CURRENT_SERVER_OFFSET_ESTIMATE',aiInputMode:'single-pdf-dossier'};"
+          if 'rsiBbEvidenceComplete:rsiBbComplete' not in s:
+            assert ret_old in s
+            s=s.replace(ret_old,ret_new,1)
+
+          health_old="economicEventMapping:true,elliottPivotMapping:true,strictNonRepaintRequired:true,aiInputMode:'single-pdf-dossier',jsonEvidenceSentToModel:false"
+          health_new="economicEventMapping:true,elliottPivotMapping:true,strictNonRepaintRequired:true,rsiBbEvidenceRequired:true,rsiBbEvidenceSchema:'FXGA_RSI_BB_AI_EVIDENCE_1',aiInputMode:'single-pdf-dossier',jsonEvidenceSentToModel:false"
+          if "rsiBbEvidenceRequired:true" not in s:
+            assert health_old in s
+            s=s.replace(health_old,health_new,1)
+
+          p.write_text(s)
+
+          p=Path('google-cloud-app/elliott-ai.js')
+          s=p.read_text()
+          old="const strictOk=report?.strictNonRepaintComplete===true;\n  if(!coverageOk)"
+          new="const strictOk=report?.strictNonRepaintComplete===true;\n  const rsiBbOk=report?.rsiBbEvidenceComplete===true&&report?.rsiBbStrictNonRepaintComplete===true;\n  if(!coverageOk)"
+          if 'const rsiBbOk=' not in s:
+            assert old in s
+            s=s.replace(old,new,1)
+          old="if(!strictOk)out.missingEvidence.unshift('Strict non-repaint evidence validation did not pass for every required timeframe.');"
+          new="if(!strictOk)out.missingEvidence.unshift('Strict non-repaint Elliott evidence validation did not pass for every required timeframe.');\n  if(!rsiBbOk)out.missingEvidence.unshift('Strict RSI/Bollinger secondary evidence is incomplete on one or more required timeframes.');"
+          if 'Strict RSI/Bollinger secondary evidence is incomplete' not in s:
+            assert old in s
+            s=s.replace(old,new,1)
+          s=s.replace('const executableEvidence=coverageOk&&evidenceOk&&chartsOk&&dossierOk&&strictOk;', 'const executableEvidence=coverageOk&&evidenceOk&&chartsOk&&dossierOk&&strictOk&&rsiBbOk;')
+          p.write_text(s)
+
+          p=Path('mt5/EA Bridge.mq5')
+          s=p.read_text()
+          s=s.replace('input group "WEBSITE • FXGA 60-Day Elliott AI Dossier"','input group "WEBSITE • FXGA 60-Day Elliott + RSI/BB AI Dossier"')
+          p.write_text(s)
+          PY
+
+      - name: Static checks
+        run: |
+          node --check google-cloud-app/elliott-reports.js
+          node --check google-cloud-app/elliott-ai.js
+          grep -q "rsiBbStrictNonRepaintComplete" google-cloud-app/elliott-reports.js
+          grep -q "const rsiBbOk=" google-cloud-app/elliott-ai.js
+          grep -q "bridgeVersion:'13.50'" google-cloud-app/elliott-reports.js
+
+      - name: Commit hardening
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add google-cloud-app/elliott-reports.js google-cloud-app/elliott-ai.js "mt5/EA Bridge.mq5"
+          if git diff --cached --quiet; then
+            echo "No hardening changes needed"
+            exit 0
+          fi
+          git commit -m "Require strict RSI BB evidence in AI dossier"
+          git push origin HEAD:main
