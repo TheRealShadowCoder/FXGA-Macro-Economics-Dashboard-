@@ -1,0 +1,67 @@
+name: Smoke MT5 Bridge Connection
+
+on:
+  push:
+    branches: [smoke/bridge-connection-20260826]
+    paths:
+      - '.github/workflows/smoke-bridge-connection.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Test live bridge without claiming jobs
+        env:
+          API_BASE: https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app
+          FXGA_MT5_REPORT_SECRET: ${{ secrets.FXGA_MT5_REPORT_SECRET }}
+          JOB_ID: 4952806d-d7f8-47d4-9edb-3e13bc004a81
+        run: |
+          node <<'NODE'
+          const base=process.env.API_BASE.replace(/\/+$/,'');
+          const secret=process.env.FXGA_MT5_REPORT_SECRET||'';
+          const jobId=process.env.JOB_ID;
+          async function req(path,opts={}){
+            const r=await fetch(base+path,opts);
+            const text=await r.text();
+            let body={}; try{body=text?JSON.parse(text):{};}catch{body={raw:text};}
+            return {status:r.status,ok:r.ok,body};
+          }
+
+          console.log('API_BASE',base);
+          console.log('SECRET_PRESENT',secret.length>0);
+          console.log('SECRET_LENGTH',secret.length);
+
+          const list=await req('/api/elliott-reports',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+          console.log('REPORT_LIST_HTTP',list.status);
+          console.log('BRIDGE_STATE',JSON.stringify(list.body?.bridge||null));
+          console.log('REPORT_COUNT',Array.isArray(list.body?.reports)?list.body.reports.length:null);
+          if(!list.ok) throw new Error('Public Elliott report list failed');
+
+          const job=await req('/api/elliott-reports/jobs/'+encodeURIComponent(jobId),{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+          console.log('JOB_HTTP',job.status);
+          console.log('JOB_STATE',JSON.stringify(job.body?.job||job.body));
+          if(!job.ok) throw new Error('Existing Elliott job status failed');
+
+          const auth=await req('/api/elliott-reports/complete?jobId=FXGA_SMOKE_NONEXISTENT&terminalId=FXGA-MT5-PRIMARY',{
+            method:'POST',
+            headers:{Accept:'application/json','Content-Type':'application/json','X-FXGA-MT5-Secret':secret},
+            body:'{}'
+          });
+          console.log('AUTH_PROBE_HTTP',auth.status);
+          console.log('AUTH_PROBE_BODY',JSON.stringify(auth.body));
+          if(auth.status===401) throw new Error('Bridge secret rejected: GitHub secret/backend secret mismatch');
+          if(auth.status===503) throw new Error('Backend bridge secret is not configured');
+          if(auth.status!==404) throw new Error('Unexpected auth probe status '+auth.status);
+          console.log('AUTHENTICATION_PASS',true);
+
+          const bridge=list.body?.bridge||{};
+          const online=bridge.online===true;
+          console.log('MT5_HEARTBEAT_ONLINE',online);
+          console.log('MT5_LAST_SEEN',bridge.lastSeen||null);
+          console.log('MT5_TERMINAL_ID',bridge.terminalId||null);
+          console.log('RESULT',online?'FULL_BRIDGE_CONNECTED':'BACKEND_OK_MT5_OFFLINE');
+          NODE
