@@ -12,55 +12,33 @@ permissions:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
     steps:
-      - name: Trigger exact Elliott Analyze request and poll
+      - name: Retry exact Elliott job/status endpoints
         env:
           API_BASE: https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app
+          JOB_ID: 4952806d-d7f8-47d4-9edb-3e13bc004a81
         run: |
           node <<'NODE'
           const base=process.env.API_BASE.replace(/\/+$/,'');
-          const timeframes=['M1','M2','M3','M4','M5','M6','M10','M12','M15','M20','M30','H1','H2','H3','H4','H6','H8','H12','D1','W1','MN1'];
+          const jobId=process.env.JOB_ID;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-          async function getJson(path){
+          async function raw(path){
             const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
-            const body=await r.json().catch(()=>({}));
-            if(!r.ok) throw new Error(`${path} ${r.status}: ${JSON.stringify(body)}`);
-            return body;
+            const text=await r.text();
+            let body={}; try{body=text?JSON.parse(text):{};}catch{body={raw:text};}
+            return {status:r.status,ok:r.ok,body};
           }
-          console.log('API',base);
-          const before=await getJson('/api/elliott-reports');
-          console.log('BRIDGE_BEFORE',JSON.stringify(before.bridge||null));
-          console.log('REPORTS_BEFORE',Array.isArray(before.reports)?before.reports.length:0);
-          const request=await fetch(base+'/api/elliott-reports/request',{
-            method:'POST',
-            headers:{'Content-Type':'application/json',Accept:'application/json'},
-            body:JSON.stringify({symbol:'XAUUSD',timeframes})
-          });
-          const payload=await request.json().catch(()=>({}));
-          console.log('ANALYZE_HTTP',request.status);
-          console.log('ANALYZE_RESPONSE',JSON.stringify(payload));
-          if(!request.ok) throw new Error(`Analyze request failed ${request.status}: ${JSON.stringify(payload)}`);
-          if(!payload.job?.id) throw new Error('Analyze response missing job.id');
-          const jobId=payload.job.id;
-          console.log('JOB_ID',jobId);
-          for(let i=0;i<40;i++){
-            const state=await getJson('/api/elliott-reports/jobs/'+encodeURIComponent(jobId));
-            const job=state.job||{};
-            const uploaded=Array.isArray(job.uploadedTimeframes)?job.uploadedTimeframes.length:0;
-            console.log(`POLL ${i+1}/40 status=${job.status} uploaded=${uploaded}/${Array.isArray(job.timeframes)?job.timeframes.length:21} reportId=${job.reportId||''} error=${job.error||''}`);
-            if(job.status==='READY'){
-              const after=await getJson('/api/elliott-reports');
-              console.log('BRIDGE_AFTER',JSON.stringify(after.bridge||null));
-              console.log('REPORTS_AFTER',Array.isArray(after.reports)?after.reports.length:0);
-              const match=(after.reports||[]).find(r=>r.id===job.reportId);
-              console.log('READY_REPORT',JSON.stringify(match||null));
+          console.log('CHECK_JOB',jobId);
+          for(let i=0;i<20;i++){
+            const r=await raw('/api/elliott-reports/jobs/'+encodeURIComponent(jobId));
+            console.log('JOB_POLL',i+1,'HTTP',r.status,JSON.stringify(r.body));
+            if(r.ok){
+              const list=await raw('/api/elliott-reports');
+              console.log('LIST_HTTP',list.status,JSON.stringify(list.body));
               process.exit(0);
             }
-            if(job.status==='FAILED') throw new Error(job.error||'Elliott job failed');
             await sleep(3000);
           }
-          const finalState=await getJson('/api/elliott-reports/jobs/'+encodeURIComponent(jobId));
-          console.log('FINAL_STATE_AFTER_120S',JSON.stringify(finalState));
-          console.log('RESULT: Analyze API works, but job did not reach READY within 120 seconds.');
+          throw new Error('Job status endpoint stayed unavailable for 60 seconds');
           NODE
