@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       FXGA_INGEST_TOKEN: ${{ secrets.FXGA_INGEST_TOKEN }}
       FXGA_MT5_REPORT_SECRET: ${{ secrets.FXGA_MT5_REPORT_SECRET }}
@@ -42,19 +42,23 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          cache: npm
 
       - name: Validate R0 deployment secrets
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo '::error::CLOUDFLARE_API_TOKEN must be added under repository Actions secrets'; exit 1; }
-          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo '::error::CLOUDFLARE_ACCOUNT_ID must be added under repository Actions secrets'; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo '::error::CLOUDFLARE_ACCOUNT_ID must be added under repository Actions secrets or Actions variables'; exit 1; }
           test -n "$GEMINI_API_KEY" || { echo '::error::GEMINI_API_KEY must be added under repository Actions secrets to preserve Ask FXGA AI'; exit 1; }
 
       - name: Install and build frontend
         run: |
           set -euo pipefail
-          npm ci --no-audit --no-fund
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            echo 'No package-lock.json found; using npm install for this build.'
+            npm install --no-audit --no-fund
+          fi
           npm run build
           test -f dist/index.html
           grep -R -F "Ask FXGA AI" dist >/dev/null || { echo '::error::Compiled frontend is missing Ask FXGA AI'; exit 1; }
