@@ -7,6 +7,7 @@ COPY agents/telegram-member-agent/package.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 
 COPY agents/telegram-member-agent/index.js ./index.js
+COPY agents/telegram-member-agent/admin-server.js ./admin-server.js
 
 USER node
 CMD ["node", "index.js"]
