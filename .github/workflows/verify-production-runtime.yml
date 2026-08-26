@@ -1,201 +1,116 @@
-name: Verify FXGA Production Runtime
+name: Verify FXGA R0 Architecture
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows:
-      - 'Deploy FXGA Cloudflare Static Website'
-      - 'Deploy FXGA Google Cloud Application'
-      - 'Deploy FXGA Google Cloud MT5 Signal Ingress'
-    types: [completed]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'worker/**'
+      - 'wrangler.jsonc'
+      - '.github/workflows/deploy-cloudflare-static.yml'
+      - '.github/workflows/verify-production-runtime.yml'
   push:
     branches: [main]
     paths:
+      - 'src/**'
+      - 'worker/**'
+      - 'wrangler.jsonc'
+      - '.github/workflows/deploy-cloudflare-static.yml'
       - '.github/workflows/verify-production-runtime.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: fxga-production-runtime-verification
+  group: fxga-r0-architecture-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      SITE_URL: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+          cache: npm
 
-      - name: Verify live Cloudflare, Google Cloud API, research and MT5 stack
+      - name: Install and build
         run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          node --check worker/src/index.js
+
+      - name: Verify R0 architecture contracts
+        run: |
+          set -euo pipefail
           node <<'NODE'
-          const site=process.env.SITE_URL.replace(/\/$/,'');
-          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          const fs=require('fs');
+          const assert=(condition,message)=>{if(!condition)throw new Error(message)};
+          const read=(path)=>fs.readFileSync(path,'utf8');
 
-          async function request(url,{timeoutMs=45_000,attempts=4,json=true}={}){
-            let last;
-            for(let attempt=1;attempt<=attempts;attempt++){
-              const controller=new AbortController();
-              const timer=setTimeout(()=>controller.abort(),timeoutMs);
-              try{
-                const response=await fetch(url,{headers:{Accept:json?'application/json':'text/html,*/*','Cache-Control':'no-cache'},cache:'no-store',signal:controller.signal});
-                const text=await response.text();
-                if(!response.ok)throw new Error(`${url} HTTP ${response.status}: ${text.slice(0,300)}`);
-                clearTimeout(timer);
-                if(!json)return {response,text};
-                let body;
-                try{body=JSON.parse(text);}catch{throw new Error(`${url} returned non-JSON: ${text.slice(0,200)}`);}
-                return {response,text,body};
-              }catch(error){
-                clearTimeout(timer);last=error;
-                if(attempt<attempts)await sleep(attempt*1500);
-              }
-            }
-            throw last;
+          const wrangler=JSON.parse(read('wrangler.jsonc'));
+          assert(wrangler.main==='./worker/src/index.js','Wrangler main must be the R0 Worker');
+          assert(wrangler.assets?.binding==='ASSETS','Static asset binding missing');
+          assert(wrangler.assets?.run_worker_first?.includes('/api/*'),'/api/* must execute the Worker before static fallback');
+          assert(!wrangler.r2_buckets,'R2 must not be a production dependency in strict R0 mode');
+
+          const worker=read('worker/src/index.js');
+          for(const route of [
+            '/api/health',
+            '/api/gemini/health',
+            '/api/gemini/intelligence-health',
+            '/api/gemini/prompts',
+            '/api/gemini/chat',
+            '/api/gemini/chat-stream',
+            '/api/gemini/live-report',
+            '/api/gemini/analyze',
+            '/api/errors/catalog',
+            '/api/mt5/batch',
+          ]) assert(worker.includes(route),`Required R0 route missing: ${route}`);
+          assert(worker.includes("googleCloudRuntime:false"),'Worker health must explicitly report Google Cloud runtime disabled');
+          assert(worker.includes('env.DB'),'Worker must use the D1 binding');
+          assert(worker.includes('GEMINI_API_KEY'),'Gemini AI feature must remain configured server-side');
+
+          const schema=read('worker/schema.sql');
+          for(const table of ['state_snapshots','gemini_cache','mt5_batches']) {
+            assert(schema.includes(table),`D1 schema missing ${table}`);
           }
 
-          const checks=[];
-          async function check(name,fn){
-            const started=Date.now();
-            try{const detail=await fn();checks.push({name,ok:true,ms:Date.now()-started,detail});console.log(`PASS ${name} (${Date.now()-started}ms)`,detail??'');}
-            catch(error){checks.push({name,ok:false,ms:Date.now()-started,error:String(error?.message||error)});console.error(`FAIL ${name}:`,error);}
+          const routing=read('src/google-cloud-routing.ts');
+          assert(routing.includes('same-origin'),'Browser API routing must default to same-origin Worker routes');
+
+          const deploy=read('.github/workflows/deploy-cloudflare-static.yml');
+          for(const required of ['wrangler@latest d1','wrangler@latest deploy','GEMINI_API_KEY','Cloudflare D1 Free']) {
+            assert(deploy.includes(required),`R0 deployment workflow missing ${required}`);
           }
-          const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+          for(const forbidden of [
+            'google-github-actions/auth',
+            'google-github-actions/setup-gcloud',
+            'gcloud run deploy',
+            'gcloud scheduler',
+            'artifactregistry.googleapis.com',
+            'cloudtasks.googleapis.com',
+            '@google-cloud/firestore',
+          ]) assert(!deploy.includes(forbidden),`Paid Google runtime dependency reintroduced in deployment workflow: ${forbidden}`);
 
-          let rootHtml='',build=null,backend='',mt5Config=null,mt5='';
-
-          await check('Cloudflare static root',async()=>{
-            const {response,text}=await request(`${site}/?runtime-check=${Date.now()}`,{json:false});
-            rootHtml=text;
-            assert(/id=["']root["']/.test(text),'React root element missing');
-            assert(!String(response.headers.get('content-type')||'').includes('application/json'),'Cloudflare root unexpectedly returned JSON');
-            return response.headers.get('content-type');
-          });
-
-          await check('Cloudflare release marker',async()=>{
-            build=(await request(`${site}/fxga-build.json?runtime-check=${Date.now()}`)).body;
-            assert(build?.release==='cross-asset-mt5-60d-event-research',`Unexpected release ${build?.release}`);
-            assert(String(build?.backendUrl||'').startsWith('https://'),'Release marker backend URL missing');
-            backend=String(build.backendUrl).replace(/\/$/,'');
-            assert(Array.isArray(build.features)&&build.features.includes('60-day-canonical-m1'),'60-day M1 feature marker missing');
-            assert(build.features.includes('event-price-research'),'event research marker missing');
-            return {commit:build.commit,backend};
-          });
-
-          await check('Live frontend bundle is not old 12-second client',async()=>{
-            const scripts=[...rootHtml.matchAll(/<script[^>]+src=["']([^"']+\.js[^"']*)["']/g)].map(match=>new URL(match[1],site).toString());
-            assert(scripts.length>0,'No compiled JavaScript bundle found');
-            let joined='';
-            for(const src of scripts.slice(0,8))joined+=(await request(src,{json:false,timeoutMs:30_000})).text;
-            assert(!joined.includes('timed out after 12 seconds'),'Live frontend still contains obsolete 12-second timeout bundle');
-            return `${scripts.length} JS bundle(s) inspected`;
-          });
-
-          await check('Cloudflare remains static-only',async()=>{
-            const {response,text}=await request(`${site}/api/health?runtime-check=${Date.now()}`,{json:false});
-            const type=String(response.headers.get('content-type')||'');
-            assert(!type.includes('application/json'),'Cloudflare is unexpectedly processing /api/health');
-            assert(/id=["']root["']/.test(text),'SPA fallback missing on Cloudflare /api/health');
-            return type;
-          });
-
-          await check('Google Cloud API health',async()=>{
-            assert(backend,'Backend URL unresolved');
-            const h=(await request(`${backend}/api/health`)).body;
-            assert(h.ok===true,'API health ok=false');
-            assert(h.compute==='Google Cloud Run','Compute contract mismatch');
-            assert(h.state==='Google Cloud Firestore','State contract mismatch');
-            assert(h.cloudflareProcessing===false,'Cloudflare processing must remain false');
-            return h.updatedAt;
-          });
-
-          const apiChecks=[
-            ['Dashboard','/api/dashboard',b=>Array.isArray(b.market)&&Array.isArray(b.sources)&&Array.isArray(b.calendar)],
-            ['Macro analysis','/api/analysis',b=>b&&typeof b==='object'],
-            ['Economy analysis','/api/economy-analysis',b=>b&&typeof b==='object'],
-            ['Release impact','/api/release-impact',b=>b&&typeof b==='object'],
-            ['Market prices','/api/market-prices',b=>Array.isArray(b.assets)],
-            ['Technical snapshot','/api/technical',b=>b&&typeof b.assets==='object'],
-            ['Economic calendar','/api/calendar?days=7&importance=1',b=>Array.isArray(b.events)],
-            ['60-day calendar history','/api/calendar-history?days=60',b=>Array.isArray(b.events)&&b.days===60],
-            ['60-day event studies','/api/event-studies?days=60&limit=20',b=>Array.isArray(b.studies)&&b.days===60],
-            ['Event pattern profiles','/api/event-pattern-profiles?minObservations=1&limit=20',b=>Array.isArray(b.profiles)],
-            ['Data quality','/api/data-quality',b=>b&&b.macro&&b.market&&b.calendar],
-            ['Global macro','/api/global-macro',b=>typeof b.totalObservations==='number'&&b.economies],
-            ['News','/api/news',b=>Array.isArray(b.items)],
-            ['Session signals','/api/session-signals',b=>Array.isArray(b.sessions)&&Array.isArray(b.rankedOpportunities)],
-            ['Sources','/api/sources',b=>Array.isArray(b.sources)&&b.sources.length>0],
+          const retired=[
+            '.github/workflows/deploy-cloud-run-collector.yml',
+            '.github/workflows/deploy-google-cloud-app.yml',
+            '.github/workflows/deploy-google-cloud-mt5-ingress.yml',
+            '.github/workflows/fxga-dual-engine-final-deploy.yml',
+            '.github/workflows/configure-event-research-schedule.yml',
           ];
-          for(const [name,path,validate] of apiChecks){
-            await check(`Google API · ${name}`,async()=>{const body=(await request(`${backend}${path}`)).body;assert(validate(body),`${name} payload contract failed`);return 'contract OK';});
-          }
+          for(const path of retired) assert(!fs.existsSync(path),`Retired paid deployment path still exists: ${path}`);
 
-          await check('Live MT5 endpoint configuration',async()=>{
-            mt5Config=(await request(`${site}/mt5-cloud.json?runtime-check=${Date.now()}`)).body;
-            mt5=String(mt5Config?.baseUrl||'').replace(/\/$/,'');
-            assert(mt5.startsWith('https://'),'MT5 base URL missing');
-            assert(mt5Config?.priceCache?.retentionDays===60,'MT5 config is not 60-day retention');
-            assert(Array.isArray(mt5Config?.priceCache?.symbols)&&mt5Config.priceCache.symbols.length===16,'MT5 16-asset universe missing');
-            return mt5;
-          });
-
-          await check('MT5 health',async()=>{
-            const h=(await request(`${mt5}/api/mt5/health`)).body;
-            assert(h.ok===true&&h.source==='MetaTrader5','MT5 health contract failed');
-            assert(h.priceCache?.retentionDays===60,'MT5 runtime does not report 60-day retention');
-            return h.priceCache;
-          });
-
-          let mt5Status;
-          await check('MT5 price-cache status',async()=>{
-            mt5Status=(await request(`${mt5}/api/mt5/price-cache/status`)).body;
-            assert(mt5Status.retentionDays===60,'MT5 cache retention mismatch');
-            assert(Array.isArray(mt5Status.allowedSymbols)&&mt5Status.allowedSymbols.length===16,'MT5 allowed-symbol contract mismatch');
-            assert(mt5Status.management?.timeFifoActive===true,'MT5 time FIFO not active');
-            return {bars:mt5Status.totalBars,chunks:mt5Status.totalChunks,health:mt5Status.databaseHealth?.state};
-          });
-
-          await check('MT5 current price query without date range',async()=>{
-            const b=(await request(`${mt5}/api/mt5/prices?symbol=EURUSD&timeframe=M1&limit=10`)).body;
-            assert(Array.isArray(b.bars),'MT5 no-range price query has no bars array');
-            return {count:b.count,newestMs:b.newestMs};
-          });
-
-          await check('MT5 bounded 24-hour range query',async()=>{
-            const to=Date.now(),from=to-24*60*60*1000;
-            const b=(await request(`${mt5}/api/mt5/prices?symbol=EURUSD&timeframe=M1&limit=2000&from=${from}&to=${to}`)).body;
-            assert(Array.isArray(b.bars),'MT5 bounded range query has no bars array');
-            return {count:b.count,oldestMs:b.oldestMs,newestMs:b.newestMs};
-          });
-
-          await check('MT5 future/reversed-range normalization',async()=>{
-            const now=Date.now(),from=now+2*60*60*1000,to=now+60*60*1000;
-            const b=(await request(`${mt5}/api/mt5/prices?symbol=EURUSD&timeframe=M1&limit=10&from=${from}&to=${to}`)).body;
-            assert(Array.isArray(b.bars),'MT5 normalized future range has no bars array');
-            return {count:b.count};
-          });
-
-          await check('MT5 SMC snapshot',async()=>{
-            const b=(await request(`${mt5}/api/mt5/smc-snapshot`)).body;
-            assert(b.canonicalTimeframe==='M1','SMC canonical timeframe mismatch');
-            assert(b.methodology==='canonical-mt5-m1-reconstructed-multi-timeframe-smc','SMC methodology mismatch');
-            return b.counts;
-          });
-
-          const failed=checks.filter(item=>!item.ok);
-          console.log('\n=== FXGA PRODUCTION RUNTIME AUDIT ===');
-          console.table(checks.map(({name,ok,ms,error})=>({name,status:ok?'PASS':'FAIL',ms,error:error||''})));
-          if(failed.length){
-            console.error(`${failed.length} production check(s) failed.`);
-            process.exit(1);
-          }
-          console.log(`ALL ${checks.length} PRODUCTION CHECKS PASSED`);
+          console.log('PASS: R0 architecture contracts verified');
+          console.log('Compute: Cloudflare Workers');
+          console.log('Database: Cloudflare D1');
+          console.log('Frontend: Cloudflare static assets');
+          console.log('AI: Gemini Developer API retained');
+          console.log('Paid Google Cloud deployment paths: absent');
           NODE
