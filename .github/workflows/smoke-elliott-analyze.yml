@@ -2,7 +2,7 @@ name: Smoke Elliott Analyze Live
 
 on:
   push:
-    branches: [smoke/elliott-analyze-live]
+    branches: [main]
     paths:
       - '.github/workflows/smoke-elliott-analyze.yml'
 
@@ -32,7 +32,6 @@ jobs:
           const before=await getJson('/api/elliott-reports');
           console.log('BRIDGE_BEFORE',JSON.stringify(before.bridge||null));
           console.log('REPORTS_BEFORE',Array.isArray(before.reports)?before.reports.length:0);
-
           const request=await fetch(base+'/api/elliott-reports/request',{
             method:'POST',
             headers:{'Content-Type':'application/json',Accept:'application/json'},
@@ -43,7 +42,6 @@ jobs:
           console.log('ANALYZE_RESPONSE',JSON.stringify(payload));
           if(!request.ok) throw new Error(`Analyze request failed ${request.status}: ${JSON.stringify(payload)}`);
           if(!payload.job?.id) throw new Error('Analyze response missing job.id');
-
           const jobId=payload.job.id;
           console.log('JOB_ID',jobId);
           for(let i=0;i<40;i++){
@@ -64,5 +62,5 @@ jobs:
           }
           const finalState=await getJson('/api/elliott-reports/jobs/'+encodeURIComponent(jobId));
           console.log('FINAL_STATE_AFTER_120S',JSON.stringify(finalState));
-          console.log('RESULT: Analyze API works, but job did not reach READY within 120 seconds. This usually means MT5 bridge/capture is offline or still processing.');
+          console.log('RESULT: Analyze API works, but job did not reach READY within 120 seconds.');
           NODE
