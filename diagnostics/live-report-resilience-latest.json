@@ -1,28 +1,8 @@
 {
   "schema": "fxga.live-report-resilience.verification.v1",
-  "runId": 32957341899,
-  "checkedAt": "2026-08-26T10:16:05.687Z",
-  "liveReport": {
-    "http": 200,
-    "schema": "fxga.gemini.live-report.v2",
-    "model": "gemini-3.5-flash-lite",
-    "reportLength": 1675,
-    "cached": false,
-    "stale": false,
-    "degraded": false,
-    "source": "gemini",
-    "providerThrottled": false,
-    "retryAfterSeconds": null,
-    "refreshAfterSeconds": 300,
-    "compatibilityRoute": "streaming-gateway",
-    "leaked429": false,
-    "error": null
-  },
-  "fileContext": {
-    "http": 200,
-    "persistedLastMode": "file",
-    "persistedLastModel": "gemini-3.5-flash-lite",
-    "persistedLastFileState": "ACTIVE",
-    "persistedLastError": null
-  }
+  "runId": 32957996777,
+  "checkedAt": "2026-08-26T10:23:31.517Z",
+  "fatal": "verification_step_failed_before_result",
+  "responseSchema": null,
+  "error": null
 }
