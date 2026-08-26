@@ -56,6 +56,7 @@ jobs:
           fi
           npm run build
           node --check worker/src/index.js
+          node --check worker/src/r0-entry.js
           node --check scripts/r0-collect-market.mjs
           node --check scripts/r0-collect-macro.mjs
 
@@ -69,7 +70,7 @@ jobs:
           const read=(file)=>fs.readFileSync(file,'utf8');
 
           const wrangler=JSON.parse(read('wrangler.jsonc'));
-          assert(wrangler.main==='./worker/src/index.js','Wrangler main must be the R0 Worker');
+          assert(wrangler.main==='./worker/src/r0-entry.js','Wrangler main must be the R0 compatibility Worker entry');
           assert(wrangler.assets?.binding==='ASSETS','Static asset binding missing');
           assert(wrangler.assets?.run_worker_first?.includes('/api/*'),'/api/* must execute the Worker before static fallback');
           assert(!wrangler.r2_buckets,'R2 must not be a production dependency in strict R0 mode');
@@ -87,10 +88,32 @@ jobs:
             '/api/errors/catalog',
             '/api/mt5/batch',
             '/api/internal/state/',
-          ]) assert(worker.includes(route),`Required R0 route missing: ${route}`);
+          ]) assert(worker.includes(route),`Required R0 core route missing: ${route}`);
           assert(worker.includes("googleCloudRuntime:false"),'Worker health must explicitly report Google Cloud runtime disabled');
           assert(worker.includes('env.DB'),'Worker must use the D1 binding');
           assert(worker.includes('GEMINI_API_KEY'),'Gemini AI feature must remain configured server-side');
+
+          const entry=read('worker/src/r0-entry.js');
+          assert(entry.includes("import coreWorker from './index.js'"),'R0 compatibility entry must delegate to the proven core Worker');
+          for(const route of [
+            '/api/dashboard',
+            '/api/analysis',
+            '/api/session-signals',
+            '/api/live',
+            '/api/fred/catalog',
+            '/api/fred',
+            '/api/economy-analysis',
+            '/api/global-macro',
+            '/api/release-impact',
+            '/api/technical-history',
+            '/api/event-pattern-backtests',
+            '/api/event-study-sources',
+            '/api/acquisition/catalog',
+            '/api/acquire',
+          ]) assert(entry.includes(route),`Required frontend compatibility route missing: ${route}`);
+          assert(entry.includes('WebSocketPair'),'R0 live status must be backed by a Worker WebSocket');
+          assert(entry.includes('cloudflare-r0'),'Compatibility layer must identify the R0 architecture');
+          for(const forbidden of ['@google-cloud/firestore','google-github-actions/auth','gcloud run deploy','gcloud scheduler','cloudtasks.googleapis.com','artifactregistry.googleapis.com']) assert(!entry.includes(forbidden),`Compatibility entry reintroduced a paid Google runtime dependency: ${forbidden}`);
 
           const schema=read('worker/schema.sql');
           for(const table of ['state_snapshots','gemini_cache','mt5_batches']) assert(schema.includes(table),`D1 schema missing ${table}`);
@@ -99,7 +122,7 @@ jobs:
           assert(routing.includes('same-origin'),'Browser API routing must default to same-origin Worker routes');
 
           const deploy=read('.github/workflows/deploy-cloudflare-static.yml');
-          for(const required of ['wrangler@latest d1','wrangler@latest deploy','GEMINI_API_KEY','Cloudflare D1 Free']) assert(deploy.includes(required),`R0 deployment workflow missing ${required}`);
+          for(const required of ['wrangler@latest d1','wrangler@latest deploy','GEMINI_API_KEY','Cloudflare D1 Free','/api/dashboard','/api/analysis','/api/session-signals','/api/fred/catalog']) assert(deploy.includes(required),`R0 deployment workflow missing ${required}`);
           for(const forbidden of ['google-github-actions/auth','google-github-actions/setup-gcloud','gcloud run deploy','gcloud scheduler','artifactregistry.googleapis.com','cloudtasks.googleapis.com','@google-cloud/firestore']) assert(!deploy.includes(forbidden),`Paid Google runtime dependency reintroduced in deployment workflow: ${forbidden}`);
 
           const collectors=read('.github/workflows/r0-free-market-collector.yml');
@@ -173,10 +196,11 @@ jobs:
           assert(institutional.includes("architecture!=='cloudflare-r0'"),'Institutional research verification must enforce the R0 architecture');
           assert(institutional.includes("budget?.firestore!==false"),'Institutional research verification must enforce Firestore-free data quality');
 
-          console.log('PASS: R0 architecture contracts verified');
+          console.log('PASS: R0 architecture + frontend compatibility contracts verified');
           console.log('Compute: Cloudflare Workers');
           console.log('Database: Cloudflare D1');
           console.log('Frontend: Cloudflare static assets');
+          console.log('Compatibility: dashboard + live WebSocket + legacy frontend API on D1');
           console.log('Collectors: public/free providers through GitHub Actions');
           console.log('AI: Gemini Developer API retained');
           console.log('Paid Google Cloud deployment paths: absent');
