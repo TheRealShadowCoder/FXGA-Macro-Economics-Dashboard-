@@ -2,12 +2,19 @@ name: R0 Free Data Collectors
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/r0-*.mjs'
+      - 'cloud-run-collector/src/free-market-data*.js'
+      - 'cloud-run-collector/src/global-fred.js'
+      - '.github/workflows/r0-free-market-collector.yml'
   schedule:
     - cron: '*/15 * * * *'
     - cron: '17 * * * *'
 
 concurrency:
-  group: fxga-r0-free-data-${{ github.event.schedule || 'manual' }}
+  group: fxga-r0-free-data-${{ github.event.schedule || github.event_name }}
   cancel-in-progress: true
 
 permissions:
@@ -18,7 +25,7 @@ env:
 
 jobs:
   market:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.schedule == '*/15 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -49,7 +56,7 @@ jobs:
         run: node scripts/r0-collect-market.mjs
 
   macro:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.schedule == '17 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
