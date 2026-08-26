@@ -13,7 +13,8 @@ const stateCollection = process.env.FIRESTORE_STATE_COLLECTION || "agent_state";
 const stateDocument = process.env.FIRESTORE_STATE_DOCUMENT || "telegram-member-agent";
 const db = new Firestore();
 
-const text = await fs.readFile(path.resolve(inputPath), "utf8");
+const resolvedPath = path.resolve(inputPath);
+const text = await fs.readFile(resolvedPath, "utf8");
 const rows = parseCsv(text.replace(/^\uFEFF/, ""));
 if (rows.length < 2) throw new Error("CSV contains no member records.");
 
@@ -24,20 +25,37 @@ for (const name of requiredHeaders) {
 }
 
 const idx = Object.fromEntries(header.map((name, i) => [name, i]));
+const seenKeys = new Set();
 let imported = 0;
+let duplicates = 0;
+let skipped = 0;
 let batch = db.batch();
 let batchCount = 0;
 
 for (let i = 1; i < rows.length; i += 1) {
   const row = rows[i];
   if (row.every(value => !String(value).trim())) continue;
-  const sequence = imported + 1;
+
   const userId = clean(row[idx["user id"]]);
   const username = clean(row[idx.username]).replace(/^@/, "");
-  if (!userId && !username) continue;
+  if (!userId && !username) {
+    skipped += 1;
+    continue;
+  }
 
-  const docId = userId ? `u_${userId}` : `s_${String(sequence).padStart(8, "0")}`;
+  const identityKey = userId ? `u:${userId}` : `n:${username.toLowerCase()}`;
+  if (seenKeys.has(identityKey)) {
+    duplicates += 1;
+    continue;
+  }
+  seenKeys.add(identityKey);
+
+  const sequence = imported + 1;
+  const docId = userId ? `u_${userId}` : `n_${username.toLowerCase()}`;
   const ref = db.collection(queueCollection).doc(docId);
+
+  // Deliberately do not overwrite status/attempt counters here. Re-importing an
+  // updated roster must preserve completed, skipped, deferred and added outcomes.
   batch.set(ref, {
     sequence,
     username: username || null,
@@ -46,16 +64,14 @@ for (let i = 1; i < rows.length; i += 1) {
     name: clean(row[idx.name]) || null,
     sourceGroup: clean(row[idx.group]) || null,
     sourceGroupId: clean(row[idx["group id"]]) || null,
-    status: "pending",
-    attempts: 0,
-    importedAt: FieldValue.serverTimestamp()
+    lastImportedAt: FieldValue.serverTimestamp()
   }, { merge: true });
 
   imported += 1;
   batchCount += 1;
   if (batchCount >= 400) {
     await batch.commit();
-    console.log(`Imported ${imported} records...`);
+    console.log(`Imported ${imported} unique records...`);
     batch = db.batch();
     batchCount = 0;
   }
@@ -68,10 +84,15 @@ await db.collection(stateCollection).doc(stateDocument).set({
   running: false,
   blockedUntil: FieldValue.delete(),
   queueImportedAt: FieldValue.serverTimestamp(),
-  queueRecordCount: imported
+  queueRecordCount: imported,
+  queueDuplicateRowsIgnored: duplicates,
+  queueInvalidRowsIgnored: skipped,
+  queueSourceFile: path.basename(resolvedPath)
 }, { merge: true });
 
-console.log(`Import complete: ${imported} Telegram member records in ${queueCollection}.`);
+console.log(`Import complete: ${imported} unique Telegram member records in ${queueCollection}.`);
+if (duplicates) console.log(`Ignored duplicate identities: ${duplicates}.`);
+if (skipped) console.log(`Ignored rows without username or user ID: ${skipped}.`);
 
 function clean(value) {
   return String(value ?? "").trim();
