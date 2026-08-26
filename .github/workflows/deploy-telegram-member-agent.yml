@@ -22,6 +22,7 @@ env:
   GCP_REGION: us-central1
   GAR_REPOSITORY: fxga-containers
   JOB_NAME: fxga-telegram-member-agent
+  ADMIN_SERVICE: fxga-telegram-member-agent-admin
   SCHEDULER_NAME: fxga-telegram-member-agent-daily
   SCHEDULE_CRON: '0 8 * * *'
   SCHEDULE_TIME_ZONE: Africa/Johannesburg
@@ -31,6 +32,8 @@ env:
   TELEGRAM_API_HASH_SECRET: fxga-telegram-api-hash
   TELEGRAM_SESSION_SECRET: fxga-telegram-session
   TELEGRAM_CHANNEL_SECRET: fxga-telegram-channel
+  TELEGRAM_BOT_TOKEN_SECRET: fxga-telegram-bot-token
+  AGENT_ADMIN_KEY_SECRET: fxga-telegram-agent-admin-key
 
 jobs:
   deploy:
@@ -48,8 +51,11 @@ jobs:
           set -euo pipefail
           npm install --no-audit --no-fund
           npm run check
+          node -e "const p=require('./package.json'); if(p.version !== '1.2.0' || !p.dependencies['@google-cloud/secret-manager']) process.exit(1)"
           ! grep -REn "(api[_-]?hash|session)[[:space:]]*[:=][[:space:]]*['\"][A-Za-z0-9_=-]{20,}" . \
             --exclude='package-lock.json' || { echo '::error::Possible Telegram credential committed to source'; exit 1; }
+          ! grep -REn "[0-9]{6,12}:AA[A-Za-z0-9_-]{20,}" . \
+            --exclude='package-lock.json' || { echo '::error::Possible Telegram bot token committed to source'; exit 1; }
           ! find . -maxdepth 3 \( -name '*.xlsx' -o -name '*.xls' -o -name '*.csv' -o -name '*.session' \) -print -quit | grep -q . \
             || { echo '::error::Member/source data must not be committed under the agent directory'; exit 1; }
 
@@ -79,6 +85,7 @@ jobs:
           gcloud artifacts repositories describe "$GAR_REPOSITORY" \
             --location "$GCP_REGION" --format='value(name)'
           gcloud firestore databases describe --database='(default)' --format='value(name)' >/dev/null
+          gcloud services enable secretmanager.googleapis.com run.googleapis.com --quiet
 
       - name: Best-effort Firestore runtime access
         run: |
@@ -96,7 +103,7 @@ jobs:
           fi
           exit 0
 
-      - name: Synchronize Telegram secrets to Secret Manager
+      - name: Synchronize Telegram direct-add secrets to Secret Manager
         env:
           TG_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TG_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
@@ -137,6 +144,58 @@ jobs:
           sync_secret "$TELEGRAM_SESSION_SECRET" "$TG_SESSION" TELEGRAM_SESSION
           sync_secret "$TELEGRAM_CHANNEL_SECRET" "$TG_CHANNEL" TELEGRAM_CHANNEL
 
+      - name: Prepare secure bot-token settings
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          AGENT_ADMIN_KEY: ${{ secrets.FXGA_AGENT_ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+
+          if ! gcloud secrets describe "$TELEGRAM_BOT_TOKEN_SECRET" >/dev/null 2>&1; then
+            gcloud secrets create "$TELEGRAM_BOT_TOKEN_SECRET" --replication-policy=automatic --quiet
+            echo 'Created empty Telegram bot-token secret container.'
+          fi
+          if [ -n "${TG_BOT_TOKEN:-}" ]; then
+            printf '%s' "$TG_BOT_TOKEN" | gcloud secrets versions add "$TELEGRAM_BOT_TOKEN_SECRET" --data-file=- --quiet
+            echo 'TELEGRAM_BOT_TOKEN synchronized without exposing its value.'
+          else
+            echo 'TELEGRAM_BOT_TOKEN is not set in GitHub; existing Secret Manager versions are retained. The Agents Settings page can create/replace the latest version.'
+          fi
+
+          gcloud secrets add-iam-policy-binding "$TELEGRAM_BOT_TOKEN_SECRET" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/secretmanager.secretAccessor' \
+            --quiet
+          gcloud secrets add-iam-policy-binding "$TELEGRAM_BOT_TOKEN_SECRET" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/secretmanager.secretVersionAdder' \
+            --quiet
+
+          ADMIN_READY=false
+          if [ -n "${AGENT_ADMIN_KEY:-}" ]; then
+            if gcloud secrets describe "$AGENT_ADMIN_KEY_SECRET" >/dev/null 2>&1; then
+              printf '%s' "$AGENT_ADMIN_KEY" | gcloud secrets versions add "$AGENT_ADMIN_KEY_SECRET" --data-file=- --quiet
+            else
+              printf '%s' "$AGENT_ADMIN_KEY" | gcloud secrets create "$AGENT_ADMIN_KEY_SECRET" --replication-policy=automatic --data-file=- --quiet
+            fi
+            ADMIN_READY=true
+            echo 'FXGA_AGENT_ADMIN_KEY synchronized to Secret Manager.'
+          elif gcloud secrets versions access latest --secret="$AGENT_ADMIN_KEY_SECRET" >/dev/null 2>&1; then
+            ADMIN_READY=true
+            echo 'Retaining existing FXGA agent admin key from Secret Manager.'
+          else
+            echo '::warning::FXGA_AGENT_ADMIN_KEY is not configured. Direct-add deployment will continue, but the web Agents Settings service will remain disabled.'
+          fi
+
+          if [ "$ADMIN_READY" = 'true' ]; then
+            gcloud secrets add-iam-policy-binding "$AGENT_ADMIN_KEY_SECRET" \
+              --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+              --role='roles/secretmanager.secretAccessor' \
+              --quiet
+          fi
+          echo "AGENT_ADMIN_ENABLED=$ADMIN_READY" >> "$GITHUB_ENV"
+
       - name: Build and push agent image
         run: |
           set -euo pipefail
@@ -161,6 +220,34 @@ jobs:
             --set-env-vars 'DAILY_TARGET_MIN=20,DAILY_TARGET_MAX=50,MAX_ATTEMPTS_PER_RUN=100,ATTEMPT_DELAY_MS=5000,TIME_ZONE=Africa/Johannesburg,LOCK_MINUTES=65,FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent,DRY_RUN=false' \
             --set-secrets "TELEGRAM_API_ID=$TELEGRAM_API_ID_SECRET:latest,TELEGRAM_API_HASH=$TELEGRAM_API_HASH_SECRET:latest,TELEGRAM_SESSION=$TELEGRAM_SESSION_SECRET:latest,TELEGRAM_CHANNEL=$TELEGRAM_CHANNEL_SECRET:latest" \
             --quiet
+
+      - name: Create or update Agents Settings service
+        if: env.AGENT_ADMIN_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$ADMIN_SERVICE" \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --cpu 1 \
+            --memory 256Mi \
+            --concurrency 20 \
+            --min 0 \
+            --max 1 \
+            --timeout 60 \
+            --command node \
+            --args admin-server.js \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,TELEGRAM_BOT_TOKEN_SECRET=$TELEGRAM_BOT_TOKEN_SECRET" \
+            --set-secrets "FXGA_AGENT_ADMIN_KEY=$AGENT_ADMIN_KEY_SECRET:latest" \
+            --quiet
+          ADMIN_URL="$(gcloud run services describe "$ADMIN_SERVICE" --region "$GCP_REGION" --format='value(status.url)')"
+          test -n "$ADMIN_URL" || { echo '::error::Agents Settings service URL is missing'; exit 1; }
+          curl --fail --silent --show-error "$ADMIN_URL/health" >/tmp/fxga-agent-admin-health.json
+          jq -e '.ok == true and .adminConfigured == true' /tmp/fxga-agent-admin-health.json >/dev/null
+          echo "AGENT_ADMIN_URL=$ADMIN_URL" >> "$GITHUB_ENV"
+          echo "Agents Settings: $ADMIN_URL"
 
       - name: Authorize scheduled job invocation
         run: |
@@ -203,6 +290,12 @@ jobs:
           set -euo pipefail
           echo "Cloud Run Job: $JOB_NAME"
           echo "Scheduler: $SCHEDULER_NAME ($SCHEDULE_CRON, $SCHEDULE_TIME_ZONE)"
+          if [ "${AGENT_ADMIN_ENABLED:-false}" = 'true' ]; then
+            echo "Agents Settings: ${AGENT_ADMIN_URL:-deployed}"
+          else
+            echo 'Agents Settings: disabled until FXGA_AGENT_ADMIN_KEY is configured.'
+          fi
+          echo 'Telegram bot token is isolated from the direct-add worker and stored only in Secret Manager.'
           gcloud run jobs describe "$JOB_NAME" --region "$GCP_REGION" \
             --format='table(metadata.name,spec.template.template.spec.serviceAccountName)'
           gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" \
