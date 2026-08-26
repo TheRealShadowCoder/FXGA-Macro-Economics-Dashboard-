@@ -3,7 +3,7 @@
   "name": "fxga-macro-intelligence-dashboard",
   "compatibility_date": "2026-08-26",
   "workers_dev": true,
-  "main": "./worker/src/index.js",
+  "main": "./worker/src/r0-entry.js",
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
