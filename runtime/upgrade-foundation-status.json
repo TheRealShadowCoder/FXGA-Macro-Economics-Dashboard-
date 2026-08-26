@@ -1,22 +1,22 @@
 {
   "schema": "fxga.upgrade-foundation.status.v2",
-  "recordedAt": "2026-08-26T22:58:14.738Z",
-  "conclusion": "success",
-  "verifiedSha": "cb65f5f90b3bdf53ce65420d600bff27b6cd5151",
-  "runId": 33021494487,
+  "recordedAt": "2026-08-26T23:29:51.804Z",
+  "conclusion": "cancelled",
+  "verifiedSha": null,
+  "runId": 33023528618,
   "architecture": "cloudflare-r0",
   "program": {
     "totalUpgrades": 3000,
     "domains": 30
   },
   "gates": {
-    "frontendBuild": true,
-    "r0Worker": true,
-    "r0Collectors": true,
-    "d1Contract": true,
-    "frontendCompatibility": true,
-    "researchOosGovernance": true,
-    "realtimeResilience": true,
+    "frontendBuild": false,
+    "r0Worker": false,
+    "r0Collectors": false,
+    "d1Contract": false,
+    "frontendCompatibility": false,
+    "researchOosGovernance": false,
+    "realtimeResilience": false,
     "googleCloudRuntime": false
   }
 }
