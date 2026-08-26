@@ -1,13 +1,15 @@
 {
   "name": "fxga-google-cloud-app",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.1.0",
   "type": "module",
   "fxgaArchitecture": "google-cloud-only",
   "engines": { "node": ">=24" },
   "dependencies": {
     "@google-cloud/firestore": "9.0.0",
     "@google-cloud/monitoring": "6.0.0",
+    "@google-cloud/storage": "7.17.2",
+    "pdf-lib": "1.17.1",
     "ws": "8.18.3"
   }
 }
