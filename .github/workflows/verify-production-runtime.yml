@@ -11,6 +11,8 @@ on:
       - 'wrangler.jsonc'
       - '.github/workflows/deploy-cloudflare-static.yml'
       - '.github/workflows/r0-free-market-collector.yml'
+      - '.github/workflows/verify-gemini-streaming-live.yml'
+      - '.github/workflows/verify-institutional-research.yml'
       - '.github/workflows/verify-production-runtime.yml'
   push:
     branches: [main]
@@ -21,6 +23,8 @@ on:
       - 'wrangler.jsonc'
       - '.github/workflows/deploy-cloudflare-static.yml'
       - '.github/workflows/r0-free-market-collector.yml'
+      - '.github/workflows/verify-gemini-streaming-live.yml'
+      - '.github/workflows/verify-institutional-research.yml'
       - '.github/workflows/verify-production-runtime.yml'
 
 permissions:
@@ -111,6 +115,10 @@ jobs:
             assert(script.includes('/api/internal/state/'),'R0 collector must write through Worker state ingestion');
             assert(script.includes('FXGA_INGEST_TOKEN') || script.includes('FXGA_MT5_REPORT_SECRET'),'R0 collector must authenticate ingestion');
           }
+          assert(!marketScript.includes('@google-cloud/firestore'),'R0 market collector must not import Firestore');
+          assert(!marketScript.includes('free-market-data-v2.js'),'R0 market collector must not route through the legacy Cloud Run collector');
+          assert(!marketScript.includes('market-data-budget.js'),'R0 market collector must not use the legacy Firestore budget tracker');
+          assert(marketScript.includes('firestoreDependency:false'),'R0 market collector must explicitly report Firestore disabled');
           assert(macroScript.includes('FRED_BASE_IDS'),'Macro collector must reuse the FXGA FRED universe');
 
           const retired=[
@@ -139,7 +147,8 @@ jobs:
           for(const file of retired) assert(!fs.existsSync(file),`Retired Google Cloud runtime path still exists: ${file}`);
 
           const workflowDir='.github/workflows';
-          const workflowFiles=fs.readdirSync(workflowDir).filter((name)=>/\.ya?ml$/i.test(name));
+          const self='verify-production-runtime.yml';
+          const workflowFiles=fs.readdirSync(workflowDir).filter((name)=>/\.ya?ml$/i.test(name) && name!==self);
           const forbiddenActive=[
             'google-github-actions/auth',
             'google-github-actions/setup-gcloud',
@@ -156,6 +165,13 @@ jobs:
             }
           }
           assert(violations.length===0,`Active workflow still depends on Google Cloud runtime:\n${violations.join('\n')}`);
+
+          const streaming=read('.github/workflows/verify-gemini-streaming-live.yml');
+          assert(streaming.includes('Deploy FXGA R0 Cloudflare Runtime'),'Gemini streaming verification must follow R0 deployment');
+          assert(streaming.includes('FXGA_API_BASE'),'Gemini streaming verification must target the Worker directly');
+          const institutional=read('.github/workflows/verify-institutional-research.yml');
+          assert(institutional.includes("architecture!=='cloudflare-r0'"),'Institutional research verification must enforce the R0 architecture');
+          assert(institutional.includes("budget?.firestore!==false"),'Institutional research verification must enforce Firestore-free data quality');
 
           console.log('PASS: R0 architecture contracts verified');
           console.log('Compute: Cloudflare Workers');
