@@ -9,6 +9,7 @@ type ElliottReport={id:string;symbol:string;timeframes:string[];pageCount:number
 type ElliottJob={id:string;status:string;symbol:string;timeframes:string[];uploadedTimeframes:string[];createdAt:string|null;updatedAt:string|null;error:string|null;reportId:string|null};
 
 function formatTime(value:string|null){if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?value:d.toLocaleString();}
+function apiUrl(path:string){return API_BASE?`${API_BASE}${path}`:path;}
 function absolutePdfUrl(path:string){return API_BASE?`${API_BASE}${path}`:new URL(path,window.location.origin).toString();}
 
 export function ElliottWaveReports(){
@@ -23,7 +24,7 @@ export function ElliottWaveReports(){
   const progress=useMemo(()=>activeJob?.timeframes?.length?Math.round((activeJob.uploadedTimeframes?.length||0)/activeJob.timeframes.length*100):0,[activeJob]);
 
   const refreshReports=useCallback(async()=>{
-    const response=await fetch('/api/elliott-reports',{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+    const response=await fetch(apiUrl('/api/elliott-reports'),{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
     const payload=await response.json().catch(()=>({}));
     if(!response.ok)throw new Error(payload.error||`Reports API ${response.status}`);
     setReports(Array.isArray(payload.reports)?payload.reports:[]);
@@ -37,7 +38,7 @@ export function ElliottWaveReports(){
     let cancelled=false;
     const poll=async()=>{
       try{
-        const response=await fetch(`/api/elliott-reports/jobs/${encodeURIComponent(activeJob.id)}`,{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
+        const response=await fetch(apiUrl(`/api/elliott-reports/jobs/${encodeURIComponent(activeJob.id)}`),{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
         const payload=await response.json().catch(()=>({}));
         if(!response.ok)throw new Error(payload.error||`Job API ${response.status}`);
         if(cancelled)return;
@@ -55,7 +56,7 @@ export function ElliottWaveReports(){
     const clean=String(symbol||'XAUUSD').trim().toUpperCase().replace(/[^A-Z0-9._-]/g,'').slice(0,32)||'XAUUSD';
     setSymbol(clean);setLoading(true);setMessage('Sending an on-demand capture job to MT5…');
     try{
-      const response=await fetch('/api/elliott-reports/request',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({symbol:clean,timeframes:ALL_MT5_TIMEFRAMES})});
+      const response=await fetch(apiUrl('/api/elliott-reports/request'),{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({symbol:clean,timeframes:ALL_MT5_TIMEFRAMES})});
       const payload=await response.json().catch(()=>({}));
       if(!response.ok)throw new Error(payload.error||`Analyze request ${response.status}`);
       setActiveJob(payload.job);setMessage(bridge.online?'MT5 accepted queue polling. Screenshots will be captured only for this Analyze request.':'Analyze job queued. MT5 is currently offline; capture will start when the bridge reconnects.');
@@ -93,6 +94,6 @@ export function ElliottWaveReports(){
         {selected?<iframe title={`${selected.symbol} Elliott Wave PDF`} src={absolutePdfUrl(selected.pdfUrl)}/>:<div className="ewr-empty viewer">Choose View on a generated PDF to inspect every timeframe chart without leaving the dashboard.</div>}
       </div>
     </div>
-    <small className="ewr-foot">Last MT5 bridge heartbeat: {formatTime(bridge.lastSeen)}{bridge.terminalId?` · ${bridge.terminalId}`:''}. PDFs remain in private Google Cloud Storage and are streamed through this website API.</small>
+    <small className="ewr-foot">Last MT5 bridge heartbeat: {formatTime(bridge.lastSeen)}{bridge.terminalId?` · ${bridge.terminalId}`:''}. PDFs remain in private Google Cloud Firestore storage and are streamed through this website API.</small>
   </section>;
 }
