@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "fxga-macro-intelligence-dashboard",
-  "compatibility_date": "2026-08-27",
+  "compatibility_date": "2026-08-26",
   "workers_dev": true,
   "main": "./worker/src/auth-gateway.js",
   "assets": {
