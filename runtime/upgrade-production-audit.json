@@ -1,6 +1,6 @@
 {
   "schema": "fxga.upgrade-production.audit.v1",
-  "generatedAt": "2026-08-26T16:53:26.637Z",
+  "generatedAt": "2026-08-26T20:21:23.543Z",
   "passed": true,
   "site": "https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev",
   "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app",
@@ -14,17 +14,17 @@
     {
       "name": "current-static-release",
       "passed": true,
-      "durationMs": 207,
+      "durationMs": 159,
       "detail": {
         "release": "cross-asset-mt5-60d-event-research",
-        "commit": "24838896129c5f0c7881bc573561d5cbe78f800f",
+        "commit": "4ab29c69b860c7dff1fac50e646ca231c00c1048",
         "backend": "https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app"
       }
     },
     {
       "name": "frontend-upgrade-ui",
       "passed": true,
-      "durationMs": 122,
+      "durationMs": 118,
       "detail": {
         "scripts": 1
       }
@@ -32,23 +32,23 @@
     {
       "name": "google-api-health",
       "passed": true,
-      "durationMs": 322,
+      "durationMs": 331,
       "detail": {
-        "calendar": "2026-08-26T16:45:11.308Z",
-        "macro": "2026-08-26T16:01:33.514Z",
+        "calendar": "2026-08-26T17:15:01.224Z",
+        "macro": "2026-08-26T20:01:35.998Z",
         "intelligence": "2026-08-21T02:52:15.275Z",
-        "market": "2026-08-26T16:52:22.282Z",
-        "technical": "2026-08-26T16:52:22.282Z"
+        "market": "2026-08-26T20:20:35.675Z",
+        "technical": "2026-08-26T20:20:41.466Z"
       }
     },
     {
       "name": "event-study-full-research",
       "passed": true,
-      "durationMs": 936,
+      "durationMs": 1387,
       "detail": {
         "studies": 40,
-        "evidenceBundles": 30,
-        "preNewsStudies": 30,
+        "evidenceBundles": 29,
+        "preNewsStudies": 29,
         "backtests": 0,
         "validated": 0
       }
@@ -56,7 +56,7 @@
     {
       "name": "event-pattern-oos-api",
       "passed": true,
-      "durationMs": 200,
+      "durationMs": 96,
       "detail": {
         "tests": 0,
         "validated": 0
@@ -65,7 +65,7 @@
     {
       "name": "event-source-fusion",
       "passed": true,
-      "durationMs": 153,
+      "durationMs": 227,
       "detail": {
         "fred": 80,
         "cnbc": 16,
@@ -76,7 +76,7 @@
     {
       "name": "signal-live",
       "passed": true,
-      "durationMs": 41,
+      "durationMs": 46,
       "detail": {
         "count": 0
       }
@@ -84,7 +84,7 @@
     {
       "name": "signal-history",
       "passed": true,
-      "durationMs": 64,
+      "durationMs": 59,
       "detail": {
         "count": 5
       }
@@ -92,7 +92,7 @@
     {
       "name": "signal-metrics",
       "passed": true,
-      "durationMs": 42,
+      "durationMs": 44,
       "detail": {
         "signals": 5,
         "events": 8
@@ -101,7 +101,7 @@
     {
       "name": "data-quality-safe",
       "passed": true,
-      "durationMs": 266,
+      "durationMs": 64,
       "detail": {
         "requested": 218,
         "liveFetched": 0,
@@ -117,7 +117,7 @@
     {
       "name": "mt5-60d",
       "passed": true,
-      "durationMs": 528,
+      "durationMs": 698,
       "detail": {
         "bars": 48657,
         "chunks": 72,
