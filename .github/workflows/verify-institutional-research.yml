@@ -1,29 +1,26 @@
-name: Verify Institutional Research Platform
+name: Verify Institutional Research Platform R0
 
 on:
   workflow_run:
-    workflows: ['Deploy FXGA Google Cloud Application']
+    workflows: ['Deploy FXGA R0 Cloudflare Runtime']
     types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
-
-env:
-  APP_SERVICE: fxga-macro-dashboard
-  GCP_PROJECT_ID: fxglobalavengerstradingacademy
-  GCP_REGION: us-central1
-  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
 
 concurrency:
-  group: verify-institutional-research-google-cloud
+  group: verify-institutional-research-r0
   cancel-in-progress: true
+
+env:
+  FXGA_API_BASE: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
 
 jobs:
   verify:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
@@ -36,7 +33,7 @@ jobs:
           node <<'NODE'
           const fs=require('fs');
           const files=['src/App.tsx','src/components/AcquisitionView.tsx','src/components/DecisionIntelligence.tsx','src/components/ResearchView.tsx'];
-          const banned=[/FXGA\s*9705/i,/Google Cloud/i,/Cloudflare/i,/Super Economist/i,/\bWS\b/];
+          const banned=[/FXGA\s*9705/i,/Super Economist/i,/\bWS\b/];
           for(const file of files){
             const text=fs.readFileSync(file,'utf8');
             for(const pattern of banned)if(pattern.test(text))throw new Error(`${file} exposes internal wording matched by ${pattern}`);
@@ -46,96 +43,70 @@ jobs:
           console.log('Public-language and brand contract passed.');
           NODE
 
-      - id: config
-        name: Resolve Google Cloud authentication
-        env:
-          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
-          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+      - name: Verify live R0 institutional foundation
         run: |
-          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
-          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
-          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
-
-      - uses: google-github-actions/auth@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
-          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Resolve public Google Cloud application
-        run: |
-          gcloud config set project "$GCP_PROJECT_ID"
-          APP_URL=$(gcloud run services describe "$APP_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
-          test -n "$APP_URL" || { echo '::error::FXGA Google Cloud application is missing'; exit 1; }
-          echo "APP_URL=$APP_URL" >> "$GITHUB_ENV"
-          echo "Institutional verification target: $APP_URL"
-
-      - name: Verify complete live institutional research contract on Google Cloud
-        run: |
+          set -euo pipefail
           node <<'NODE'
-          const base=process.env.APP_URL;
-          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          const base=process.env.FXGA_API_BASE;
           async function get(path){
-            const r=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'}});
-            const text=await r.text();
-            if(!r.ok)throw new Error(`${path} ${r.status}: ${text.slice(0,800)}`);
-            return JSON.parse(text);
+            const response=await fetch(base+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
+            const text=await response.text();
+            if(!response.ok)throw new Error(`${path} ${response.status}: ${text.slice(0,800)}`);
+            try{return JSON.parse(text);}catch{throw new Error(`${path} did not return JSON`);}
           }
-          function normalizedCoverage(research,quality){
-            const raw=quality?.macro?.coverage&&typeof quality.macro.coverage==='object'?quality.macro.coverage:{};
-            const observed=Number(research?.dataQuality?.diagnostics?.macroObservations||0);
-            const usableRaw=Number(raw.usableObservations);
-            const usable=Number.isFinite(usableRaw)&&usableRaw>0?usableRaw:observed;
-            const requestedRaw=Number(raw.requested);
-            const requested=Number.isFinite(requestedRaw)&&requestedRaw>0?Math.max(requestedRaw,usable):Math.max(180,usable);
-            const effectiveRaw=Number(raw.effectiveCoveragePercent);
-            const effective=Number.isFinite(effectiveRaw)?effectiveRaw:(requested?Math.min(100,100*usable/requested):0);
-            return {...raw,requested,usableObservations:usable,effectiveCoveragePercent:Number(effective.toFixed(1)),derivedFromMeasuredObservations:!Number.isFinite(effectiveRaw)};
-          }
-          function validate({health,research,quality,calendar,market}){
-            const errors=[];
-            if(health?.architecture!=='google-cloud-only'||health?.compute!=='Google Cloud Run'||health?.state!=='Google Cloud Firestore'||health?.cloudflareProcessing!==false)errors.push('Google Cloud only architecture');
-            if(!research||Number(research.schemaVersion)!==1)errors.push('research schema');
-            if(typeof research?.dataQuality?.overall!=='number')errors.push('research data quality');
-            if(!Array.isArray(research?.features)||research.features.length===0)errors.push('features');
-            if(!Array.isArray(research?.forecasts)||research.forecasts.length===0)errors.push('forecasts');
-            if(!Array.isArray(research?.regimes)||research.regimes.length===0)errors.push('regimes');
-            if(!Array.isArray(research?.risk?.categories)||research.risk.categories.length<10)errors.push('risk categories');
-            if(!Array.isArray(research?.scenarios)||research.scenarios.length<10)errors.push('research scenarios');
-            if(!Array.isArray(research?.releaseAnalytics?.profiles))errors.push('release analytics');
-            if(Number(research?.capabilityCoverage?.total)!==40)errors.push('capability coverage');
-            if(!research?.provenance?.reproducibilityHash)errors.push('reproducibility hash');
-            if(!Array.isArray(research?.operatingStandards?.slos)||research.operatingStandards.slos.length<7)errors.push('operating SLOs');
-            const coverage=normalizedCoverage(research,quality);
-            if(Number(coverage.usableObservations||0)<100)errors.push(`usable observations ${coverage.usableObservations||0}`);
-            if(Number(coverage.effectiveCoveragePercent||0)<75)errors.push(`effective coverage ${coverage.effectiveCoveragePercent||0}%`);
-            if(!quality?.macro?.failures||typeof quality.macro.failures.total!=='number')errors.push('failure diagnostics');
-            if(!Array.isArray(calendar?.events))errors.push('calendar history');
-            if(!Array.isArray(market?.assets)||market.assets.length===0)errors.push('market snapshot');
-            return {errors,coverage};
-          }
-          let lastErrors=['not started'],snapshot=null,verifiedCoverage=null;
-          for(let attempt=1;attempt<=30;attempt++){
-            try{
-              const [health,research,quality,calendar,market]=await Promise.all([
-                get('/api/health'),get('/api/research'),get('/api/data-quality'),get('/api/calendar-history?days=7'),get('/api/market-prices')
-              ]);
-              const checked=validate({health,research,quality,calendar,market});
-              if(!checked.errors.length){snapshot={health,research,quality,calendar,market};verifiedCoverage=checked.coverage;break;}
-              lastErrors=checked.errors;
-              console.log(`Attempt ${attempt}/30 waiting for: ${checked.errors.join(', ')}`);
-            }catch(error){
-              lastErrors=[String(error?.message||error)];
-              console.log(`Attempt ${attempt}/30: ${lastErrors[0]}`);
-            }
-            await sleep(5000);
-          }
-          if(!snapshot)throw new Error(`Institutional research contract did not converge: ${lastErrors.join('; ')}`);
-          const [scenarios,releases]=await Promise.all([get('/api/scenarios'),get('/api/release-analytics')]);
-          if(!Array.isArray(scenarios?.scenarios)||scenarios.scenarios.length<10)throw new Error('Scenario endpoint invalid');
-          if(!Array.isArray(releases?.profiles))throw new Error('Release analytics endpoint invalid');
-          const {health,research,quality,calendar,market}=snapshot,coverage=verifiedCoverage;
-          console.log(JSON.stringify({architecture:health.architecture,compute:health.compute,state:health.state,cloudflareProcessing:health.cloudflareProcessing,institutionalDataQuality:research.dataQuality.overall,macroEffectiveCoverage:coverage.effectiveCoveragePercent,macroUsableObservations:coverage.usableObservations,coverageDerivedFromMeasuredObservations:coverage.derivedFromMeasuredObservations===true,macroFailures:quality.macro.failures.total,features:research.features.length,forecasts:research.forecasts.length,regimes:research.regimes.length,riskCategories:research.risk.categories.length,scenarios:scenarios.scenarios.length,releaseProfiles:releases.profiles.length,calendarHistory:calendar.events.length,marketAssets:market.assets.length},null,2));
+          const [health,ai,market,technical,quality,research,scenarios,releases]=await Promise.all([
+            get('/api/health'),
+            get('/api/gemini/intelligence-health'),
+            get('/api/market-prices'),
+            get('/api/technical'),
+            get('/api/data-quality'),
+            get('/api/research'),
+            get('/api/scenarios'),
+            get('/api/release-analytics'),
+          ]);
+
+          if(health.architecture!=='cloudflare-r0')throw new Error(`Unexpected architecture ${health.architecture}`);
+          if(health.compute!=='Cloudflare Workers Free')throw new Error(`Unexpected compute ${health.compute}`);
+          if(health.database!=='Cloudflare D1 Free')throw new Error(`Unexpected database ${health.database}`);
+          if(health.googleCloudRuntime!==false)throw new Error('Google Cloud runtime must remain disabled');
+          if(ai.configured!==true)throw new Error('Gemini AI is not configured');
+          if(Number(ai.promptCount||0)<6)throw new Error(`Prompt registry too small: ${ai.promptCount||0}`);
+
+          if(market.schema!=='fxga.r0.market-data.v1')throw new Error(`Market R0 schema missing: ${market.schema||'none'}`);
+          if(!Array.isArray(market.canonicalFx)||market.canonicalFx.length<1)throw new Error('Canonical FX market state is empty');
+          if(market?._r0?.source!=='cloudflare-d1')throw new Error('Market state is not being served from D1');
+
+          if(technical.schema!=='fxga.r0.technical-market-context.v1')throw new Error(`Technical R0 schema missing: ${technical.schema||'none'}`);
+          if(technical?._r0?.source!=='cloudflare-d1')throw new Error('Technical state is not being served from D1');
+
+          if(quality.schema!=='fxga.r0.data-quality.v1')throw new Error(`Data-quality R0 schema missing: ${quality.schema||'none'}`);
+          if(Number(quality?.counts?.providersHealthy||0)<1)throw new Error('No healthy free market provider is recorded');
+          if(quality?._r0?.source!=='cloudflare-d1')throw new Error('Data-quality state is not being served from D1');
+          if(quality?.budget?.firestore!==false)throw new Error('R0 data-quality state must explicitly report no Firestore dependency');
+
+          const optionalState = (name,value) => ({
+            name,
+            available: value?.available !== false,
+            source: value?._r0?.source || value?.source || null,
+          });
+          const optional=[
+            optionalState('research',research),
+            optionalState('scenarios',scenarios),
+            optionalState('release-analytics',releases),
+          ];
+
+          console.log(JSON.stringify({
+            architecture:health.architecture,
+            compute:health.compute,
+            database:health.database,
+            googleCloudRuntime:health.googleCloudRuntime,
+            geminiConfigured:ai.configured,
+            promptCount:ai.promptCount,
+            canonicalFx:market.canonicalFx.length,
+            contextAssets:Array.isArray(market.contextAssets)?market.contextAssets.length:0,
+            microstructureAssets:Array.isArray(market.microstructureAssets)?market.microstructureAssets.length:0,
+            providersHealthy:quality.counts.providersHealthy,
+            firestoreDependency:quality.budget.firestore,
+            optionalResearchStates:optional,
+          },null,2));
           NODE
