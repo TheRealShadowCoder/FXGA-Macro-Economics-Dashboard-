@@ -1,9 +1,9 @@
 {
   "schema": "fxga.upgrade-foundation.status.v2",
-  "recordedAt": "2026-08-26T23:31:02.578Z",
+  "recordedAt": "2026-08-26T23:32:29.993Z",
   "conclusion": "failure",
   "verifiedSha": null,
-  "runId": 33023588605,
+  "runId": 33023670954,
   "architecture": "cloudflare-r0",
   "program": {
     "totalUpgrades": 3000,
