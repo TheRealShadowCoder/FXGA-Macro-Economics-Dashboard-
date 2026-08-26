@@ -1,12 +1,13 @@
-name: R0 Free Market Collector
+name: R0 Free Data Collectors
 
 on:
   workflow_dispatch:
   schedule:
     - cron: '*/15 * * * *'
+    - cron: '17 * * * *'
 
 concurrency:
-  group: fxga-r0-free-market-collector
+  group: fxga-r0-free-data-${{ github.event.schedule || 'manual' }}
   cancel-in-progress: true
 
 permissions:
@@ -16,7 +17,8 @@ env:
   FXGA_API_BASE: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
 
 jobs:
-  collect:
+  market:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -45,3 +47,30 @@ jobs:
 
       - name: Collect free market data and write D1 states
         run: node scripts/r0-collect-market.mjs
+
+  macro:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FXGA_INGEST_TOKEN: ${{ secrets.FXGA_INGEST_TOKEN }}
+      FXGA_MT5_REPORT_SECRET: ${{ secrets.FXGA_MT5_REPORT_SECRET }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Validate free macro collector secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${FXGA_INGEST_TOKEN:-}" ] && [ -z "${FXGA_MT5_REPORT_SECRET:-}" ]; then
+            echo '::error::Add FXGA_INGEST_TOKEN or reuse FXGA_MT5_REPORT_SECRET under repository Actions secrets.'
+            exit 1
+          fi
+          test -n "$FRED_API_KEY" || { echo '::error::FRED_API_KEY is required for the free FRED macro collector.'; exit 1; }
+
+      - name: Collect FRED macro evidence and write D1
+        run: node scripts/r0-collect-macro.mjs
