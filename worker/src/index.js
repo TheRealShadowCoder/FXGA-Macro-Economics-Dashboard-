@@ -310,6 +310,7 @@ async function routeApi(request, env) {
       const body = await parseBody(request);
       const result = await buildChat(env,body);
       return sse([
+        {event:'status',data:{phase:'connected',message:'FXGA evidence context resolved.',task:result.task}},
         {event:'status',data:{phase:'complete',message:result.cached?'Loaded verified cached AI result.':'Gemini analysis completed.',model:result.model,task:result.task}},
         {event:'delta',data:{text:result.answer,model:result.model,cached:result.cached}},
         {event:'done',data:{result}},
