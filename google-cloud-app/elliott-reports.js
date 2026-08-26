@@ -2,352 +2,121 @@ import crypto from 'node:crypto';
 import { FieldValue } from '@google-cloud/firestore';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
+const DOSSIER_VERSION='FXGA_60D_AI_DOSSIER_1';
+const MIN_HISTORY_DAYS=60;
 const DEFAULT_TIMEFRAMES=['M1','M2','M3','M4','M5','M6','M10','M12','M15','M20','M30','H1','H2','H3','H4','H6','H8','H12','D1','W1','MN1'];
 const TIMEFRAME_SET=new Set(DEFAULT_TIMEFRAMES);
 const JOBS='fxga_elliott_report_jobs';
 const REPORTS='fxga_elliott_reports';
 const META='fxga_elliott_report_meta';
 const BLOBS='fxga_elliott_report_blobs';
+const EVIDENCE='fxga_elliott_ai_evidence';
+const STATE='fxga_collector_state';
+const STATE_CHUNKS='fxga_collector_state_chunks';
 const MAX_SCREENSHOT_BYTES=8*1024*1024;
 const MAX_JSON_BYTES=64*1024;
+const MAX_HISTORY_BYTES=16*1024*1024;
 const BLOB_CHUNK_BYTES=700*1024;
 const WRITE_BATCH_MAX=400;
 const CLAIM_STALE_MS=20*60*1000;
 const BRIDGE_ONLINE_MS=30000;
 const REQUEST_WINDOW_MS=60000;
 const REQUESTS_PER_WINDOW=5;
+const PAGE={landscape:[842,595],portrait:[595,842]};
+const COLORS={bg:rgb(0.035,0.045,0.065),gold:rgb(0.92,0.78,0.28),text:rgb(0.88,0.90,0.94),muted:rgb(0.64,0.69,0.76),line:rgb(0.17,0.20,0.27)};
 
-function toIso(value){
-  if(!value)return null;
-  if(typeof value==='string')return value;
-  if(value instanceof Date)return value.toISOString();
-  if(typeof value?.toDate==='function')return value.toDate().toISOString();
-  if(typeof value?._seconds==='number')return new Date(value._seconds*1000).toISOString();
-  return null;
-}
+function toIso(value){if(!value)return null;if(typeof value==='string')return value;if(value instanceof Date)return value.toISOString();if(typeof value?.toDate==='function')return value.toDate().toISOString();if(typeof value?._seconds==='number')return new Date(value._seconds*1000).toISOString();return null;}
 function safeId(value,max=80){return String(value??'').trim().replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,max);}
 function safeSymbol(value){return safeId(String(value??'XAUUSD').toUpperCase(),32)||'XAUUSD';}
-function normalizeTimeframes(value){
-  const raw=Array.isArray(value)?value:String(value??'').split(',');
-  const unique=[];
-  for(const item of raw){
-    const tf=String(item??'').trim().toUpperCase();
-    if(TIMEFRAME_SET.has(tf)&&!unique.includes(tf))unique.push(tf);
-  }
-  return unique.length?unique:[...DEFAULT_TIMEFRAMES];
-}
+function normalizeTimeframes(value){const raw=Array.isArray(value)?value:String(value??'').split(',');const unique=[];for(const item of raw){const tf=String(item??'').trim().toUpperCase();if(TIMEFRAME_SET.has(tf)&&!unique.includes(tf))unique.push(tf);}return unique.length?unique:[...DEFAULT_TIMEFRAMES];}
 function requestIp(req){return String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'unknown').split(',')[0].trim();}
-function secretEqual(received,expected){
-  const a=Buffer.from(String(received??'')),b=Buffer.from(String(expected??''));
-  return a.length===b.length&&a.length>0&&crypto.timingSafeEqual(a,b);
-}
-async function readBody(req,maxBytes){
-  const chunks=[];let total=0;
-  for await(const chunk of req){
-    total+=chunk.length;
-    if(total>maxBytes)throw Object.assign(new Error('Request body too large'),{statusCode:413});
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-async function readJson(req){
-  const body=await readBody(req,MAX_JSON_BYTES);
-  if(!body.length)return{};
-  try{return JSON.parse(body.toString('utf8'));}
-  catch{throw Object.assign(new Error('Invalid JSON body'),{statusCode:400});}
-}
-function reportFileName(symbol,createdAt){
-  const stamp=new Date(createdAt||Date.now()).toISOString().replace(/[:.]/g,'-');
-  return `FXGA_Elliott_${safeSymbol(symbol)}_${stamp}.pdf`;
-}
-function publicJob(doc){
-  const d=doc.data?.()??doc;
-  return{
-    id:doc.id??d.id,status:d.status??'UNKNOWN',symbol:d.symbol??'',
-    timeframes:d.timeframes??[],uploadedTimeframes:d.uploadedTimeframes??[],
-    createdAt:toIso(d.createdAt),updatedAt:toIso(d.updatedAt),
-    claimedAt:toIso(d.claimedAt),completedAt:toIso(d.completedAt),
-    terminalId:d.terminalId??null,error:d.error??null,reportId:d.reportId??null
-  };
-}
-function publicReport(doc){
-  const d=doc.data?.()??doc,id=doc.id??d.id;
-  return{
-    id,symbol:d.symbol??'',timeframes:d.timeframes??[],pageCount:Number(d.pageCount??0),
-    createdAt:toIso(d.createdAt),completedAt:toIso(d.completedAt),
-    fileName:d.fileName??'FXGA_Elliott_Report.pdf',
-    pdfUrl:`/api/elliott-reports/${encodeURIComponent(id)}/pdf`
-  };
-}
+function secretEqual(received,expected){const a=Buffer.from(String(received??'')),b=Buffer.from(String(expected??''));return a.length===b.length&&a.length>0&&crypto.timingSafeEqual(a,b);}
+async function readBody(req,maxBytes){const chunks=[];let total=0;for await(const chunk of req){total+=chunk.length;if(total>maxBytes)throw Object.assign(new Error('Request body too large'),{statusCode:413});chunks.push(chunk);}return Buffer.concat(chunks);}
+async function readJson(req){const body=await readBody(req,MAX_JSON_BYTES);if(!body.length)return{};try{return JSON.parse(body.toString('utf8'));}catch{throw Object.assign(new Error('Invalid JSON body'),{statusCode:400});}}
+function reportFileName(symbol,createdAt){const stamp=new Date(createdAt||Date.now()).toISOString().replace(/[:.]/g,'-');return `FXGA_60D_Elliott_Macro_Dossier_${safeSymbol(symbol)}_${stamp}.pdf`;}
+function asNumber(value){const n=Number(value);return Number.isFinite(n)?n:null;}
+function asText(value,max=600){return String(value??'').replace(/[\u0000-\u001f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,max);}
+function ascii(value){return String(value??'').normalize('NFKD').replace(/[^\x20-\x7E]/g,'?');}
+function parseDateFlexible(value){if(value===null||value===undefined||value==='')return null;if(typeof value==='number'){const ms=value<1e12?value*1000:value;return Number.isFinite(ms)?new Date(ms):null;}const raw=String(value).trim();if(!raw)return null;if(/^\d{10,13}$/.test(raw)){const n=Number(raw);return new Date(raw.length===10?n*1000:n);}const parsed=Date.parse(raw);if(Number.isFinite(parsed))return new Date(parsed);const m=raw.match(/^(\d{4})[.\/-](\d{2})[.\/-](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);if(m)return new Date(Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+(m[6]||0)));return null;}
+function publicJob(doc){const d=doc.data?.()??doc;return{id:doc.id??d.id,status:d.status??'UNKNOWN',symbol:d.symbol??'',timeframes:d.timeframes??[],uploadedTimeframes:d.uploadedTimeframes??[],createdAt:toIso(d.createdAt),updatedAt:toIso(d.updatedAt),claimedAt:toIso(d.claimedAt),completedAt:toIso(d.completedAt),terminalId:d.terminalId??null,error:d.error??null,reportId:d.reportId??null,historyUploaded:Boolean(d.historyBlobId),historyDaysRequested:Number(d.historyDaysRequested||MIN_HISTORY_DAYS),dossierVersion:d.dossierVersion||DOSSIER_VERSION};}
+function publicReport(doc){const d=doc.data?.()??doc,id=doc.id??d.id;return{id,symbol:d.symbol??'',timeframes:d.timeframes??[],pageCount:Number(d.pageCount??0),createdAt:toIso(d.createdAt),completedAt:toIso(d.completedAt),fileName:d.fileName??'FXGA_Elliott_Dossier.pdf',pdfUrl:`/api/elliott-reports/${encodeURIComponent(id)}/pdf`,dossierVersion:d.dossierVersion||DOSSIER_VERSION,historyDays:Number(d.historyDays||0),historyRows:Number(d.historyRows||0),h1Rows:Number(d.h1Rows||0),eventCount:Number(d.eventCount||0),evidenceCount:Number(d.evidenceCount||0),aiInputMode:d.aiInputMode||'single-pdf-dossier',historyCoverageComplete:Boolean(d.historyCoverageComplete),eventCoverageNote:d.eventCoverageNote||null};}
+
+function csvSplit(line){return line.split(',').map(x=>x.trim());}
+function parseHistoryCsv(buffer){const text=buffer.toString('utf8').replace(/^\uFEFF/,'');const meta={};const rows=[];let header=null;for(const rawLine of text.split(/\r?\n/)){const line=rawLine.trim();if(!line)continue;if(line.startsWith('#')){const parts=csvSplit(line.slice(1));if(parts.length>=2)meta[parts[0]]=parts.slice(1).join(',');continue;}if(!header){header=csvSplit(line);continue;}const parts=csvSplit(line);if(parts.length<header.length)continue;const obj=Object.fromEntries(header.map((h,i)=>[h,parts[i]]));const utcEpoch=asNumber(obj.time_utc_epoch),serverDate=parseDateFlexible(obj.time_server);const timeMs=utcEpoch!==null?utcEpoch*1000:serverDate?.getTime();if(!Number.isFinite(timeMs))continue;const row={tf:String(obj.tf||'').toUpperCase(),timeMs,timeIso:new Date(timeMs).toISOString(),timeServer:obj.time_server||'',open:asNumber(obj.open),high:asNumber(obj.high),low:asNumber(obj.low),close:asNumber(obj.close),tickVolume:asNumber(obj.tick_volume),spread:asNumber(obj.spread),realVolume:asNumber(obj.real_volume)};if(!TIMEFRAME_SET.has(row.tf)||[row.open,row.high,row.low,row.close].some(v=>v===null))continue;rows.push(row);}rows.sort((a,b)=>a.timeMs-b.timeMs);const byTf={};for(const row of rows)(byTf[row.tf]??=[]).push(row);return{meta,rows,byTf};}
+function historyCoverage(history,nowMs){const h1=history.byTf.H1||[];if(!h1.length)return{days:0,complete:false,start:null,end:null,h1Rows:0};const start=h1[0].timeMs,end=h1[h1.length-1].timeMs,days=(end-start)/86400000,freshness=(nowMs-end)/86400000;return{days,complete:days>=MIN_HISTORY_DAYS-1&&freshness<=2,start:new Date(start).toISOString(),end:new Date(end).toISOString(),h1Rows:h1.length};}
+function binaryBefore(rows,target){let lo=0,hi=rows.length-1,best=-1;while(lo<=hi){const mid=(lo+hi)>>1;if(rows[mid].timeMs<=target){best=mid;lo=mid+1;}else hi=mid-1;}return best>=0?rows[best]:null;}
+function binaryAfter(rows,target){let lo=0,hi=rows.length-1,best=-1;while(lo<=hi){const mid=(lo+hi)>>1;if(rows[mid].timeMs>=target){best=mid;hi=mid-1;}else lo=mid+1;}return best>=0?rows[best]:null;}
+function atrBefore(rows,target,period=14){const idx=rows.findIndex(r=>r.timeMs>=target);const end=idx<0?rows.length-1:Math.max(1,idx-1);if(end<period)return null;let sum=0,count=0;for(let i=end-period+1;i<=end;i++){const prev=rows[i-1]?.close??rows[i].open;sum+=Math.max(rows[i].high-rows[i].low,Math.abs(rows[i].high-prev),Math.abs(rows[i].low-prev));count++;}return count?sum/count:null;}
+function historyStats(rows){if(!rows?.length)return null;let high=-Infinity,low=Infinity,volume=0;const returns=[];for(let i=0;i<rows.length;i++){high=Math.max(high,rows[i].high);low=Math.min(low,rows[i].low);volume+=rows[i].tickVolume||0;if(i>0&&rows[i-1].close>0&&rows[i].close>0)returns.push(Math.log(rows[i].close/rows[i-1].close));}const mean=returns.length?returns.reduce((a,b)=>a+b,0)/returns.length:0,variance=returns.length?returns.reduce((a,b)=>a+(b-mean)**2,0)/returns.length:0;return{rows:rows.length,start:rows[0].timeIso,end:rows.at(-1).timeIso,open:rows[0].open,close:rows.at(-1).close,high,low,change:rows.at(-1).close-rows[0].open,changePct:rows[0].open?((rows.at(-1).close/rows[0].open)-1)*100:null,logReturnStd:Math.sqrt(variance),avgTickVolume:volume/rows.length};}
+function first(obj,keys){for(const key of keys)if(obj&&obj[key]!==undefined&&obj[key]!==null&&obj[key]!=='')return obj[key];return null;}
+function normalizeEvent(obj,source,path=''){if(!obj||typeof obj!=='object'||Array.isArray(obj))return null;let time=first(obj,['timestamp','datetime','dateTime','eventTime','releaseTime','scheduledAt','scheduled_at','publishedAt','time','date']);if(obj.date&&obj.time&&String(obj.date)!==String(obj.time))time=`${obj.date} ${obj.time}`;const date=parseDateFlexible(time);if(!date)return null;const title=first(obj,['title','name','eventName','event','indicator','release','series','description']);if(!title)return null;return{timeMs:date.getTime(),timeIso:date.toISOString(),title:asText(title,220),currency:asText(first(obj,['currency','ccy','currencyCode','countryCode','country','region']),40).toUpperCase(),impact:asText(first(obj,['impact','importance','priority','severity']),60).toUpperCase(),actual:first(obj,['actual','value','releasedValue']),forecast:first(obj,['forecast','consensus','expected','estimate']),previous:first(obj,['previous','prior','previousValue']),unit:asText(first(obj,['unit','units']),30),source,path};}
+function collectEvents(value,source,out,depth=0,path='root'){if(depth>7||value===null||value===undefined)return;if(Array.isArray(value)){for(let i=0;i<Math.min(value.length,4000);i++)collectEvents(value[i],source,out,depth+1,`${path}[${i}]`);return;}if(typeof value!=='object')return;const event=normalizeEvent(value,source,path);if(event)out.push(event);for(const [key,child] of Object.entries(value)){if(['payload','data','events','observations','releases','releaseAnalytics','macroAnalysis','economyAnalysis','research','calendar'].includes(key)||Array.isArray(child))collectEvents(child,source,out,depth+1,`${path}.${key}`);}}
+function relevantCurrencies(symbol){const s=safeSymbol(symbol).replace(/[^A-Z]/g,''),set=new Set();if(s.startsWith('XAU')||s.startsWith('XAG')||s.includes('OIL')||s.includes('WTI')||s.includes('BRENT'))set.add('USD');if(s.length>=6){set.add(s.slice(0,3));set.add(s.slice(3,6));}return set;}
+function eventRelevant(event,symbol){const set=relevantCurrencies(symbol);if(!event.currency)return true;const c=event.currency.replace(/[^A-Z]/g,'');if(set.has(c))return true;if(['HIGH','3','RED','MAJOR'].some(x=>event.impact.includes(x)))return true;return false;}
+function dedupeEvents(events){const seen=new Set(),out=[];for(const event of events.sort((a,b)=>a.timeMs-b.timeMs)){const key=`${Math.round(event.timeMs/60000)}|${event.currency}|${event.title.toLowerCase()}`;if(seen.has(key))continue;seen.add(key);out.push(event);}return out;}
+function eventReaction(event,history){const m5=history.byTf.M5||history.byTf.M15||history.byTf.H1||[],h1=history.byTf.H1||[];if(!m5.length)return null;const before=binaryBefore(m5,event.timeMs);if(!before)return null;const horizons=[['5m',5*60000],['15m',15*60000],['1h',60*60000],['4h',4*60*60000],['1d',24*60*60000]],result={baseline:before.close,baselineTime:before.timeIso,atrH1:atrBefore(h1,event.timeMs,14),horizons:{}};for(const [label,delta] of horizons){const row=binaryAfter(m5,event.timeMs+delta);if(!row||row.timeMs-event.timeMs-delta>48*60*60000){result.horizons[label]=null;continue;}const change=row.close-before.close;result.horizons[label]={time:row.timeIso,close:row.close,change,changePct:before.close?change/before.close*100:null,atrUnits:result.atrH1?change/result.atrH1:null};}return result;}
+function extractPivots(evidenceRows){const out=[];for(const row of evidenceRows){const e=row.evidence||{},states=e.timeframeStates||{};for(const [stateName,state] of Object.entries(states)){for(const pivot of Array.isArray(state?.pivots)?state.pivots:[]){if(pivot?.confirmed===false)continue;const d=parseDateFlexible(pivot?.time);if(!d)continue;out.push({timeMs:d.getTime(),timeIso:d.toISOString(),price:asNumber(pivot?.price),type:pivot?.type,shift:pivot?.shift,chartTimeframe:e.chartTimeframe||row.timeframe,state:stateName,stateTf:state?.tf||'',confirmed:pivot?.confirmed!==false});}}}const seen=new Set();return out.sort((a,b)=>a.timeMs-b.timeMs).filter(p=>{const key=`${Math.round(p.timeMs/60000)}|${p.price}|${p.stateTf}|${p.type}`;if(seen.has(key))return false;seen.add(key);return true;});}
+function nearestPivot(event,pivots){if(!pivots.length)return null;let best=null,bestDelta=Infinity;for(const p of pivots){const delta=Math.abs(p.timeMs-event.timeMs);if(delta<bestDelta){best=p;bestDelta=delta;}}return best?{...best,deltaMinutes:bestDelta/60000}:null;}
+function surroundingLeg(event,pivots){if(!pivots.length)return null;let before=null,after=null;for(const p of pivots){if(p.timeMs<=event.timeMs)before=p;else{after=p;break;}}return{before,after};}
+function wrap(text,maxChars=92){const clean=ascii(text).replace(/\s+/g,' ').trim();if(!clean)return[''];const words=clean.split(' '),lines=[];let line='';for(const word of words){const next=line?`${line} ${word}`:word;if(next.length>maxChars&&line){lines.push(line);line=word;}else line=next;}if(line)lines.push(line);return lines;}
+function addPageBase(pdf,fonts,title,subtitle='',portrait=false){const [w,h]=portrait?PAGE.portrait:PAGE.landscape,page=pdf.addPage([w,h]);page.drawRectangle({x:0,y:0,width:w,height:h,color:COLORS.bg});page.drawText(ascii(title),{x:24,y:h-30,size:14,font:fonts.bold,color:COLORS.gold});if(subtitle)page.drawText(ascii(subtitle).slice(0,110),{x:24,y:h-46,size:7.5,font:fonts.regular,color:COLORS.muted});page.drawLine({start:{x:24,y:h-56},end:{x:w-24,y:h-56},thickness:0.7,color:COLORS.line});return{page,w,h,y:h-72};}
+function addTextPages(pdf,fonts,title,lines,{subtitle='',portrait=false,mono=false,fontSize=8,maxChars=110}={}){let ctx=addPageBase(pdf,fonts,title,subtitle,portrait);const font=mono?fonts.mono:fonts.regular,lh=fontSize+3;for(const source of lines){const parts=mono?[ascii(source).slice(0,maxChars)]:wrap(source,maxChars);for(const line of parts){if(ctx.y<30)ctx=addPageBase(pdf,fonts,title,subtitle,portrait);ctx.page.drawText(ascii(line),{x:26,y:ctx.y,size:fontSize,font,color:COLORS.text});ctx.y-=lh;}if(!mono)ctx.y-=2;}return ctx;}
+function fmt(value,digits=4){const n=asNumber(value);return n===null?'—':n.toFixed(digits);}
+function boolText(value){return value===true?'YES':value===false?'NO':'—';}
+function evidenceSummaryLines(row){const e=row?.evidence||{},setup=e.setup||{},risk=e.confirmedRiskPlan||e.liveRiskPlan||{},rules=e.hardRules||{},unified=e.unifiedWave||{},act=e.actionability||{},road=e.roadmap||{},primary=e.primaryScenario||{},alternate=e.alternateScenario||{};return[`Chart timeframe: ${e.chartTimeframe||row?.timeframe||'—'} | Confirmed as of: ${e.confirmedAsOf||'—'} | Strict non-repaint: ${boolText(e.nonRepaint?.strict)}`,`SETUP | ${setup.name||'—'} | direction=${setup.direction??'—'} | status=${setup.status||'—'} | confidence=${fmt(setup.confidence,2)} | RR=${fmt(setup.rr,2)}`,`CONFIRMED RISK PLAN | active=${boolText(risk.active)} execution_valid=${boolText(risk.execution_valid)} signal_ready=${boolText(risk.signal_ready)} closed_bar_ready=${boolText(risk.closed_bar_ready)} state=${risk.state||'—'} wave=${risk.wave||'—'} degree=${risk.degree||'—'}`,`ENTRY | preferred=${fmt(risk.entry)} zone=${fmt(risk.entry_low)} - ${fmt(risk.entry_high)} do_not_chase=${fmt(risk.do_not_chase)}`,`RISK | tactical_stop=${fmt(risk.tactical_stop)} structural_stop=${fmt(risk.structural_stop)} count_invalidation=${fmt(risk.count_invalidation)}`,`TARGETS | TP1=${fmt(risk.tp1)} TP2=${fmt(risk.tp2)} TP3=${fmt(risk.tp3)} | RR1=${fmt(risk.rr1,2)} RR2=${fmt(risk.rr2,2)} RR3=${fmt(risk.rr3,2)}`,`HARD ELLIOTT RULES | hard_invalidation=${boolText(rules.hard_invalidation)} framework=${rules.framework_state||'—'} validation=${rules.validation_passed??0}/${rules.validation_evaluated??0} invalidations=${rules.invalidation_fired??0}/${rules.invalidation_evaluated??0} net=${fmt(rules.net_score,2)} robustness=${fmt(rules.robustness,2)}`,`Strongest validation: ${rules.strongest_validation||'—'}`,`Strongest invalidation: ${rules.strongest_invalidation||'—'} | hard reason: ${rules.hard_reason||'—'}`,`UNIFIED WAVE | active=${boolText(unified.active)} hard_invalid=${boolText(unified.hard_invalid)} entry_qualified=${boolText(unified.entry_qualified)} grammar_valid=${boolText(unified.grammar_valid)} topology_coherent=${boolText(unified.topology_coherent)} score=${fmt(unified.unified_score,2)} entropy=${fmt(unified.scenario_entropy,3)} false_signal_risk=${fmt(unified.false_signal_risk,2)}`,`Unified phase: ${unified.phase||'—'} | reason: ${unified.reason||'—'} | block: ${unified.block_reason||'—'}`,`ACTIONABILITY | trade_allowed=${boolText(act.trade_allowed)} execution_valid=${boolText(act.execution_valid)} direction=${act.trade_direction??'—'} score=${fmt(act.actionability_score,2)} grade=${act.advantage_grade||'—'} tradeability=${act.tradeability||'—'} action=${act.action||'—'}`,`Actionability levels | entry=${fmt(act.entry)} invalidation=${fmt(act.invalidation)} target1=${fmt(act.target1)} target2=${fmt(act.target2)} RR=${fmt(act.rr,2)} | no-trade reason=${act.no_trade_reason||'—'}`,`ROADMAP | active=${boolText(road.active)} hard_legal=${boolText(road.hard_legal)} entry_qualified=${boolText(road.entry_qualified)} family=${road.correction_family||'—'} phase=${road.current_phase||'—'} next=${road.next_phase||'—'} remaining=${road.remaining_structure||'—'}`,`Roadmap levels | zone=${fmt(road.zone_low)} - ${fmt(road.zone_high)} against=${fmt(road.against_level)} target1=${fmt(road.target1)} target2=${fmt(road.target2)} score=${fmt(road.score,2)}`,`PRIMARY | valid=${boolText(primary.valid)} ${primary.name||'—'} | ${primary.interpretation||'—'} | direction=${primary.direction??'—'} confirmation=${fmt(primary.confirmation)} invalidation=${fmt(primary.invalidation)} T1=${fmt(primary.target1)} T2=${fmt(primary.target2)} confidence=${fmt(primary.confidence,2)}`,`ALTERNATE | valid=${boolText(alternate.valid)} ${alternate.name||'—'} | ${alternate.interpretation||'—'} | direction=${alternate.direction??'—'} confirmation=${fmt(alternate.confirmation)} invalidation=${fmt(alternate.invalidation)} T1=${fmt(alternate.target1)} T2=${fmt(alternate.target2)} confidence=${fmt(alternate.confidence,2)}`];}
+function chooseExecutiveEvidence(rows){let best=null,bestScore=-Infinity;for(const row of rows){const e=row.evidence||{},risk=e.confirmedRiskPlan||{},act=e.actionability||{},rules=e.hardRules||{};let score=(risk.active?100:0)+(risk.execution_valid?80:0)+(risk.signal_ready?50:0)+(risk.closed_bar_ready?40:0)+(asNumber(act.actionability_score)||0)-(rules.hard_invalidation?500:0);if(['H1','H4','M15','D1'].includes(e.chartTimeframe||row.timeframe))score+=20;if(score>bestScore){best=row;bestScore=score;}}return best||rows[0]||null;}
+function flattenStateLines(label,value,maxLines=220){const lines=[`${label} - persisted Google Cloud evidence`];let count=0;function walk(v,path,depth){if(count>=maxLines||depth>5||v===null||v===undefined)return;if(Array.isArray(v)){for(let i=0;i<Math.min(v.length,100);i++)walk(v[i],`${path}[${i}]`,depth+1);return;}if(typeof v==='object'){for(const [k,child] of Object.entries(v)){if(['events'].includes(k))continue;walk(child,path?`${path}.${k}`:k,depth+1);}return;}const text=asText(v,300);if(text){lines.push(`${path}: ${text}`);count++;}}walk(value,'',0);if(count>=maxLines)lines.push(`[Truncated after ${maxLines} scalar fields to keep the dossier readable. Full event chronology is presented separately.]`);return lines;}
+const THEORY_LINES=['Elliott Wave governance used by this dossier','An impulse is a five-wave motive sequence. Wave 2 may not retrace beyond the start of Wave 1. Wave 3 may not be the shortest of Waves 1, 3 and 5 and ordinarily does not terminate before the end of Wave 1. Wave 4 may not overlap Wave 1 price territory in a standard impulse; diagonal structures are the principal exception handled separately by the indicator.','Corrective families include zigzags (5-3-5), flats (3-3-5), triangles (3-3-3-3-3), double/triple combinations and diagonals. The exact indicator classification and its hard legality flags outrank generic textbook tendencies.','Fibonacci ratios, channel geometry, Pitchfork projections, alternation, momentum and time symmetry are supporting evidence, not cardinal rules. They may raise or lower confidence but cannot legalize a hard-invalid count.','Wave labels are degree-dependent. Parent/child nesting must remain coherent across higher, structure, trigger and micro timeframes. The AI must distinguish a lower-timeframe countertrend correction from a higher-timeframe trend reversal.','Confirmed pivots are causal evidence. A pivot occurrence time is not the same as the time at which enough right-side closed bars existed to confirm it. If a confirmation timestamp is absent from the stored snapshot, this dossier explicitly treats it as unavailable rather than inventing it.','Economic releases are mapped to price and wave structure as contextual catalysts. A release can coincide with acceleration, exhaustion, a liquidity sweep or a reversal, but event timing does not itself validate an Elliott count and must never override structural invalidation.','Forecasts and bar-0 previews are prospective only. They must not be promoted to confirmed historical facts. The AI should prefer WAIT when the primary and alternate counts remain materially unresolved or when execution evidence is not closed-bar confirmed.'];
+const AI_INSTRUCTIONS=['AI READ ORDER - AUTHORITATIVE EVIDENCE HIERARCHY','1. Confirmed closed-bar strict-non-repainting Elliott evidence.','2. Hard Elliott cardinal rules and explicit count invalidation.','3. Confirmed pivots and causal known-at-time constraints.','4. Frozen confirmed indicator trade plan: entry, stops, targets and readiness.','5. The numerical 60-day price series and derived event reactions.','6. Actual persisted economic-event chronology and macro evidence.','7. The 21 MT5 screenshots for visual confirmation of labels, nesting and context.','8. Live/developing forecasts, which may never override confirmed evidence.','','MANDATORY DECISION RULES','- Never invent an entry, stop, target, event result, wave label or probability.','- If the dossier lacks a defensible exact trade plan, return WAIT and null executable prices.','- If the preferred count is hard-invalidated, return NO_TRADE for that count.','- Economic events are catalyst/context evidence only; they cannot legalize an invalid Elliott count.','- Do not claim causality merely because an event occurred near a pivot.','- Do not claim profitability, win rate or statistical edge unless measured evidence is explicitly supplied.','- Confidence is evidence quality, not a guarantee of outcome.','- This is decision support. No order has been placed by the AI or PDF generator.'];
 
 export function createElliottReportService({db,broadcast=()=>{}}={}){
   if(!db)throw new Error('createElliottReportService requires Firestore');
-  const jobs=db.collection(JOBS),reports=db.collection(REPORTS),meta=db.collection(META),blobs=db.collection(BLOBS);
-  const requestWindows=new Map();
+  const jobs=db.collection(JOBS),reports=db.collection(REPORTS),meta=db.collection(META),blobs=db.collection(BLOBS),evidenceCol=db.collection(EVIDENCE),state=db.collection(STATE),stateChunks=db.collection(STATE_CHUNKS),requestWindows=new Map();
+  function requireMt5(req){const expected=String(process.env.FXGA_MT5_REPORT_SECRET||'');if(!expected)throw Object.assign(new Error('MT5 report bridge secret is not configured'),{statusCode:503});if(!secretEqual(req.headers['x-fxga-mt5-secret'],expected))throw Object.assign(new Error('Unauthorized MT5 report bridge'),{statusCode:401});}
+  function allowRequest(req){const key=requestIp(req),now=Date.now();let entry=requestWindows.get(key);if(!entry||now-entry.start>=REQUEST_WINDOW_MS)entry={start:now,count:0};entry.count+=1;requestWindows.set(key,entry);if(entry.count>REQUESTS_PER_WINDOW)throw Object.assign(new Error('Too many report requests; wait a minute and try again'),{statusCode:429});}
+  async function heartbeat(terminalId){await meta.doc('bridge').set({terminalId,lastTerminalSeen:new Date(),updatedAt:new Date()},{merge:true});}
+  async function bridgeState(){const snap=await meta.doc('bridge').get();if(!snap.exists)return{online:false,lastSeen:null,terminalId:null};const d=snap.data(),last=toIso(d.lastTerminalSeen),ms=last?Date.parse(last):0;return{online:Boolean(ms&&Date.now()-ms<BRIDGE_ONLINE_MS),lastSeen:last,terminalId:d.terminalId??null};}
+  function blobRef(blobId){return blobs.doc(safeId(blobId,140));}function chunkId(index){return String(index).padStart(6,'0');}
+  async function deleteBlob(blobId){if(!blobId)return;const ref=blobRef(blobId),snap=await ref.get();if(!snap.exists)return;const count=Number(snap.data()?.chunkCount||0);for(let start=0;start<count;start+=WRITE_BATCH_MAX){const batch=db.batch();for(let i=start;i<Math.min(count,start+WRITE_BATCH_MAX);i++)batch.delete(ref.collection('chunks').doc(chunkId(i)));await batch.commit();}await ref.delete();}
+  async function writeBlob(blobId,bytes,{contentType='application/octet-stream',kind='binary',jobId=null,timeframe=null}={}){const data=Buffer.from(bytes);await deleteBlob(blobId);const ref=blobRef(blobId),chunkCount=Math.ceil(data.length/BLOB_CHUNK_BYTES);await ref.set({id:safeId(blobId,140),contentType,kind,jobId,timeframe,byteLength:data.length,chunkBytes:BLOB_CHUNK_BYTES,chunkCount,createdAt:new Date(),storage:'firestore-private-chunks'});for(let start=0;start<chunkCount;start+=WRITE_BATCH_MAX){const batch=db.batch();for(let i=start;i<Math.min(chunkCount,start+WRITE_BATCH_MAX);i++){const begin=i*BLOB_CHUNK_BYTES,end=Math.min(data.length,begin+BLOB_CHUNK_BYTES);batch.set(ref.collection('chunks').doc(chunkId(i)),{index:i,bytes:data.subarray(begin,end)});}await batch.commit();}return{blobId:safeId(blobId,140),byteLength:data.length,chunkCount,contentType};}
+  async function readBlob(blobId){const ref=blobRef(blobId),metaSnap=await ref.get();if(!metaSnap.exists)throw Object.assign(new Error(`Private report blob ${blobId} is missing`),{statusCode:404});const m=metaSnap.data(),count=Number(m.chunkCount||0),parts=[];for(let start=0;start<count;start+=100){const refs=[];for(let i=start;i<Math.min(count,start+100);i++)refs.push(ref.collection('chunks').doc(chunkId(i)));const snaps=await db.getAll(...refs);for(const snap of snaps){if(!snap.exists)throw Object.assign(new Error(`Private report blob ${blobId} is incomplete`),{statusCode:500});parts.push(Buffer.from(snap.data().bytes));}}const bytes=Buffer.concat(parts);if(Number(m.byteLength||bytes.length)!==bytes.length)throw Object.assign(new Error(`Private report blob ${blobId} failed length verification`),{statusCode:500});return{bytes,meta:m};}
+  async function readState(name){const snap=await state.doc(name).get();if(!snap.exists)return null;const data=snap.data();if(!data?.chunked)return data?.payload??data;const generation=String(data.generation||''),count=Number(data.chunkCount||0);if(!generation||!Number.isInteger(count)||count<1||count>512)return data?.payload??data;const parts=[];for(let i=0;i<count;i+=8){const indexes=Array.from({length:Math.min(8,count-i)},(_,o)=>i+o),snaps=await Promise.all(indexes.map(index=>stateChunks.doc(`${name}__${generation}__${String(index).padStart(4,'0')}`).get()));for(let j=0;j<snaps.length;j++){if(!snaps[j].exists||typeof snaps[j].data()?.data!=='string')return data?.payload??data;parts[indexes[j]]=Buffer.from(snaps[j].data().data,'base64');}}try{return JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{return data?.payload??data;}}
+  async function readEvidence(jobId,timeframes){const refs=timeframes.map(tf=>evidenceCol.doc(`${jobId}__${tf}`)),snaps=refs.length?await db.getAll(...refs):[];return snaps.filter(s=>s.exists).map(s=>{const d=s.data();return{timeframe:d.timeframe||s.id.split('__').at(-1),receivedAt:toIso(d.receivedAt),terminalId:d.terminalId||null,evidence:d.evidence||null,evidenceHash:d.evidenceHash||null};}).sort((a,b)=>DEFAULT_TIMEFRAMES.indexOf(a.timeframe)-DEFAULT_TIMEFRAMES.indexOf(b.timeframe));}
+  async function recoverStaleClaims(){const snap=await jobs.where('status','==','CAPTURING').limit(25).get(),now=Date.now(),writes=[];for(const doc of snap.docs){const d=doc.data(),claimed=toIso(d.claimedAt),ms=claimed?Date.parse(claimed):0;if(ms&&now-ms>CLAIM_STALE_MS)writes.push(doc.ref.update({status:'PENDING',terminalId:null,claimedAt:null,updatedAt:new Date(),recoveredFromStaleClaim:true}));}if(writes.length)await Promise.allSettled(writes);}
+  async function getActiveTerminalJob(terminalId){const snap=await jobs.where('terminalId','==',terminalId).limit(20).get(),active=snap.docs.filter(doc=>doc.data()?.status==='CAPTURING').sort((a,b)=>Date.parse(toIso(a.data()?.claimedAt)||0)-Date.parse(toIso(b.data()?.claimedAt)||0));return active[0]??null;}
+  async function claimPendingJob(terminalId){const snap=await jobs.where('status','==','PENDING').limit(20).get(),candidates=[...snap.docs].sort((a,b)=>Date.parse(toIso(a.data()?.createdAt)||0)-Date.parse(toIso(b.data()?.createdAt)||0));for(const candidate of candidates){const claimed=await db.runTransaction(async tx=>{const fresh=await tx.get(candidate.ref);if(!fresh.exists||fresh.data()?.status!=='PENDING')return false;tx.update(candidate.ref,{status:'CAPTURING',terminalId,claimedAt:new Date(),updatedAt:new Date(),uploadedTimeframes:[],images:{}});return true;});if(claimed)return candidate.ref.get();}return null;}
 
-  function requireMt5(req){
-    const expected=String(process.env.FXGA_MT5_REPORT_SECRET||'');
-    if(!expected)throw Object.assign(new Error('MT5 report bridge secret is not configured'),{statusCode:503});
-    if(!secretEqual(req.headers['x-fxga-mt5-secret'],expected))
-      throw Object.assign(new Error('Unauthorized MT5 report bridge'),{statusCode:401});
+  async function buildDossier(jobId,job){
+    const [evidenceRows,historyBlob,macro,calendar,eventStudies,intelligence,technical,market]=await Promise.all([readEvidence(jobId,job.timeframes||DEFAULT_TIMEFRAMES),job.historyBlobId?readBlob(job.historyBlobId):Promise.resolve(null),readState('macro'),readState('calendar'),readState('event-studies'),readState('intelligence'),readState('technical'),readState('market')]);
+    const history=historyBlob?parseHistoryCsv(historyBlob.bytes):{meta:{},rows:[],byTf:{}},coverage=historyCoverage(history,Date.now()),rawEvents=[];collectEvents(calendar,'calendar',rawEvents);collectEvents(eventStudies,'event-studies',rawEvents);collectEvents(intelligence?.research?.releaseAnalytics||intelligence?.releaseAnalytics,'intelligence-release-analytics',rawEvents);collectEvents(intelligence?.macroAnalysis,'intelligence-macro',rawEvents);
+    const startMs=(history.byTf.H1?.[0]?.timeMs)||Date.now()-MIN_HISTORY_DAYS*86400000,endMs=(history.byTf.H1?.at(-1)?.timeMs)||Date.now(),events=dedupeEvents(rawEvents).filter(e=>e.timeMs>=startMs&&e.timeMs<=endMs&&eventRelevant(e,job.symbol)),pivots=extractPivots(evidenceRows),mappedEvents=events.map(event=>({event,reaction:eventReaction(event,history),pivot:nearestPivot(event,pivots),leg:surroundingLeg(event,pivots)})),executive=chooseExecutiveEvidence(evidenceRows);
+    const pdf=await PDFDocument.create(),fonts={regular:await pdf.embedFont(StandardFonts.Helvetica),bold:await pdf.embedFont(StandardFonts.HelveticaBold),mono:await pdf.embedFont(StandardFonts.Courier),monoBold:await pdf.embedFont(StandardFonts.CourierBold)};pdf.setTitle(`FXGA 60-Day Elliott + Macro AI Dossier - ${job.symbol}`);pdf.setAuthor('FX Global Avengers Trading Academy');pdf.setSubject('Single-PDF AI evidence dossier: 60-day price series, economic events, Elliott evidence and 21 MT5 charts');pdf.setKeywords(['FXGA','Elliott Wave','60-day price history','economic events','Gemini AI evidence','strict non-repaint']);
+    {const {page,h}=addPageBase(pdf,fonts,'FXGA 60-DAY ELLIOTT + MACRO AI DOSSIER',`${job.symbol} | ${DOSSIER_VERSION}`);page.drawText(ascii(job.symbol),{x:34,y:h-150,size:42,font:fonts.bold,color:COLORS.text});page.drawText('One self-contained AI evidence document',{x:34,y:h-188,size:16,font:fonts.regular,color:COLORS.gold});const coverLines=[`Report ID: ${jobId}`,`Generated: ${new Date().toISOString()}`,`Requested history: ${job.historyDaysRequested||MIN_HISTORY_DAYS} calendar days`,`Observed H1 coverage: ${coverage.days.toFixed(2)} days | H1 rows: ${coverage.h1Rows} | complete=${coverage.complete?'YES':'NO'}`,`Economic events mapped: ${events.length}`,`Indicator evidence snapshots: ${evidenceRows.length}/${job.timeframes?.length||DEFAULT_TIMEFRAMES.length}`,`Chart screenshots: ${Object.keys(job.images||{}).length}/${job.timeframes?.length||DEFAULT_TIMEFRAMES.length}`,'AI input mode: ONE PDF ONLY (large JSON evidence is NOT sent to Gemini)','Non-repaint governance: confirmed closed-bar evidence outranks live/preview evidence.'];let y=h-238;for(const line of coverLines){page.drawText(ascii(line),{x:36,y,size:10,font:fonts.regular,color:COLORS.text});y-=22;}}
+    addTextPages(pdf,fonts,'AI INSTRUCTIONS - READ BEFORE ANALYSIS',AI_INSTRUCTIONS,{fontSize:10,maxChars:96});addTextPages(pdf,fonts,'ELLIOTT WAVE THEORY + GOVERNANCE',THEORY_LINES,{fontSize:9,maxChars:105});
+    if(executive)addTextPages(pdf,fonts,'EXECUTIVE ELLIOTT + TRADE PLAN',evidenceSummaryLines(executive),{subtitle:`Selected evidence snapshot: ${executive.timeframe}`,fontSize:8.7,maxChars:110});else addTextPages(pdf,fonts,'EXECUTIVE ELLIOTT + TRADE PLAN',['No structured Elliott evidence was received. AI MUST return WAIT.'],{fontSize:10});
+    const consensus=['TF   CONFIRMED  HARD_INV  EXEC_VALID  SIGNAL_READY  ACTION_SCORE  PRIMARY / CURRENT WAVE'];for(const row of evidenceRows){const e=row.evidence||{},risk=e.confirmedRiskPlan||{},rules=e.hardRules||{},act=e.actionability||{},primary=e.primaryScenario||{};consensus.push(`${String(row.timeframe).padEnd(4)} ${boolText(e.nonRepaint?.strict).padEnd(10)} ${boolText(rules.hard_invalidation).padEnd(9)} ${boolText(risk.execution_valid).padEnd(11)} ${boolText(risk.signal_ready).padEnd(12)} ${fmt(act.actionability_score,1).padStart(12)}  ${asText(primary.name||risk.wave||e.setup?.name||'—',54)}`);}addTextPages(pdf,fonts,'MULTI-TIMEFRAME ELLIOTT CONSENSUS MATRIX',consensus,{mono:true,fontSize:7.4,maxChars:112});
+    const statLines=[`History schema: ${history.meta.FXGA_HISTORY_SCHEMA||history.meta.schema||'—'}`,`MT5 symbol: ${history.meta.symbol||job.symbol}`,`Server time at export: ${history.meta.generated_server_time||'—'}`,`GMT time at export: ${history.meta.generated_gmt_time||'—'}`,`Server-GMT offset used for UTC approximation: ${history.meta.server_gmt_offset_seconds||'—'} seconds`,`Coverage H1: ${coverage.start||'—'} -> ${coverage.end||'—'} (${coverage.days.toFixed(2)} days, ${coverage.h1Rows} bars)`,`60-day minimum satisfied: ${coverage.complete?'YES':'NO - AI MUST TREAT HISTORY AS INCOMPLETE'}`];for(const tf of ['M5','H1','H4','D1']){const st=historyStats(history.byTf[tf]||[]);if(!st){statLines.push(`${tf}: no rows`);continue;}statLines.push(`${tf}: rows=${st.rows} start=${st.start} end=${st.end} open=${fmt(st.open)} close=${fmt(st.close)} high=${fmt(st.high)} low=${fmt(st.low)} change=${fmt(st.change)} (${fmt(st.changePct,2)}%) return_std=${fmt(st.logReturnStd,6)} avg_tick_volume=${fmt(st.avgTickVolume,1)}`);}addTextPages(pdf,fonts,'60-DAY MARKET HISTORY COVERAGE + REGIME STATISTICS',statLines,{fontSize:8.5,maxChars:112});
+    addTextPages(pdf,fonts,'PERSISTED MACRO STATE',flattenStateLines('MACRO',macro,260),{fontSize:7.2,maxChars:115});addTextPages(pdf,fonts,'PERSISTED INTELLIGENCE / ECONOMY STATE',flattenStateLines('INTELLIGENCE',intelligence,300),{fontSize:7.2,maxChars:115});addTextPages(pdf,fonts,'PERSISTED TECHNICAL / MARKET STATE',[...flattenStateLines('TECHNICAL',technical,160),...flattenStateLines('MARKET',market,120)],{fontSize:7.2,maxChars:115});
+    const eventLines=[];if(!events.length)eventLines.push('No historical economic-event records matching this symbol and 60-day price window were found in the persisted dashboard state. This is a DATA COVERAGE LIMITATION; the AI must not invent missing releases.');for(const {event,reaction,pivot,leg} of mappedEvents){eventLines.push(`${event.timeIso} | ${event.currency||'GLOBAL'} | ${event.impact||'—'} | ${event.title} | actual=${event.actual??'—'} forecast=${event.forecast??'—'} previous=${event.previous??'—'} ${event.unit||''} | source=${event.source}`);if(reaction){const hz=Object.entries(reaction.horizons).map(([k,v])=>v?`${k}:${fmt(v.change)} (${fmt(v.changePct,3)}%, ${v.atrUnits===null?'—':fmt(v.atrUnits,2)+' ATR'})`:`${k}:—`).join(' | ');eventLines.push(`  PRICE MAP | baseline=${fmt(reaction.baseline)} @ ${reaction.baselineTime} | H1 ATR14=${fmt(reaction.atrH1)} | ${hz}`);}else eventLines.push('  PRICE MAP | unavailable from supplied history.');if(pivot)eventLines.push(`  ELLIOTT MAP | nearest confirmed pivot=${fmt(pivot.price)} @ ${pivot.timeIso} | state=${pivot.state}/${pivot.stateTf||pivot.chartTimeframe} | distance=${fmt(pivot.deltaMinutes,1)} min. Pivot confirmation timestamp was not present unless explicitly shown elsewhere.`);else eventLines.push('  ELLIOTT MAP | no confirmed pivot timestamp available in supplied evidence.');if(leg?.before||leg?.after)eventLines.push(`  SURROUNDING LEG | before=${leg.before?`${fmt(leg.before.price)} @ ${leg.before.timeIso}`:'—'} | after=${leg.after?`${fmt(leg.after.price)} @ ${leg.after.timeIso}`:'—'} | event timing is contextual, not proof of causation.`);}addTextPages(pdf,fonts,'60-DAY ECONOMIC EVENT -> PRICE -> ELLIOTT MAP',eventLines,{fontSize:7.1,maxChars:118});
+    const pivotLines=['UTC_TIME                  PRICE          TYPE SHIFT STATE / TF            SOURCE_CHART'];for(const p of pivots)pivotLines.push(`${p.timeIso.slice(0,19).padEnd(24)} ${fmt(p.price).padStart(12)} ${String(p.type??'—').padStart(4)} ${String(p.shift??'—').padStart(5)} ${(p.state+'/'+(p.stateTf||'—')).padEnd(21)} ${p.chartTimeframe||'—'}`);if(pivotLines.length===1)pivotLines.push('No confirmed pivot rows were available.');addTextPages(pdf,fonts,'CONFIRMED ELLIOTT PIVOT LEDGER',pivotLines,{mono:true,fontSize:7.1,maxChars:116});
+    for(const tf of ['H1','H4','D1']){const rows=history.byTf[tf]||[],lines=['UTC_TIME             OPEN        HIGH        LOW         CLOSE       TICK_VOL   SPREAD'];for(const r of rows)lines.push(`${r.timeIso.slice(0,16).replace('T',' ').padEnd(20)} ${fmt(r.open).padStart(11)} ${fmt(r.high).padStart(11)} ${fmt(r.low).padStart(11)} ${fmt(r.close).padStart(11)} ${String(Math.round(r.tickVolume||0)).padStart(10)} ${String(Math.round(r.spread||0)).padStart(8)}`);if(rows.length===0)lines.push(`No ${tf} history rows were supplied.`);addTextPages(pdf,fonts,`${tf} NUMERICAL PRICE LEDGER - ${tf==='H1'?'FULL 60-DAY CANONICAL SERIES':'60-DAY SUPPORTING SERIES'}`,lines,{mono:true,fontSize:6.5,maxChars:116});}
+    for(let index=0;index<(job.timeframes||[]).length;index++){const tf=job.timeframes[index],blobId=job.images?.[tf];if(blobId){const {bytes:imageBytes}=await readBlob(blobId),image=await pdf.embedPng(imageBytes),{page,w,h}=addPageBase(pdf,fonts,`MT5 CHART ${tf}`,`${job.symbol} | screenshot ${index+1}/${job.timeframes.length}`),maxW=w-36,maxH=h-92,scale=Math.min(maxW/image.width,maxH/image.height),iw=image.width*scale,ih=image.height*scale;page.drawImage(image,{x:(w-iw)/2,y:18+(maxH-ih)/2,width:iw,height:ih});}else addTextPages(pdf,fonts,`MT5 CHART ${tf}`,[`Screenshot for ${tf} is missing. AI must treat this timeframe as incomplete.`],{fontSize:11});const evidence=evidenceRows.find(r=>r.timeframe===tf);addTextPages(pdf,fonts,`INDICATOR EVIDENCE ${tf}`,evidence?evidenceSummaryLines(evidence):[`Structured Elliott evidence for ${tf} is missing. AI must not infer exact internal state from pixels alone.`],{fontSize:7.8,maxChars:115});}
+    addTextPages(pdf,fonts,'FINAL AI DECISION INSTRUCTIONS',[...AI_INSTRUCTIONS,'','Return one audited decision to the dashboard with: TRADE_SETUP / WAIT / NO_TRADE; BUY / SELL / NEUTRAL; exact entry or entry zone; stop loss; Elliott structural invalidation; TP1/TP2/TP3; current wave; primary and alternate counts; higher-timeframe bias; execution confirmation; risk/reward; evidence confidence; strongest supporting evidence; strongest conflicts; missing evidence; and the exact condition that cancels the thesis.',`Dossier completeness at generation: H1 history ${coverage.complete?'PASS':'FAIL'}; evidence ${evidenceRows.length}/${job.timeframes?.length||21}; screenshots ${Object.keys(job.images||{}).length}/${job.timeframes?.length||21}; events ${events.length}.`,'If any required evidence is materially incomplete or contradictory, prefer WAIT. Do not manufacture missing facts.'],{fontSize:9,maxChars:105});
+    const bytes=Buffer.from(await pdf.save({useObjectStreams:true})),fileName=reportFileName(job.symbol,job.createdAt?.toDate?.()??job.createdAt??Date.now()),pdfBlobId=`${jobId}__pdf`,stored=await writeBlob(pdfBlobId,bytes,{contentType:'application/pdf',kind:'elliott-60d-ai-dossier',jobId}),eventCoverageNote=events.length?`${events.length} persisted event records matched the 60-day price window and symbol relevance filter.`:'No matching historical events were found in persisted dashboard state; AI is instructed not to invent them.';return{pdfBlobId:stored.blobId,fileName,pageCount:pdf.getPageCount(),byteLength:bytes.length,chunkCount:stored.chunkCount,dossierVersion:DOSSIER_VERSION,historyDays:coverage.days,historyRows:history.rows.length,h1Rows:coverage.h1Rows,historyCoverageComplete:coverage.complete,eventCount:events.length,eventCoverageNote,evidenceCount:evidenceRows.length,aiInputMode:'single-pdf-dossier'};
   }
-  function allowRequest(req){
-    const key=requestIp(req),now=Date.now();let entry=requestWindows.get(key);
-    if(!entry||now-entry.start>=REQUEST_WINDOW_MS)entry={start:now,count:0};
-    entry.count+=1;requestWindows.set(key,entry);
-    if(entry.count>REQUESTS_PER_WINDOW)
-      throw Object.assign(new Error('Too many report requests; wait a minute and try again'),{statusCode:429});
-  }
-  async function heartbeat(terminalId){
-    await meta.doc('bridge').set({terminalId,lastTerminalSeen:new Date(),updatedAt:new Date()},{merge:true});
-  }
-  async function bridgeState(){
-    const snap=await meta.doc('bridge').get();
-    if(!snap.exists)return{online:false,lastSeen:null,terminalId:null};
-    const d=snap.data(),last=toIso(d.lastTerminalSeen),ms=last?Date.parse(last):0;
-    return{online:Boolean(ms&&Date.now()-ms<BRIDGE_ONLINE_MS),lastSeen:last,terminalId:d.terminalId??null};
-  }
-
-  function blobRef(blobId){return blobs.doc(safeId(blobId,140));}
-  function chunkId(index){return String(index).padStart(6,'0');}
-  async function deleteBlob(blobId){
-    if(!blobId)return;
-    const ref=blobRef(blobId),snap=await ref.get();
-    if(!snap.exists)return;
-    const count=Number(snap.data()?.chunkCount||0);
-    for(let start=0;start<count;start+=WRITE_BATCH_MAX){
-      const batch=db.batch();
-      for(let i=start;i<Math.min(count,start+WRITE_BATCH_MAX);i++)
-        batch.delete(ref.collection('chunks').doc(chunkId(i)));
-      await batch.commit();
-    }
-    await ref.delete();
-  }
-  async function writeBlob(blobId,bytes,{contentType='application/octet-stream',kind='binary',jobId=null,timeframe=null}={}){
-    const data=Buffer.from(bytes);
-    await deleteBlob(blobId);
-    const ref=blobRef(blobId),chunkCount=Math.ceil(data.length/BLOB_CHUNK_BYTES);
-    await ref.set({
-      id:safeId(blobId,140),contentType,kind,jobId,timeframe,
-      byteLength:data.length,chunkBytes:BLOB_CHUNK_BYTES,chunkCount,
-      createdAt:new Date(),storage:'firestore-private-chunks'
-    });
-    for(let start=0;start<chunkCount;start+=WRITE_BATCH_MAX){
-      const batch=db.batch();
-      for(let i=start;i<Math.min(chunkCount,start+WRITE_BATCH_MAX);i++){
-        const begin=i*BLOB_CHUNK_BYTES,end=Math.min(data.length,begin+BLOB_CHUNK_BYTES);
-        batch.set(ref.collection('chunks').doc(chunkId(i)),{index:i,bytes:data.subarray(begin,end)});
-      }
-      await batch.commit();
-    }
-    return{blobId:safeId(blobId,140),byteLength:data.length,chunkCount,contentType};
-  }
-  async function readBlob(blobId){
-    const ref=blobRef(blobId),metaSnap=await ref.get();
-    if(!metaSnap.exists)throw Object.assign(new Error(`Private report blob ${blobId} is missing`),{statusCode:404});
-    const m=metaSnap.data(),count=Number(m.chunkCount||0),parts=[];
-    for(let start=0;start<count;start+=100){
-      const refs=[];
-      for(let i=start;i<Math.min(count,start+100);i++)refs.push(ref.collection('chunks').doc(chunkId(i)));
-      const snaps=await db.getAll(...refs);
-      for(const snap of snaps){
-        if(!snap.exists)throw Object.assign(new Error(`Private report blob ${blobId} is incomplete`),{statusCode:500});
-        parts.push(Buffer.from(snap.data().bytes));
-      }
-    }
-    const bytes=Buffer.concat(parts);
-    if(Number(m.byteLength||bytes.length)!==bytes.length)
-      throw Object.assign(new Error(`Private report blob ${blobId} failed length verification`),{statusCode:500});
-    return{bytes,meta:m};
-  }
-
-  async function recoverStaleClaims(){
-    const snap=await jobs.where('status','==','CAPTURING').limit(25).get(),now=Date.now(),writes=[];
-    for(const doc of snap.docs){
-      const d=doc.data(),claimed=toIso(d.claimedAt),ms=claimed?Date.parse(claimed):0;
-      if(ms&&now-ms>CLAIM_STALE_MS)
-        writes.push(doc.ref.update({status:'PENDING',terminalId:null,claimedAt:null,updatedAt:new Date(),recoveredFromStaleClaim:true}));
-    }
-    if(writes.length)await Promise.allSettled(writes);
-  }
-  async function getActiveTerminalJob(terminalId){
-    const snap=await jobs.where('terminalId','==',terminalId).limit(20).get();
-    const active=snap.docs.filter(doc=>doc.data()?.status==='CAPTURING')
-      .sort((a,b)=>Date.parse(toIso(a.data()?.claimedAt)||0)-Date.parse(toIso(b.data()?.claimedAt)||0));
-    return active[0]??null;
-  }
-  async function claimPendingJob(terminalId){
-    const snap=await jobs.where('status','==','PENDING').limit(20).get();
-    const candidates=[...snap.docs].sort((a,b)=>Date.parse(toIso(a.data()?.createdAt)||0)-Date.parse(toIso(b.data()?.createdAt)||0));
-    for(const candidate of candidates){
-      const claimed=await db.runTransaction(async tx=>{
-        const fresh=await tx.get(candidate.ref);
-        if(!fresh.exists||fresh.data()?.status!=='PENDING')return false;
-        tx.update(candidate.ref,{status:'CAPTURING',terminalId,claimedAt:new Date(),updatedAt:new Date(),uploadedTimeframes:[],images:{}});
-        return true;
-      });
-      if(claimed)return candidate.ref.get();
-    }
-    return null;
-  }
-
-  async function buildPdf(jobId,job){
-    const pdf=await PDFDocument.create();
-    const regular=await pdf.embedFont(StandardFonts.Helvetica),bold=await pdf.embedFont(StandardFonts.HelveticaBold);
-    pdf.setTitle(`FXGA Elliott Wave Multi-Timeframe Analysis - ${job.symbol}`);
-    pdf.setAuthor('FX Global Avengers Trading Academy');
-    pdf.setSubject('Strict non-repainting Elliott Wave chart screenshots');
-    const pageW=842,pageH=595,margin=18,headerH=42;
-    for(let index=0;index<job.timeframes.length;index++){
-      const tf=job.timeframes[index],blobId=job.images?.[tf];
-      if(!blobId)throw Object.assign(new Error(`Missing uploaded screenshot for ${tf}`),{statusCode:409});
-      const {bytes:imageBytes}=await readBlob(blobId);
-      const image=await pdf.embedPng(imageBytes);
-      const page=pdf.addPage([pageW,pageH]);
-      page.drawRectangle({x:0,y:0,width:pageW,height:pageH,color:rgb(0.035,0.045,0.065)});
-      page.drawText('FXGA ELLIOTT WAVE ANALYSIS',{x:margin,y:pageH-25,size:13,font:bold,color:rgb(0.92,0.78,0.28)});
-      page.drawText(`${job.symbol}  |  ${tf}  |  ${index+1}/${job.timeframes.length}`,{x:pageW-margin-230,y:pageH-24,size:9,font:regular,color:rgb(0.82,0.85,0.90)});
-      const maxW=pageW-margin*2,maxH=pageH-headerH-margin*2;
-      const scale=Math.min(maxW/image.width,maxH/image.height),w=image.width*scale,h=image.height*scale;
-      page.drawImage(image,{x:(pageW-w)/2,y:margin+(maxH-h)/2,width:w,height:h});
-    }
-    const bytes=Buffer.from(await pdf.save({useObjectStreams:true}));
-    const fileName=reportFileName(job.symbol,job.createdAt?.toDate?.()??job.createdAt??Date.now());
-    const pdfBlobId=`${jobId}__pdf`;
-    const stored=await writeBlob(pdfBlobId,bytes,{contentType:'application/pdf',kind:'elliott-pdf',jobId});
-    return{pdfBlobId:stored.blobId,fileName,pageCount:job.timeframes.length,byteLength:bytes.length,chunkCount:stored.chunkCount};
-  }
-
-  async function cleanupScreenshots(job){
-    const ids=Object.values(job.images||{}).map(String);
-    await Promise.allSettled(ids.map(id=>deleteBlob(id)));
-  }
-
-  async function handle(req,res,url,sendJson,apiError){
-    if(!url.pathname.startsWith('/api/elliott-reports'))return false;
-    try{
-      if(req.method==='POST'&&url.pathname==='/api/elliott-reports/request'){
-        allowRequest(req);
-        const body=await readJson(req),symbol=safeSymbol(body.symbol),timeframes=normalizeTimeframes(body.timeframes),id=crypto.randomUUID(),now=new Date();
-        await jobs.doc(id).set({id,status:'PENDING',symbol,timeframes,uploadedTimeframes:[],images:{},createdAt:now,updatedAt:now,requestIp:requestIp(req),source:'website-analyze-button'});
-        broadcast({type:'elliott-report-job',action:'created',jobId:id,symbol,timeframes,at:now.toISOString()});
-        return sendJson(res,202,{ok:true,job:publicJob({id,data:()=>({id,status:'PENDING',symbol,timeframes,uploadedTimeframes:[],createdAt:now,updatedAt:now})})});
-      }
-
-      if(req.method==='GET'&&url.pathname==='/api/elliott-reports/jobs/next'){
-        requireMt5(req);
-        const terminalId=safeId(url.searchParams.get('terminalId')||'FXGA-MT5-PRIMARY',80);
-        await heartbeat(terminalId);await recoverStaleClaims();
-        let job=await getActiveTerminalJob(terminalId);
-        if(!job)job=await claimPendingJob(terminalId);
-        if(!job)return sendJson(res,200,{ok:true,job:null});
-        const d=job.data();
-        return sendJson(res,200,{ok:true,job:{id:job.id,symbol:d.symbol,timeframes:d.timeframes,timeframes_csv:(d.timeframes||[]).join(','),status:d.status}});
-      }
-
-      const jobMatch=url.pathname.match(/^\/api\/elliott-reports\/jobs\/([^/]+)$/);
-      if(req.method==='GET'&&jobMatch){
-        const snap=await jobs.doc(jobMatch[1]).get();
-        if(!snap.exists)return apiError(res,404,'Elliott report job not found');
-        return sendJson(res,200,{ok:true,job:publicJob(snap)});
-      }
-
-      if(req.method==='POST'&&url.pathname==='/api/elliott-reports/upload'){
-        requireMt5(req);
-        const jobId=safeId(url.searchParams.get('jobId'),80),tf=String(url.searchParams.get('timeframe')||'').toUpperCase(),terminalId=safeId(url.searchParams.get('terminalId')||'',80);
-        if(!jobId||!TIMEFRAME_SET.has(tf))return apiError(res,400,'Valid jobId and timeframe are required');
-        const ref=jobs.doc(jobId),snap=await ref.get();
-        if(!snap.exists)return apiError(res,404,'Elliott report job not found');
-        const job=snap.data();
-        if(job.status!=='CAPTURING')return apiError(res,409,`Job is ${job.status}, not CAPTURING`);
-        if(job.terminalId&&terminalId&&job.terminalId!==terminalId)return apiError(res,409,'Job belongs to another MT5 terminal');
-        if(!job.timeframes?.includes(tf))return apiError(res,400,'Timeframe is not part of this job');
-        const png=await readBody(req,MAX_SCREENSHOT_BYTES);
-        if(png.length<64||png[0]!==0x89||png[1]!==0x50||png[2]!==0x4e||png[3]!==0x47)return apiError(res,400,'Screenshot body is not a PNG image');
-        const blobId=`${jobId}__${tf}`;
-        await writeBlob(blobId,png,{contentType:'image/png',kind:'elliott-screenshot',jobId,timeframe:tf});
-        await ref.update({[`images.${tf}`]:blobId,uploadedTimeframes:FieldValue.arrayUnion(tf),updatedAt:new Date(),storage:'firestore-private-chunks'});
-        return sendJson(res,200,{ok:true,jobId,timeframe:tf,bytes:png.length,storage:'firestore-private-chunks'});
-      }
-
-      if(req.method==='POST'&&url.pathname==='/api/elliott-reports/complete'){
-        requireMt5(req);
-        const jobId=safeId(url.searchParams.get('jobId'),80),terminalId=safeId(url.searchParams.get('terminalId')||'',80);
-        if(!jobId)return apiError(res,400,'jobId is required');
-        const ref=jobs.doc(jobId),snap=await ref.get();
-        if(!snap.exists)return apiError(res,404,'Elliott report job not found');
-        const job=snap.data();
-        if(job.terminalId&&terminalId&&job.terminalId!==terminalId)return apiError(res,409,'Job belongs to another MT5 terminal');
-        const missing=(job.timeframes||[]).filter(tf=>!job.images?.[tf]);
-        if(missing.length)return sendJson(res,409,{error:'Screenshots are still missing',missing});
-        const generated=await buildPdf(jobId,job),now=new Date();
-        await reports.doc(jobId).set({
-          id:jobId,symbol:job.symbol,timeframes:job.timeframes,pageCount:generated.pageCount,
-          byteLength:generated.byteLength,pdfBlobId:generated.pdfBlobId,pdfChunkCount:generated.chunkCount,
-          fileName:generated.fileName,createdAt:job.createdAt??now,completedAt:now,sourceJobId:jobId,
-          visibility:'website-only-private-firestore',storage:'firestore-private-chunks'
-        });
-        await ref.update({
-          status:'READY',reportId:jobId,pdfBlobId:generated.pdfBlobId,fileName:generated.fileName,
-          completedAt:now,updatedAt:now,storage:'firestore-private-chunks'
-        });
-        await cleanupScreenshots(job);
-        broadcast({type:'elliott-report-ready',reportId:jobId,symbol:job.symbol,pageCount:generated.pageCount,at:now.toISOString()});
-        return sendJson(res,200,{ok:true,report:publicReport({id:jobId,data:()=>({symbol:job.symbol,timeframes:job.timeframes,pageCount:generated.pageCount,fileName:generated.fileName,createdAt:job.createdAt,completedAt:now})})});
-      }
-
-      if(req.method==='POST'&&url.pathname==='/api/elliott-reports/fail'){
-        requireMt5(req);
-        const jobId=safeId(url.searchParams.get('jobId'),80),terminalId=safeId(url.searchParams.get('terminalId')||'',80),body=await readJson(req);
-        if(!jobId)return apiError(res,400,'jobId is required');
-        const ref=jobs.doc(jobId),snap=await ref.get();
-        if(!snap.exists)return apiError(res,404,'Elliott report job not found');
-        const job=snap.data();
-        if(job.terminalId&&terminalId&&job.terminalId!==terminalId)return apiError(res,409,'Job belongs to another MT5 terminal');
-        await ref.update({status:'FAILED',error:String(body.error||'MT5 capture failed').slice(0,1000),updatedAt:new Date(),completedAt:new Date()});
-        await cleanupScreenshots(job);
-        return sendJson(res,200,{ok:true});
-      }
-
-      if(req.method==='GET'&&url.pathname==='/api/elliott-reports'){
-        const snap=await reports.limit(50).get();
-        const items=snap.docs.map(publicReport).sort((a,b)=>Date.parse(b.completedAt||0)-Date.parse(a.completedAt||0));
-        return sendJson(res,200,{ok:true,reports:items,bridge:await bridgeState(),timeframes:[...DEFAULT_TIMEFRAMES],storage:'firestore-private-chunks'});
-      }
-
-      const pdfMatch=url.pathname.match(/^\/api\/elliott-reports\/([^/]+)\/pdf$/);
-      if(req.method==='GET'&&pdfMatch){
-        const reportId=safeId(pdfMatch[1],80),snap=await reports.doc(reportId).get();
-        if(!snap.exists)return apiError(res,404,'Elliott PDF report not found');
-        const report=snap.data(),blobId=report.pdfBlobId;
-        if(!blobId)return apiError(res,404,'Elliott PDF payload is missing');
-        const {bytes}=await readBlob(blobId);
-        res.statusCode=200;
-        res.setHeader('Content-Type','application/pdf');
-        res.setHeader('Content-Length',String(bytes.length));
-        res.setHeader('Content-Disposition',`inline; filename="${String(report.fileName||'FXGA_Elliott_Report.pdf').replace(/["\r\n]/g,'_')}"`);
-        res.setHeader('Cache-Control','private, no-store, max-age=0');
-        res.end(bytes);
-        return true;
-      }
-
-      return false;
-    }catch(error){
-      const status=Number(error?.statusCode||500),message=status>=500?'Elliott report service error':String(error?.message||error);
-      console.error('FXGA Elliott report service error',error);
-      return apiError(res,status,message);
-    }
-  }
-
-  function health(){
-    return{
-      enabled:true,defaultTimeframes:DEFAULT_TIMEFRAMES.length,onDemandOnly:true,
-      storage:'Google Cloud Firestore private chunk storage',
-      authentication:'X-FXGA-MT5-Secret',
-      screenshotMaxBytes:MAX_SCREENSHOT_BYTES,
-      chunkBytes:BLOB_CHUNK_BYTES
-    };
-  }
-
+  async function cleanupInputs(job){const ids=[...Object.values(job.images||{}).map(String),job.historyBlobId].filter(Boolean);await Promise.allSettled(ids.map(id=>deleteBlob(id)));}
+  async function handle(req,res,url,sendJson,apiError){if(!url.pathname.startsWith('/api/elliott-reports'))return false;try{
+    if(req.method==='POST'&&url.pathname==='/api/elliott-reports/request'){allowRequest(req);const body=await readJson(req),symbol=safeSymbol(body.symbol),timeframes=normalizeTimeframes(body.timeframes),id=crypto.randomUUID(),now=new Date(),historyDays=Math.max(MIN_HISTORY_DAYS,Number(body.historyDays)||MIN_HISTORY_DAYS);await jobs.doc(id).set({id,status:'PENDING',symbol,timeframes,uploadedTimeframes:[],images:{},createdAt:now,updatedAt:now,requestIp:requestIp(req),source:'website-analyze-button',dossierVersion:DOSSIER_VERSION,dossierRequired:true,historyDaysRequested:historyDays,aiInputMode:'single-pdf-dossier'});broadcast({type:'elliott-report-job',action:'created',jobId:id,symbol,timeframes,historyDays,at:now.toISOString()});return sendJson(res,202,{ok:true,job:publicJob({id,data:()=>({id,status:'PENDING',symbol,timeframes,uploadedTimeframes:[],createdAt:now,updatedAt:now,historyDaysRequested:historyDays,dossierVersion:DOSSIER_VERSION})})});}
+    if(req.method==='GET'&&url.pathname==='/api/elliott-reports/jobs/next'){requireMt5(req);const terminalId=safeId(url.searchParams.get('terminalId')||'FXGA-MT5-PRIMARY',80);await heartbeat(terminalId);await recoverStaleClaims();let job=await getActiveTerminalJob(terminalId);if(!job)job=await claimPendingJob(terminalId);if(!job)return sendJson(res,200,{ok:true,job:null});const d=job.data();return sendJson(res,200,{ok:true,job:{id:job.id,symbol:d.symbol,timeframes:d.timeframes,timeframes_csv:(d.timeframes||[]).join(','),status:d.status,history_days:Math.max(MIN_HISTORY_DAYS,Number(d.historyDaysRequested)||MIN_HISTORY_DAYS),dossier_version:d.dossierVersion||DOSSIER_VERSION}});}
+    const jobMatch=url.pathname.match(/^\/api\/elliott-reports\/jobs\/([^/]+)$/);if(req.method==='GET'&&jobMatch){const snap=await jobs.doc(jobMatch[1]).get();if(!snap.exists)return apiError(res,404,'Elliott report job not found');return sendJson(res,200,{ok:true,job:publicJob(snap)});}
+    if(req.method==='POST'&&url.pathname==='/api/elliott-reports/history'){requireMt5(req);const jobId=safeId(url.searchParams.get('jobId'),80),terminalId=safeId(url.searchParams.get('terminalId')||'',80);if(!jobId)return apiError(res,400,'jobId is required');const ref=jobs.doc(jobId),snap=await ref.get();if(!snap.exists)return apiError(res,404,'Elliott report job not found');const job=snap.data();if(job.status!=='CAPTURING')return apiError(res,409,`Job is ${job.status}, not CAPTURING`);if(job.terminalId&&terminalId&&job.terminalId!==terminalId)return apiError(res,409,'Job belongs to another MT5 terminal');const csv=await readBody(req,MAX_HISTORY_BYTES);if(csv.length<100||!csv.toString('utf8',0,Math.min(csv.length,300)).includes('FXGA_HISTORY_SCHEMA'))return apiError(res,400,'History payload is not an FXGA market-history CSV');const history=parseHistoryCsv(csv),coverage=historyCoverage(history,Date.now()),blobId=`${jobId}__market_history`;await writeBlob(blobId,csv,{contentType:'text/csv',kind:'elliott-60d-market-history',jobId});await ref.update({historyBlobId:blobId,historyBytes:csv.length,historyRows:history.rows.length,h1Rows:coverage.h1Rows,historyDaysObserved:coverage.days,historyCoverageComplete:coverage.complete,historyUploadedAt:new Date(),updatedAt:new Date()});return sendJson(res,200,{ok:true,jobId,bytes:csv.length,rows:history.rows.length,h1Rows:coverage.h1Rows,historyDays:coverage.days,historyCoverageComplete:coverage.complete});}
+    if(req.method==='POST'&&url.pathname==='/api/elliott-reports/upload'){requireMt5(req);const jobId=safeId(url.searchParams.get('jobId'),80),tf=String(url.searchParams.get('timeframe')||'').toUpperCase(),terminalId=safeId(url.searchParams.get('terminalId')||'',80);if(!jobId||!TIMEFRAME_SET.has(tf))return apiError(res,400,'Valid jobId and timeframe are required');const ref=jobs.doc(jobId),snap=await ref.get();if(!snap.exists)return apiError(res,404,'Elliott report job not found');const job=snap.data();if(job.status!=='CAPTURING')return apiError(res,409,`Job is ${job.status}, not CAPTURING`);if(job.terminalId&&terminalId&&job.terminalId!==terminalId)return apiError(res,409,'Job belongs to another MT5 terminal');if(!job.timeframes?.includes(tf))return apiError(res,400,'Timeframe is not part of this job');const png=await readBody(req,MAX_SCREENSHOT_BYTES);if(png.length<64||png[0]!==0x89||png[1]!==0x50||png[2]!==0x4e||png[3]!==0x47)return apiError(res,400,'Screenshot body is not a PNG image');const blobId=`${jobId}__${tf}`;await writeBlob(blobId,png,{contentType:'image/png',kind:'elliott-screenshot',jobId,timeframe:tf});await ref.update({[`images.${tf}`]:blobId,uploadedTimeframes:FieldValue.arrayUnion(tf),updatedAt:new Date(),storage:'firestore-private-chunks'});return sendJson(res,200,{ok:true,jobId,timeframe:tf,bytes:png.length});}
+    if(req.method==='POST'&&url.pathname==='/api/elliott-reports/complete'){requireMt5(req);const jobId=safeId(url.searchParams.get('jobId'),80),terminalId=safeId(url.searchParams.get('terminalId')||'',80);if(!jobId)return apiError(res,400,'jobId is required');const ref=jobs.doc(jobId),snap=await ref.get();if(!snap.exists)return apiError(res,404,'Elliott report job not found');const job=snap.data();if(job.terminalId&&terminalId&&job.terminalId!==terminalId)return apiError(res,409,'Job belongs to another MT5 terminal');if(job.status==='READY'&&job.reportId){const ready=await reports.doc(job.reportId).get();if(ready.exists)return sendJson(res,200,{ok:true,report:publicReport(ready),idempotent:true});}if(job.status==='FINALIZING')return sendJson(res,202,{ok:true,status:'FINALIZING'});const missing=(job.timeframes||[]).filter(tf=>!job.images?.[tf]);if(missing.length)return sendJson(res,409,{error:'Screenshots are still missing',missing});if(job.dossierRequired&&!job.historyBlobId)return sendJson(res,409,{error:'60-day MT5 price history is still missing'});const evidence=await readEvidence(jobId,job.timeframes||DEFAULT_TIMEFRAMES);if(job.dossierRequired&&evidence.length<(job.timeframes||DEFAULT_TIMEFRAMES).length)return sendJson(res,409,{error:'Structured Elliott evidence is still missing',evidenceCount:evidence.length,evidenceExpected:(job.timeframes||DEFAULT_TIMEFRAMES).length});await ref.update({status:'FINALIZING',updatedAt:new Date(),error:null});try{const generated=await buildDossier(jobId,job),now=new Date();await reports.doc(jobId).set({id:jobId,symbol:job.symbol,timeframes:job.timeframes,...generated,createdAt:job.createdAt??now,completedAt:now,sourceJobId:jobId,visibility:'website-only-private-firestore',storage:'firestore-private-chunks'});await ref.update({status:'READY',reportId:jobId,pdfBlobId:generated.pdfBlobId,fileName:generated.fileName,completedAt:now,updatedAt:now,dossierVersion:generated.dossierVersion,historyDaysObserved:generated.historyDays,historyCoverageComplete:generated.historyCoverageComplete,eventCount:generated.eventCount,evidenceCount:generated.evidenceCount,pageCount:generated.pageCount,aiInputMode:'single-pdf-dossier'});await cleanupInputs(job);broadcast({type:'elliott-report-ready',reportId:jobId,symbol:job.symbol,pageCount:generated.pageCount,dossierVersion:generated.dossierVersion,at:now.toISOString()});return sendJson(res,200,{ok:true,report:publicReport({id:jobId,data:()=>({symbol:job.symbol,timeframes:job.timeframes,...generated,createdAt:job.createdAt,completedAt:now})})});}catch(error){await ref.update({status:'CAPTURING',updatedAt:new Date(),error:String(error?.message||error).slice(0,1000)});throw error;}}
+    if(req.method==='POST'&&url.pathname==='/api/elliott-reports/fail'){requireMt5(req);const jobId=safeId(url.searchParams.get('jobId'),80),terminalId=safeId(url.searchParams.get('terminalId')||'',80),body=await readJson(req);if(!jobId)return apiError(res,400,'jobId is required');const ref=jobs.doc(jobId),snap=await ref.get();if(!snap.exists)return apiError(res,404,'Elliott report job not found');const job=snap.data();if(job.terminalId&&terminalId&&job.terminalId!==terminalId)return apiError(res,409,'Job belongs to another MT5 terminal');await ref.update({status:'FAILED',error:String(body.error||'MT5 capture failed').slice(0,1000),updatedAt:new Date(),completedAt:new Date()});await cleanupInputs(job);return sendJson(res,200,{ok:true});}
+    if(req.method==='GET'&&url.pathname==='/api/elliott-reports'){const snap=await reports.limit(50).get(),items=snap.docs.map(publicReport).sort((a,b)=>Date.parse(b.completedAt||0)-Date.parse(a.completedAt||0));return sendJson(res,200,{ok:true,reports:items,bridge:await bridgeState(),timeframes:[...DEFAULT_TIMEFRAMES],storage:'firestore-private-chunks',dossierVersion:DOSSIER_VERSION,historyDaysMinimum:MIN_HISTORY_DAYS,aiInputMode:'single-pdf-dossier'});}
+    const pdfMatch=url.pathname.match(/^\/api\/elliott-reports\/([^/]+)\/pdf$/);if(req.method==='GET'&&pdfMatch){const reportId=safeId(pdfMatch[1],80),snap=await reports.doc(reportId).get();if(!snap.exists)return apiError(res,404,'Elliott PDF report not found');const report=snap.data(),blobId=report.pdfBlobId;if(!blobId)return apiError(res,404,'Elliott PDF payload is missing');const {bytes}=await readBlob(blobId);res.statusCode=200;res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Length',String(bytes.length));res.setHeader('Content-Disposition',`inline; filename="${String(report.fileName||'FXGA_Elliott_Dossier.pdf').replace(/["\r\n]/g,'_')}"`);res.setHeader('Cache-Control','private, no-store');res.end(bytes);return true;}
+    return apiError(res,404,'Elliott report route not found');
+  }catch(error){return apiError(res,Number(error?.statusCode||500),String(error?.message||error));}}
+  function health(){return{enabled:true,defaultTimeframes:DEFAULT_TIMEFRAMES.length,storage:'firestore-private-chunks',onDemandOnly:true,dossierVersion:DOSSIER_VERSION,historyDaysMinimum:MIN_HISTORY_DAYS,historyUpload:true,priceLedgers:['H1','H4','D1'],eventReactionSeries:'M5',economicEventMapping:true,elliottPivotMapping:true,aiInputMode:'single-pdf-dossier',jsonEvidenceSentToModel:false};}
   return{handle,health};
 }
