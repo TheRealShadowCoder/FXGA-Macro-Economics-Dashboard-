@@ -8,25 +8,42 @@ A separate, persistent FXGA operational agent that processes a Telegram member q
 
 The agent is independent of the macro dashboard process. Google Cloud persists its queue, cursor, per-day totals, status history, rate-limit state, and run summaries even when the Cloud Run container is not running.
 
+## Direct-add-only contract
+
+This agent uses **direct Add only**.
+
+It does **not**:
+
+- send private messages or DMs;
+- create or send invite links;
+- create join-request links;
+- message a person first when Telegram blocks a direct add;
+- switch to any invitation-link fallback;
+- rotate accounts to work around Telegram restrictions.
+
+For channels and supergroups, Telegram's MTProto API unfortunately names the direct-add RPC `channels.inviteToChannel`. Despite that API name, this operation is the platform's direct member-add operation: it attempts to place the selected user directly into the channel/supergroup. The agent uses that RPC only as the direct Add action. If Telegram does not allow the add, the member is marked with the relevant skip/defer status and the agent moves on.
+
+The CI workflow enforces this contract and fails if messaging or invite-link APIs are introduced into the agent source.
+
 ## Daily behavior
 
 - Reads member records in source order and resumes from the persisted Firestore cursor.
 - Uses `DAILY_TARGET_MIN=20` as the desired minimum and `DAILY_TARGET_MAX=50` as the hard daily success cap.
 - Enforces the maximum across the whole Africa/Johannesburg calendar day, not merely per Cloud Run execution.
-- Stops after `MAX_ATTEMPTS_PER_RUN=100` Telegram invite attempts even if the success target was not reached.
+- Stops after `MAX_ATTEMPTS_PER_RUN=100` direct-add attempts even if the success target was not reached.
 - Continues past people who are already members.
-- Treats Telegram `missing_invitees` responses as unsuccessful additions instead of counting them as added.
+- Treats Telegram `missing_invitees` responses as unsuccessful direct additions instead of counting them as added.
 - Skips privacy-restricted, non-mutual-contact, deactivated, invalid, blocked, kicked, bot, Premium-required, or channel-limit cases instead of messaging them first.
-- Waits between invite requests, stops immediately on `FLOOD_WAIT`/`PEER_FLOOD`, and stores the block-until time.
+- Waits between direct-add requests, stops immediately on `FLOOD_WAIT`/`PEER_FLOOD`, and stores the block-until time.
 - Defers unknown transient failures and retries them on a later run.
 - Uses a Firestore transaction lock so scheduled/manual runs cannot process the queue concurrently.
 - Re-importing the roster preserves existing `added`, skipped, retry and attempt state rather than resetting everybody to pending.
 
-The agent does not bypass Telegram privacy/contact restrictions, automatically DM people who cannot be added, rotate accounts, or evade Telegram flood controls.
+The agent does not bypass Telegram privacy/contact restrictions or evade Telegram flood controls.
 
 ## Telegram account requirement
 
-Directly adding a Telegram user to a channel/supergroup is an MTProto user-account action, not a Bot API action. Use a dedicated Telegram user account that you control and make that account an administrator of the target channel with permission to invite users.
+Directly adding a Telegram user to a channel/supergroup is an MTProto user-account action, not a Bot API action. Use a dedicated Telegram user account that you control and make that account an administrator of the target channel with permission to add members.
 
 Create an API application at `my.telegram.org`, then obtain:
 
@@ -142,4 +159,4 @@ Manual execution does not reset the daily counter; the daily cap remains enforce
 
 ## Dry run
 
-Set `DRY_RUN=true` on the Cloud Run Job to inspect queue selection without sending Telegram invite requests. Dry run selection is capped by the remaining daily capacity and does not mark members as added.
+Set `DRY_RUN=true` on the Cloud Run Job to inspect queue selection without performing direct member-add requests. Dry-run selection is capped by the remaining daily capacity and does not mark members as added.
