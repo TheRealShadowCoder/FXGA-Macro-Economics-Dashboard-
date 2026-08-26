@@ -80,6 +80,22 @@ jobs:
             --location "$GCP_REGION" --format='value(name)'
           gcloud firestore databases describe --database='(default)' --format='value(name)' >/dev/null
 
+      - name: Best-effort Firestore runtime access
+        run: |
+          set +e
+          gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/datastore.user' \
+            --condition=None \
+            --quiet
+          STATUS=$?
+          if [ "$STATUS" -eq 0 ]; then
+            echo 'Firestore runtime access is configured.'
+          else
+            echo '::warning::Could not grant roles/datastore.user automatically. The runtime service account must already have Firestore read/write access.'
+          fi
+          exit 0
+
       - name: Synchronize Telegram secrets to Secret Manager
         env:
           TG_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -142,7 +158,7 @@ jobs:
             --task-timeout 3600s \
             --cpu 1 \
             --memory 512Mi \
-            --set-env-vars 'DAILY_TARGET_MIN=20,DAILY_TARGET_MAX=50,ATTEMPT_DELAY_MS=5000,FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent,DRY_RUN=false' \
+            --set-env-vars 'DAILY_TARGET_MIN=20,DAILY_TARGET_MAX=50,MAX_ATTEMPTS_PER_RUN=100,ATTEMPT_DELAY_MS=5000,TIME_ZONE=Africa/Johannesburg,LOCK_MINUTES=65,FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent,DRY_RUN=false' \
             --set-secrets "TELEGRAM_API_ID=$TELEGRAM_API_ID_SECRET:latest,TELEGRAM_API_HASH=$TELEGRAM_API_HASH_SECRET:latest,TELEGRAM_SESSION=$TELEGRAM_SESSION_SECRET:latest,TELEGRAM_CHANNEL=$TELEGRAM_CHANNEL_SECRET:latest" \
             --quiet
 
