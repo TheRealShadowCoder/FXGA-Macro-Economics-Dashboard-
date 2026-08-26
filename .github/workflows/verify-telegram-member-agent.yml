@@ -50,3 +50,15 @@ jobs:
           grep -q 'PEER_FLOOD' index.js
           grep -q 'lastImportedAt' scripts/import-members.mjs
           echo 'Telegram member agent verification complete.'
+
+      - name: Enforce direct-add-only Telegram contract
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          # Telegram names its channel/supergroup direct-add RPC channels.inviteToChannel.
+          # This must remain the only member action: no DMs, invite links, join links, or fallback messaging.
+          grep -q 'Api.channels.InviteToChannel' index.js
+          ! grep -REn 'sendMessage|SendMessage|CreateChatInvite|ExportChatInvite|ImportChatInvite|CheckChatInvite|createChatInviteLink|exportChatInvite|importChatInvite' \
+            index.js scripts \
+            || { echo '::error::Direct-add-only contract violated: messaging or invite-link code detected'; exit 1; }
+          echo 'Direct-add-only contract verified: no invitation links or private messages.'
