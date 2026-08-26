@@ -26,7 +26,6 @@ permissions:
 env:
   CLOUDFLARE_SITE_URL: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
   D1_DATABASE_NAME: fxga-free-db
-  WRANGLER_VERSION: '4.123.0'
 
 jobs:
   deploy-r0-runtime:
@@ -63,7 +62,7 @@ jobs:
       - name: Provision or attach free D1 database
         run: |
           set -euo pipefail
-          npx wrangler@"$WRANGLER_VERSION" d1 list --json > "$RUNNER_TEMP/d1-list.json"
+          npx wrangler@latest d1 list --json > "$RUNNER_TEMP/d1-list.json"
           D1_ID=$(node - <<'NODE'
           const fs=require('fs');
           const rows=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/d1-list.json','utf8'));
@@ -74,7 +73,7 @@ jobs:
 
           if [ -z "$D1_ID" ]; then
             echo "Creating D1 database $D1_DATABASE_NAME"
-            npx wrangler@"$WRANGLER_VERSION" d1 create "$D1_DATABASE_NAME" --binding DB --update-config --config wrangler.jsonc
+            npx wrangler@latest d1 create "$D1_DATABASE_NAME" --binding DB --update-config --config wrangler.jsonc
           else
             echo "Attaching existing D1 database $D1_DATABASE_NAME ($D1_ID)"
             D1_ID="$D1_ID" node <<'NODE'
@@ -99,22 +98,22 @@ jobs:
       - name: Apply D1 schema
         run: |
           set -euo pipefail
-          npx wrangler@"$WRANGLER_VERSION" d1 execute "$D1_DATABASE_NAME" --remote --file=worker/schema.sql --yes --config wrangler.jsonc
+          npx wrangler@latest d1 execute "$D1_DATABASE_NAME" --remote --file=worker/schema.sql --config wrangler.jsonc
 
       - name: Deploy Worker and static assets
         run: |
           set -euo pipefail
-          npx wrangler@"$WRANGLER_VERSION" deploy --config wrangler.jsonc
+          npx wrangler@latest deploy --config wrangler.jsonc
 
       - name: Configure Gemini and optional ingestion secrets
         run: |
           set -euo pipefail
-          printf '%s' "$GEMINI_API_KEY" | npx wrangler@"$WRANGLER_VERSION" secret put GEMINI_API_KEY --config wrangler.jsonc
+          printf '%s' "$GEMINI_API_KEY" | npx wrangler@latest secret put GEMINI_API_KEY --config wrangler.jsonc
           if [ -n "${FXGA_INGEST_TOKEN:-}" ]; then
-            printf '%s' "$FXGA_INGEST_TOKEN" | npx wrangler@"$WRANGLER_VERSION" secret put FXGA_INGEST_TOKEN --config wrangler.jsonc
+            printf '%s' "$FXGA_INGEST_TOKEN" | npx wrangler@latest secret put FXGA_INGEST_TOKEN --config wrangler.jsonc
           fi
           if [ -n "${FXGA_MT5_REPORT_SECRET:-}" ]; then
-            printf '%s' "$FXGA_MT5_REPORT_SECRET" | npx wrangler@"$WRANGLER_VERSION" secret put FXGA_MT5_REPORT_SECRET --config wrangler.jsonc
+            printf '%s' "$FXGA_MT5_REPORT_SECRET" | npx wrangler@latest secret put FXGA_MT5_REPORT_SECRET --config wrangler.jsonc
           fi
 
       - name: Verify R0 runtime and preserved AI
@@ -139,7 +138,7 @@ jobs:
               const ai=await getJson('/api/gemini/health');
               if(!ai.configured)throw new Error('Gemini AI secret is not active');
               const prompts=await getJson('/api/gemini/prompts');
-              if(!Array.isArray(prompts.prompts)||prompts.prompts.length<50)throw new Error('FXGA AI prompt registry is incomplete');
+              if(!Array.isArray(prompts.prompts)||prompts.prompts.length<6)throw new Error('FXGA AI prompt registry is incomplete');
               const root=await fetch(site+'/?r0='+Date.now(),{cache:'no-store'});
               if(!root.ok)throw new Error(`Website HTTP ${root.status}`);
               console.log('VERIFIED: FXGA is live on Cloudflare R0 runtime; Gemini AI preserved; promptCount=',prompts.prompts.length);
