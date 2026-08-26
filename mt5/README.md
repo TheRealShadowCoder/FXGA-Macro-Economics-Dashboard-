@@ -6,41 +6,38 @@ This folder contains the MetaTrader 5 components used by the FXGA dashboard.
 
 `EA Bridge.mq5` is the authenticated on-demand screenshot bridge for the **Elliott Wave PDF Reports** section.
 
-### Version 13.21 behavior
+### Version 13.22 behavior
 
-The EA now loads safely even when its API URL or bridge secret has not been entered yet.
+EA Bridge now ships with the production Cloud Run API already configured:
 
-Instead of failing initialization and being removed from the chart, it stays attached in a passive state and prints:
+`https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app`
 
-`EA Bridge v13.21 | CONFIGURATION REQUIRED | ...`
+The default terminal ID is also preconfigured as `FXGA-MT5-PRIMARY` and the poll interval is 3 seconds.
 
-While configuration is incomplete it performs:
+The bridge secret is deliberately **not committed to GitHub**. v13.22 first uses `InpWebsiteReportSecret` when supplied; otherwise it automatically looks for the private local file:
 
-- no website polling,
-- no screenshot capture,
-- no upload,
-- no temporary chart creation.
+`MQL5/Files/Elliot Wave Indicator Report/EA_Bridge.secret`
 
-When correctly configured it prints:
+A one-time Windows helper is included as `Configure-EA-Bridge.ps1`. It securely prompts for `FXGA_MT5_REPORT_SECRET` and writes the local private secret file to the MT5 terminal data directory without printing the secret.
 
-`EA Bridge v13.21 | READY | terminal=FXGA-MT5-PRIMARY | ...`
+When configuration is incomplete the EA stays attached in a passive state and performs no screenshots or uploads.
+
+When correctly connected it prints:
+
+`EA Bridge CONNECTED + AUTHENTICATED | terminal=FXGA-MT5-PRIMARY | ...`
 
 Screenshots are generated only after the user presses **Analyze Elliott Waves** on the website.
 
 ### Install EA Bridge
 
 1. Copy `EA Bridge.mq5` into `MQL5/Experts/FXGA/` and compile it in MetaEditor.
-2. In MetaTrader 5 open **Tools → Options → Expert Advisors**.
-3. Enable **Allow WebRequest for listed URL**.
-4. Add the deployed FXGA Google Cloud Run API base URL.
-5. Attach **EA Bridge** to one chart and keep Algo Trading enabled.
-6. Configure:
-   - `InpWebsiteReportBridge = true`
-   - `InpWebsiteReportApiBase = <Cloud Run API URL>`
-   - `InpWebsiteReportSecret = <same private value as FXGA_MT5_REPORT_SECRET>`
-   - `InpWebsiteReportTerminalId = FXGA-MT5-PRIMARY`
-   - `InpWebsiteReportTemplateName = FXGA_Elliott_Web_Report_v13_20.tpl`
-7. Do not commit the populated secret into source control.
+2. Run `Configure-EA-Bridge.ps1` once and enter the same private value stored as `FXGA_MT5_REPORT_SECRET`.
+3. In MetaTrader 5 open **Tools → Options → Expert Advisors**.
+4. Enable **Allow WebRequest for listed URL**.
+5. Add `https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app`.
+6. Attach **EA Bridge** to one chart and keep Algo Trading enabled.
+7. The default inputs already use the production API and `FXGA-MT5-PRIMARY` terminal ID.
+8. Do not commit `EA_Bridge.secret` or a populated bridge secret into source control.
 
 The companion Elliott indicator renders each requested timeframe and publishes the render-ready handshake. `WebRequest()` remains isolated in EA Bridge because MT5 custom indicators cannot call it safely.
 
