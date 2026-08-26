@@ -64,14 +64,41 @@ Store the printed session securely as `TELEGRAM_SESSION`. Anyone with that sessi
 
 ## GitHub Actions secrets
 
-Add these repository Actions secrets:
+Required for the direct-add worker:
 
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
 - `TELEGRAM_SESSION`
 - `TELEGRAM_CHANNEL`
 
-The existing `GCP_WIF_PROVIDER` secret/variable is reused by the deployment workflow. On deployment, Telegram credentials are synchronized to Google Secret Manager and injected into the Cloud Run Job as secret environment variables.
+Optional bootstrap secret:
+
+- `TELEGRAM_BOT_TOKEN` — if present, deployment stores it as a new version of `fxga-telegram-bot-token` in Google Secret Manager. The direct-add worker never receives or uses this token.
+
+Required to enable the browser-based Agents Settings service:
+
+- `FXGA_AGENT_ADMIN_KEY` — use a strong value of at least 16 characters. It is stored in Secret Manager and is required every time the bot-token status or replacement endpoint is used.
+
+The existing `GCP_WIF_PROVIDER` secret/variable is reused by the deployment workflow.
+
+## Agents Settings: Telegram bot token
+
+The deployment workflow can create a small Cloud Run service named `fxga-telegram-member-agent-admin`. This is a separate administrative surface and is not part of the direct member-add execution path.
+
+It provides:
+
+- a bot-token status check using Telegram Bot API `getMe`;
+- a **Test & save** control for replacing the bot token;
+- Google Secret Manager storage under `fxga-telegram-bot-token`;
+- no endpoint that returns the stored token;
+- constant-time admin-key comparison and request throttling;
+- validation of a replacement token with Telegram before a new Secret Manager version is written.
+
+The settings service is deployed only when `FXGA_AGENT_ADMIN_KEY` is configured. The deployment Action prints the resulting **Agents Settings** Cloud Run URL in its summary.
+
+If `TELEGRAM_BOT_TOKEN` is not configured in GitHub, that is fine: the workflow creates the Secret Manager container without a value. Open the Agents Settings page, enter the admin key and bot token, then select **Test & save**. Future replacements can be done from the same page without committing credentials or editing workflow files.
+
+The bot token is intentionally isolated from the direct-add worker. Changing it cannot enable invitation links, DMs, or message-first fallbacks.
 
 ## Import the member list
 
