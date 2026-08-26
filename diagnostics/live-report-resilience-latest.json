@@ -1,12 +1,12 @@
 {
   "schema": "fxga.live-report-resilience.verification.v1",
-  "runId": 32858980119,
-  "checkedAt": "2026-08-25T14:22:06.288Z",
+  "runId": 32957341899,
+  "checkedAt": "2026-08-26T10:16:05.687Z",
   "liveReport": {
     "http": 200,
     "schema": "fxga.gemini.live-report.v2",
     "model": "gemini-3.5-flash-lite",
-    "reportLength": 1616,
+    "reportLength": 1675,
     "cached": false,
     "stale": false,
     "degraded": false,
