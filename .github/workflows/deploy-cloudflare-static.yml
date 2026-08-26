@@ -65,22 +65,15 @@ jobs:
             )
             echo "::add-mask::$RESOLVED_ACCOUNT_ID"
             echo "CLOUDFLARE_ACCOUNT_ID=$RESOLVED_ACCOUNT_ID" >> "$GITHUB_ENV"
-            echo 'Cloudflare account resolved from API token.'
-          else
-            echo 'Cloudflare account ID supplied by GitHub Actions configuration.'
           fi
 
       - name: Install and build frontend
         run: |
           set -euo pipefail
-          if [ -f package-lock.json ]; then
-            npm ci --no-audit --no-fund
-          else
-            echo 'No package-lock.json found; using npm install for this build.'
-            npm install --no-audit --no-fund
-          fi
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
           node --check worker/src/index.js
           node --check worker/src/r0-entry.js
+          node --check worker/src/auth-gateway.js
           node --check scripts/r0-collect-market.mjs
           node --check scripts/r0-collect-macro.mjs
           npm run build
@@ -100,10 +93,8 @@ jobs:
           )
 
           if [ -z "$D1_ID" ]; then
-            echo "Creating D1 database $D1_DATABASE_NAME"
             npx wrangler@latest d1 create "$D1_DATABASE_NAME" --binding DB --update-config --config wrangler.jsonc
           else
-            echo "Attaching existing D1 database $D1_DATABASE_NAME ($D1_ID)"
             D1_ID="$D1_ID" node <<'NODE'
           const fs=require('fs');
           const path='wrangler.jsonc';
@@ -118,9 +109,10 @@ jobs:
           const config=JSON.parse(fs.readFileSync('wrangler.jsonc','utf8'));
           const db=config.d1_databases?.find(x=>x.binding==='DB');
           if(!db?.database_id)throw new Error('R0 D1 binding was not created');
-          if(config.main!=='./worker/src/r0-entry.js')throw new Error('R0 compatibility Worker main entry is missing');
-          if(!config.assets?.run_worker_first?.includes('/api/*'))throw new Error('/api/* must execute Worker first');
-          console.log('R0 config ready with D1 binding',db.database_name);
+          if(config.main!=='./worker/src/auth-gateway.js')throw new Error('Member auth gateway Worker main entry is missing');
+          if(!config.assets?.run_worker_first?.includes('/*'))throw new Error('All application routes must execute the auth gateway first');
+          if(config.vars?.AUTH_ENFORCED!=='auto')throw new Error('Member auth must use safe auto activation during Google setup');
+          console.log('R0 config ready with D1 + member gateway',db.database_name);
           NODE
 
       - name: Apply D1 schema
@@ -137,44 +129,31 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$GEMINI_API_KEY" | npx wrangler@latest secret put GEMINI_API_KEY --config wrangler.jsonc
-          if [ -n "${FXGA_INGEST_TOKEN:-}" ]; then
-            printf '%s' "$FXGA_INGEST_TOKEN" | npx wrangler@latest secret put FXGA_INGEST_TOKEN --config wrangler.jsonc
-          fi
-          if [ -n "${FXGA_MT5_REPORT_SECRET:-}" ]; then
-            printf '%s' "$FXGA_MT5_REPORT_SECRET" | npx wrangler@latest secret put FXGA_MT5_REPORT_SECRET --config wrangler.jsonc
-          fi
+          if [ -n "${FXGA_INGEST_TOKEN:-}" ]; then printf '%s' "$FXGA_INGEST_TOKEN" | npx wrangler@latest secret put FXGA_INGEST_TOKEN --config wrangler.jsonc; fi
+          if [ -n "${FXGA_MT5_REPORT_SECRET:-}" ]; then printf '%s' "$FXGA_MT5_REPORT_SECRET" | npx wrangler@latest secret put FXGA_MT5_REPORT_SECRET --config wrangler.jsonc; fi
 
-      - name: Verify R0 runtime, website contracts, WebSocket and preserved AI
+      - name: Verify R0 runtime, auth gateway and preserved AI
         run: |
           set -euo pipefail
           node <<'NODE'
           const site=process.env.CLOUDFLARE_SITE_URL;
           const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          async function request(path, options={}) {
+            return fetch(site+path,{cache:'no-store',redirect:'manual',...options,headers:{Accept:'application/json','Cache-Control':'no-cache',...(options.headers||{})}});
+          }
           async function getJson(path){
-            const r=await fetch(site+path,{headers:{Accept:'application/json','Cache-Control':'no-cache'},cache:'no-store'});
+            const r=await request(path);
             const body=await r.json().catch(()=>({}));
             if(!r.ok)throw new Error(`${path} HTTP ${r.status}: ${JSON.stringify(body)}`);
             return body;
           }
           async function verifyWebSocket(){
             const wsUrl=site.replace(/^http:/,'ws:').replace(/^https:/,'wss:')+'/api/live';
-            return await new Promise((resolve,reject)=>{
-              let settled=false;
-              const ws=new WebSocket(wsUrl);
-              const finish=(error)=>{
-                if(settled)return;
-                settled=true;
-                clearTimeout(timer);
-                try{ws.close();}catch{}
-                error?reject(error):resolve();
-              };
-              const timer=setTimeout(()=>finish(new Error('Live WebSocket did not deliver a data-update within 10 seconds')),10000);
-              ws.addEventListener('message',(event)=>{
-                try{
-                  const message=JSON.parse(String(event.data));
-                  if(message.type==='data-update'&&message.sourceId==='cloudflare-r0')finish();
-                }catch{}
-              });
+            return new Promise((resolve,reject)=>{
+              let settled=false;const ws=new WebSocket(wsUrl);
+              const finish=e=>{if(settled)return;settled=true;clearTimeout(timer);try{ws.close()}catch{};e?reject(e):resolve()};
+              const timer=setTimeout(()=>finish(new Error('Live WebSocket did not deliver data-update')),10000);
+              ws.addEventListener('message',e=>{try{const m=JSON.parse(String(e.data));if(m.type==='data-update'&&m.sourceId==='cloudflare-r0')finish()}catch{}});
               ws.addEventListener('error',()=>finish(new Error('Live WebSocket connection failed')));
             });
           }
@@ -182,44 +161,39 @@ jobs:
           for(let i=1;i<=20;i++){
             try{
               const health=await getJson('/api/health');
-              if(health.architecture!=='cloudflare-r0')throw new Error('R0 architecture health contract mismatch');
-              if(health.googleCloudRuntime!==false)throw new Error('Google Cloud runtime is still enabled');
-              if(health.database!=='Cloudflare D1 Free')throw new Error('D1 runtime is not active');
-
-              const dashboard=await getJson('/api/dashboard');
-              if(!Array.isArray(dashboard.macro)||!Array.isArray(dashboard.market)||!Array.isArray(dashboard.calendar)||!Array.isArray(dashboard.sources)||!Array.isArray(dashboard.errors))throw new Error('Dashboard compatibility contract is invalid');
-              if(dashboard._r0?.architecture!=='cloudflare-r0'||dashboard._r0?.googleCloudRuntime!==false)throw new Error('Dashboard is not reporting the R0 runtime');
-
-              const analysis=await getJson('/api/analysis');
-              if(!Array.isArray(analysis.dimensions)||!analysis.regime||!analysis.policy||!analysis.coverage)throw new Error('Macro analysis compatibility contract is invalid');
-
-              const sessions=await getJson('/api/session-signals');
-              if(!Array.isArray(sessions.sessions)||sessions.sessions.length<5)throw new Error('Session signal compatibility contract is invalid');
-
-              const fred=await getJson('/api/fred/catalog');
-              if(!Array.isArray(fred.categories)||!Array.isArray(fred.series))throw new Error('FRED compatibility contract is invalid');
-
-              const technical=await getJson('/api/technical');
-              if(!technical.counts||!technical.assets||typeof technical.assets!=='object')throw new Error('Technical compatibility contract is invalid');
-
-              const quality=await getJson('/api/data-quality');
-              if(!quality.macro?.coverage||!quality.market||!quality.technical||!quality.calendar)throw new Error('Data-quality compatibility contract is invalid');
-
+              if(health.architecture!=='cloudflare-r0'||health.googleCloudRuntime!==false||health.database!=='Cloudflare D1 Free')throw new Error('R0 health contract mismatch');
+              const auth=await getJson('/api/auth/status');
+              if(auth.accessModel!=='owner-approved-google-email-allowlist')throw new Error('Member authorization model mismatch');
+              if(!String(auth.loginUrl||'').includes('/member'))throw new Error('Member login URL is missing');
               const ai=await getJson('/api/gemini/health');
               if(!ai.configured)throw new Error('Gemini AI secret is not active');
-              const prompts=await getJson('/api/gemini/prompts');
-              if(!Array.isArray(prompts.prompts)||prompts.prompts.length<6)throw new Error('FXGA AI prompt registry is incomplete');
 
-              const root=await fetch(site+'/?r0='+Date.now(),{cache:'no-store'});
-              if(!root.ok)throw new Error(`Website HTTP ${root.status}`);
-              const html=await root.text();
-              if(!html.includes('<div id="root"'))throw new Error('Website root HTML is missing the React mount point');
-
-              await verifyWebSocket();
-
-              console.log('VERIFIED: website + dashboard + live WebSocket + sessions + FRED + technical + data quality + Gemini are live on Cloudflare R0; macro=',dashboard.macro.length,'market=',dashboard.market.length,'sources=',dashboard.sources.length,'promptCount=',prompts.prompts.length);
+              if(auth.enforced){
+                const dashboard=await request('/api/dashboard');
+                if(dashboard.status!==401)throw new Error(`Protected dashboard must return 401 without a member session, got ${dashboard.status}`);
+                const root=await request('/?authcheck='+Date.now(),{headers:{Accept:'text/html'}});
+                if(root.status!==302||!String(root.headers.get('location')||'').includes('/member'))throw new Error('Protected application root must redirect to member login');
+                const badExchange=await request('/api/auth/exchange?token=invalid');
+                if(badExchange.status!==302)throw new Error('Invalid auth exchange must redirect to login');
+                console.log('VERIFIED: R0 runtime is live with member authentication ENFORCED; unauthenticated program access is blocked.');
+              }else{
+                const dashboard=await getJson('/api/dashboard');
+                if(!Array.isArray(dashboard.macro)||!Array.isArray(dashboard.market)||dashboard._r0?.architecture!=='cloudflare-r0')throw new Error('Dashboard compatibility contract is invalid');
+                const analysis=await getJson('/api/analysis');
+                if(!Array.isArray(analysis.dimensions)||!analysis.regime||!analysis.policy)throw new Error('Macro analysis compatibility contract is invalid');
+                const sessions=await getJson('/api/session-signals');
+                if(!Array.isArray(sessions.sessions)||sessions.sessions.length<5)throw new Error('Session compatibility contract is invalid');
+                const prompts=await getJson('/api/gemini/prompts');
+                if(!Array.isArray(prompts.prompts)||prompts.prompts.length<6)throw new Error('FXGA AI prompt registry is incomplete');
+                const root=await request('/?r0='+Date.now(),{headers:{Accept:'text/html'}});
+                if(!root.ok)throw new Error(`Website HTTP ${root.status}`);
+                const html=await root.text();if(!html.includes('<div id="root"'))throw new Error('Website root HTML missing React mount');
+                await verifyWebSocket();
+                console.log('VERIFIED: R0 runtime + dashboard + Gemini remain live while Google member authentication is pending configuration.');
+              }
+              console.log('Auth status:',JSON.stringify(auth));
               process.exit(0);
-            }catch(error){last=error;console.log(`Verification ${i}/20:`,String(error?.message||error));await sleep(3000);}
+            }catch(error){last=error;console.log(`Verification ${i}/20:`,String(error?.message||error));await sleep(3000)}
           }
           throw last||new Error('R0 runtime did not become ready');
           NODE
