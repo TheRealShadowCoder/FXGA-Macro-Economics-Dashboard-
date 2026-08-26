@@ -1,5 +1,6 @@
 import type { MacroAnalysisPayload } from '../lib/types';
 import { EconomyAnalysisView } from './EconomyAnalysisView';
+import { ElliottWaveReports } from './ElliottWaveReports';
 
 function scoreClass(score: number) { return score > 15 ? 'positive' : score < -15 ? 'negative' : 'neutral'; }
 function ScoreBar({ score, risk = false }: { score: number; risk?: boolean }) {
@@ -23,6 +24,7 @@ export function AnalysisView({ data, loading, error }: { data: MacroAnalysisPayl
     <section className="section-head"><div><span className="eyebrow">Transmission Layer</span><h2>Cross-asset macro bias</h2></div></section>
     <section className="asset-grid">{data.assets.map(asset=><article className="asset-card" key={asset.id}><span className="eyebrow">{asset.bias}</span><div className="asset-score"><h3>{asset.label}</h3><strong className={scoreClass(asset.score)}>{asset.score}</strong></div><ScoreBar score={asset.score}/></article>)}</section>
     <EconomyAnalysisView/>
+    <ElliottWaveReports/>
     <section className="two-col analysis-bottom"><div className="panel"><div className="panel-title"><div><span className="eyebrow">Largest Changes</span><h2>Top U.S. macro impulses</h2></div></div>{data.topSignals.map(signal=><div className="signal-row" key={signal.seriesId}><div><strong>{signal.seriesId}</strong><span>{signal.title}</span></div><b className={scoreClass(signal.score)}>{signal.score}</b></div>)}</div><div className="panel methodology-card"><span className="eyebrow">Methodology</span><h2>Deterministic, auditable scoring</h2><p>{data.methodology.principle}</p><p>{data.methodology.scoreRange}</p><small>{data.methodology.caution}</small></div></section>
   </>;
 }
