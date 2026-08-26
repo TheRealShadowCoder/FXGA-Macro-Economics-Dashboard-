@@ -2,34 +2,25 @@ name: Verify FXGA Gemini Streaming Live
 
 on:
   workflow_run:
-    workflows: ["Deploy FXGA Google Cloud Application"]
+    workflows: ["Deploy FXGA R0 Cloudflare Runtime"]
     types: [completed]
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/verify-gemini-streaming-live.yml"
-      - "scripts/test-gemini-streaming-live.mjs"
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: fxga-gemini-streaming-live
   cancel-in-progress: true
 
 env:
-  GCP_PROJECT_ID: fxglobalavengerstradingacademy
-  GCP_REGION: us-central1
-  SERVICE: fxga-macro-dashboard
-  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  FXGA_API_BASE: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
 
 jobs:
   smoke-test:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
@@ -37,49 +28,49 @@ jobs:
         with:
           node-version: '24'
 
-      - id: config
-        name: Resolve Google authentication
-        env:
-          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
-          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
-        run: |
-          set -euo pipefail
-          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
-          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
-          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
-
-      - uses: google-github-actions/auth@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
-          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Resolve live Cloud Run URL
-        run: |
-          set -euo pipefail
-          gcloud config set project "$GCP_PROJECT_ID"
-          SERVICE_URL="$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')"
-          test -n "$SERVICE_URL" || { echo '::error::Cloud Run service URL could not be resolved'; exit 1; }
-          echo "FXGA_API_BASE=$SERVICE_URL" >> "$GITHUB_ENV"
-          echo "Testing $SERVICE_URL"
-
-      - name: Verify streaming health contract
+      - name: Verify R0 Gemini health contract
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
           const base = process.env.FXGA_API_BASE;
-          for (const path of ['/api/gemini/health','/api/gemini/intelligence-health']) {
-            const response = await fetch(base + path, { headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } });
+          for (const path of ['/api/health','/api/gemini/health','/api/gemini/intelligence-health']) {
+            const response = await fetch(base + path, { headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' }, cache: 'no-store' });
             if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
             const body = await response.json();
-            if (body.configured !== true) throw new Error(`${path} says Gemini is not configured`);
-            console.log(path, JSON.stringify({ configured: body.configured, model: body.model, fallbackModel: body.fallbackModel, reserveModel: body.reserveModel }));
+            if (path === '/api/health') {
+              if (body.architecture !== 'cloudflare-r0') throw new Error('R0 architecture health mismatch');
+              if (body.googleCloudRuntime !== false) throw new Error('Google Cloud runtime must remain disabled');
+              if (body.database !== 'Cloudflare D1 Free') throw new Error('D1 runtime is not active');
+            } else if (body.configured !== true) {
+              throw new Error(`${path} says Gemini is not configured`);
+            }
+            console.log(path, JSON.stringify({ architecture: body.architecture, configured: body.configured, model: body.model, promptCount: body.promptCount }));
           }
           NODE
 
-      - name: Exercise representative FXGA queries and real SSE typing
+      - name: Exercise one representative SSE request
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const base = process.env.FXGA_API_BASE;
+          const response = await fetch(base + '/api/gemini/chat-stream', {
+            method: 'POST',
+            headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+            body: JSON.stringify({ task: 'market-brief', question: 'Give a concise FXGA market evidence status. Use stored evidence only and state any missing evidence.' }),
+          });
+          if (!response.ok) throw new Error(`chat-stream HTTP ${response.status}`);
+          const text = await response.text();
+          const statusCount = (text.match(/^event: status$/gm) || []).length;
+          if (statusCount < 2) throw new Error(`Expected at least 2 status frames, saw ${statusCount}`);
+          if (!/^event: delta$/m.test(text)) throw new Error('SSE delta frame missing');
+          if (!/^event: done$/m.test(text)) throw new Error('SSE done frame missing');
+          if (/^event: error$/m.test(text)) throw new Error('SSE returned an error frame');
+          console.log(`R0 Gemini SSE smoke test passed with ${statusCount} status frames.`);
+          NODE
+
+      - name: Exercise full FXGA streaming suite manually
+        if: github.event_name == 'workflow_dispatch'
         run: node scripts/test-gemini-streaming-live.mjs
 
       - name: Streaming verification summary
@@ -87,7 +78,7 @@ jobs:
         run: |
           echo '## FXGA Gemini Streaming Live Verification' >> "$GITHUB_STEP_SUMMARY"
           echo '' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Tests real Cloud Run /api/gemini/chat-stream' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Requires status/progress events, text deltas, and a completed answer' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Covers market, macro, event research, action report, scalp, day-trade, long-term and session tasks' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Model fallback/cooldown is visible in emitted SSE phases' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Target: Cloudflare R0 Worker /api/gemini/chat-stream' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Automatic runs use one representative request to conserve Gemini free quota' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Manual dispatch runs the full nine-case FXGA streaming suite' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Requires visible status frames, answer delta, completion, and no error frame' >> "$GITHUB_STEP_SUMMARY"
