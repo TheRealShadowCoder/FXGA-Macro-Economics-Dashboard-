@@ -40,12 +40,16 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          cache: npm
 
       - name: Install and build
         run: |
           set -euo pipefail
-          npm ci --no-audit --no-fund
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            echo 'No package-lock.json found; using npm install for this verification run.'
+            npm install --no-audit --no-fund
+          fi
           npm run build
           node --check worker/src/index.js
           node --check scripts/r0-collect-market.mjs
