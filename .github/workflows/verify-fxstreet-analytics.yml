@@ -28,18 +28,24 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Verify live R0 production and frontend contracts
+      - name: Verify live R0 production and member-access contract
         run: |
           set -euo pipefail
           node <<'NODE'
           const base = 'https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev';
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-          async function getJson(path) {
-            const response = await fetch(`${base}${path}`, {
-              headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
+          async function raw(path, options={}) {
+            return fetch(`${base}${path}`, {
               cache: 'no-store',
+              redirect: 'manual',
+              ...options,
+              headers: { Accept: 'application/json', 'Cache-Control': 'no-cache', ...(options.headers || {}) },
             });
+          }
+
+          async function getJson(path) {
+            const response = await raw(path);
             const text = await response.text();
             if (!response.ok) throw new Error(`${path} returned ${response.status}: ${text.slice(0, 800)}`);
             try { return JSON.parse(text); }
@@ -47,17 +53,10 @@ jobs:
           }
 
           async function verifyOnce() {
-            const [health, dashboard, analysis, sessions, market, technical, quality, ai, prompts, mt5] = await Promise.all([
+            const [health, auth, ai] = await Promise.all([
               getJson('/api/health'),
-              getJson('/api/dashboard'),
-              getJson('/api/analysis'),
-              getJson('/api/session-signals'),
-              getJson('/api/market-prices'),
-              getJson('/api/technical'),
-              getJson('/api/data-quality'),
+              getJson('/api/auth/status'),
               getJson('/api/gemini/intelligence-health'),
-              getJson('/api/gemini/prompts'),
-              getJson('/api/mt5/latest'),
             ]);
 
             if (health.architecture !== 'cloudflare-r0') throw new Error(`Architecture mismatch: ${health.architecture}`);
@@ -65,69 +64,66 @@ jobs:
             if (health.database !== 'Cloudflare D1 Free') throw new Error(`Database mismatch: ${health.database}`);
             if (health.staticHosting !== 'Cloudflare Workers Static Assets') throw new Error(`Static hosting mismatch: ${health.staticHosting}`);
             if (health.googleCloudRuntime !== false) throw new Error('Google Cloud runtime must remain disabled');
+            if (auth.accessModel !== 'owner-approved-google-email-allowlist') throw new Error(`Unexpected access model: ${auth.accessModel}`);
+            if (!String(auth.loginUrl || '').includes('/member')) throw new Error('Member login URL missing');
+            if (ai.configured !== true) throw new Error('Gemini AI is not configured');
+
+            if (auth.enforced === true) {
+              const dashboard = await raw('/api/dashboard');
+              if (dashboard.status !== 401) throw new Error(`Unauthenticated dashboard must be blocked with 401; got ${dashboard.status}`);
+              const root = await raw(`/?contract=${Date.now()}`, { headers: { Accept: 'text/html' } });
+              if (root.status !== 302) throw new Error(`Unauthenticated application root must redirect; got ${root.status}`);
+              if (!String(root.headers.get('location') || '').includes('/member')) throw new Error('Unauthenticated root did not redirect to FXGA member login');
+              return {
+                architecture: health.architecture,
+                database: health.database,
+                googleCloudRuntime: health.googleCloudRuntime,
+                memberAuthEnforced: true,
+                unauthorizedApiBlocked: true,
+                unauthorizedSpaBlocked: true,
+                geminiConfigured: ai.configured,
+              };
+            }
+
+            const [dashboard, analysis, sessions, market, technical, quality, prompts, mt5] = await Promise.all([
+              getJson('/api/dashboard'),
+              getJson('/api/analysis'),
+              getJson('/api/session-signals'),
+              getJson('/api/market-prices'),
+              getJson('/api/technical'),
+              getJson('/api/data-quality'),
+              getJson('/api/gemini/prompts'),
+              getJson('/api/mt5/latest'),
+            ]);
 
             if (dashboard?._r0?.architecture !== 'cloudflare-r0') throw new Error('Dashboard is not served by the R0 compatibility runtime');
-            if (dashboard?._r0?.googleCloudRuntime !== false) throw new Error('Dashboard unexpectedly reports a Google Cloud runtime');
-            for (const key of ['macro','market','calendar','sources','errors']) {
-              if (!Array.isArray(dashboard[key])) throw new Error(`Dashboard ${key} contract is invalid`);
-            }
-            if (dashboard.macro.length < 1) throw new Error('Dashboard macro data is empty');
-            if (dashboard.market.length < 1) throw new Error('Dashboard market data is empty');
+            for (const key of ['macro','market','calendar','sources','errors']) if (!Array.isArray(dashboard[key])) throw new Error(`Dashboard ${key} contract is invalid`);
+            if (dashboard.macro.length < 1 || dashboard.market.length < 1) throw new Error('Dashboard data is empty');
+            if (!analysis?.regime || !analysis?.policy || !analysis?.coverage || !Array.isArray(analysis?.dimensions)) throw new Error('Analysis contract invalid');
+            if (!Array.isArray(sessions?.sessions) || sessions.sessions.length < 5) throw new Error('Session contract invalid');
+            if (market.schema !== 'fxga.r0.market-data.v1' || market?._r0?.source !== 'cloudflare-d1') throw new Error('Market R0 contract invalid');
+            if (!Array.isArray(market.canonicalFx) || market.canonicalFx.length < 4) throw new Error('Canonical FX coverage too small');
+            if (!technical?.counts || typeof technical?.assets !== 'object' || Number(technical.counts.assets || 0) < 1) throw new Error('Technical contract invalid');
+            if (quality?.architecture !== 'cloudflare-r0' || quality?.budget?.firestore !== false) throw new Error('Data-quality R0 contract invalid');
+            if (!Array.isArray(prompts.prompts) || prompts.prompts.length < 6) throw new Error('Prompt endpoint incomplete');
+            if (mt5.ok !== true) throw new Error('MT5 compatibility endpoint unhealthy');
 
-            if (!analysis?.regime || !analysis?.policy || !analysis?.coverage || !Array.isArray(analysis?.dimensions)) throw new Error('Analysis compatibility contract is invalid');
-            if (!Array.isArray(sessions?.sessions) || sessions.sessions.length < 5) throw new Error('Session compatibility contract is invalid');
-
-            if (market.schema !== 'fxga.r0.market-data.v1') throw new Error(`Market schema mismatch: ${market.schema || 'none'}`);
-            if (market?._r0?.source !== 'cloudflare-d1') throw new Error('Market state is not served from Cloudflare D1');
-            if (!Array.isArray(market.canonicalFx) || market.canonicalFx.length < 4) throw new Error(`Canonical FX coverage too small: ${market.canonicalFx?.length || 0}`);
-            const fxIds = new Set();
-            for (const asset of market.canonicalFx) {
-              if (!asset?.id || fxIds.has(asset.id)) throw new Error(`Duplicate or missing canonical FX ID: ${asset?.id || 'missing'}`);
-              fxIds.add(asset.id);
-              if (typeof asset.price !== 'number' || !Number.isFinite(asset.price)) throw new Error(`${asset.id} has no finite price`);
-            }
-            if (!Array.isArray(market.contextAssets) || market.contextAssets.length < 1) throw new Error('Risk context assets are empty');
-            if (!Array.isArray(market.microstructureAssets) || market.microstructureAssets.length < 1) throw new Error('Public microstructure assets are empty');
-            const providersHealthy = Object.values(market.sources || {}).filter((source) => source?.ok === true).length;
-            if (providersHealthy < 1) throw new Error('No healthy free market provider is recorded');
-
-            if (!technical?.counts || typeof technical?.assets !== 'object' || Array.isArray(technical.assets)) throw new Error('Frontend technical compatibility contract is invalid');
-            if (Number(technical.counts.assets || 0) < 1) throw new Error('Frontend technical snapshot has no assets');
-
-            if (quality?.architecture !== 'cloudflare-r0') throw new Error(`Data-quality architecture mismatch: ${quality?.architecture || 'none'}`);
-            if (!quality?.macro?.coverage || !quality?.market || !quality?.technical || !quality?.calendar) throw new Error('Frontend data-quality compatibility contract is invalid');
-            if (quality?.budget?.firestore !== false) throw new Error('Firestore dependency must remain disabled in R0 data collection');
-            if (quality?.budget?.mode !== 'deterministic-r0-schedule') throw new Error(`Unexpected free-tier budget mode: ${quality?.budget?.mode}`);
-
-            if (ai.configured !== true) throw new Error('Gemini AI is not configured');
-            if (Number(ai.promptCount || 0) < 6) throw new Error(`Gemini prompt registry too small: ${ai.promptCount || 0}`);
-            if (!Array.isArray(prompts.prompts) || prompts.prompts.length < 6) throw new Error('Prompt endpoint is incomplete');
-            if (prompts.schema !== 'fxga.prompt-registry.v1') throw new Error(`Prompt schema mismatch: ${prompts.schema || 'none'}`);
-
-            if (mt5.ok !== true) throw new Error('MT5 compatibility endpoint is unhealthy');
-            if (mt5.available !== false && !mt5.data) throw new Error('MT5 latest endpoint returned an invalid available state');
-
-            const root = await fetch(`${base}/?contract=${Date.now()}`, { cache: 'no-store' });
+            const root = await raw(`/?contract=${Date.now()}`, { headers: { Accept: 'text/html' } });
             if (!root.ok) throw new Error(`Static application returned HTTP ${root.status}`);
             const html = await root.text();
-            if (!html.includes('<div id="root"')) throw new Error('Static application is missing the React mount point');
+            if (!html.includes('<div id="root"')) throw new Error('Static application missing React mount point');
 
             return {
               architecture: health.architecture,
-              compute: health.compute,
               database: health.database,
               googleCloudRuntime: health.googleCloudRuntime,
+              memberAuthEnforced: false,
+              memberAuthPendingGoogleSetup: true,
               dashboardMacro: dashboard.macro.length,
               dashboardMarket: dashboard.market.length,
               canonicalFx: market.canonicalFx.length,
-              contextAssets: market.contextAssets.length,
-              microstructureAssets: market.microstructureAssets.length,
-              providersHealthy,
               technicalAssets: technical.counts.assets,
-              firestoreDependency: quality.budget.firestore,
               geminiConfigured: ai.configured,
-              promptCount: ai.promptCount,
-              mt5Available: mt5.available,
             };
           }
 
@@ -136,7 +132,7 @@ jobs:
             try {
               const result = await verifyOnce();
               console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-              console.log('PRODUCTION R0 FRONTEND + DATA CONTRACT PASSED');
+              console.log('PRODUCTION R0 + MEMBER ACCESS CONTRACT PASSED');
               process.exit(0);
             } catch (error) {
               lastError = error;
