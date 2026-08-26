@@ -8,9 +8,11 @@ The report bridge is deliberately on-demand.
 2. `POST /api/elliott-reports/request` creates one Firestore capture job containing all 21 standard MT5 timeframes.
 3. The MT5 **EA Bridge** performs a lightweight authenticated poll. It does **not** take screenshots while no job exists.
 4. When the job is claimed, EA Bridge opens temporary charts, applies the FXGA Elliott template, waits for the indicator render-ready handshake, captures each timeframe, and uploads each PNG to the authenticated report API.
-5. Cloud Run combines the 21 PNG files into one PDF with `pdf-lib`.
-6. The final PDF is stored in a private Google Cloud Storage bucket. Temporary PNG objects are deleted after successful PDF creation.
+5. Cloud Run stores incoming PNG payloads as private Firestore chunks and combines the 21 images into one PDF with `pdf-lib`.
+6. The final PDF is stored as private Firestore chunks. Temporary screenshot chunks are deleted after successful PDF creation.
 7. The Analysis page lists completed PDFs and streams them through `/api/elliott-reports/:id/pdf` for the embedded viewer or full-screen viewing.
+
+This design deliberately uses the project's existing Firestore permissions. It does not require Cloud Storage bucket creation or new project-level storage IAM permissions.
 
 ## Standard timeframe set
 
@@ -29,7 +31,7 @@ The website bridge is split intentionally:
 
 ### EA Bridge version 13.21
 
-`EA Bridge.mq5` now uses safe-idle initialization.
+`EA Bridge.mq5` uses safe-idle initialization.
 
 If the Cloud Run API URL or bridge secret is missing, the EA:
 
@@ -43,7 +45,7 @@ This replaces the previous behavior where incomplete inputs could return initial
 
 ## Security
 
-The Google Cloud Storage bucket is private. The browser never receives the MT5 bridge secret or a storage credential.
+Screenshot and PDF bytes are held in private Google Cloud Firestore documents/subcollections and are not exposed as public object URLs. The browser never receives the MT5 bridge secret or Google Cloud credentials.
 
 MT5 endpoints require:
 
@@ -60,12 +62,24 @@ Repository -> Settings -> Secrets and variables -> Actions -> New repository sec
 - Name: `FXGA_MT5_REPORT_SECRET`
 - Value: a long random secret (32+ random bytes recommended)
 
-The deployment workflow will create/reuse:
+The deployment workflow creates/reuses:
 
 - Secret Manager: `fxga-mt5-report-secret`
-- Private bucket: `gs://fxglobalavengerstradingacademy-fxga-elliott-reports`
 - Runtime secret binding: `FXGA_MT5_REPORT_SECRET`
-- Runtime environment: `FXGA_REPORT_BUCKET`
+- Existing project Firestore database for private report chunks
+
+No new Cloud Storage bucket is required.
+
+## Firestore binary storage
+
+Firestore documents have a size limit, so screenshot/PDF byte streams are split into bounded chunks. The report service uses:
+
+- metadata collection: `fxga_elliott_report_blobs`
+- per-blob `chunks` subcollection
+- 700 KiB payload chunks
+- deterministic blob IDs per job/timeframe
+- temporary screenshot chunk deletion after PDF completion
+- private PDF reconstruction only through the Cloud Run API
 
 ## MT5 setup
 
