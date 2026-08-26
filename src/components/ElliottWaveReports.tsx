@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import './ElliottWaveReports.css';
 
 const ALL_MT5_TIMEFRAMES=['M1','M2','M3','M4','M5','M6','M10','M12','M15','M20','M30','H1','H2','H3','H4','H6','H8','H12','D1','W1','MN1'];
+const API_BASE=String((import.meta as ImportMeta & { env?: Record<string,string|undefined> }).env?.VITE_GOOGLE_CLOUD_API_BASE||'').trim().replace(/\/+$/,'');
 
 type BridgeState={online:boolean;lastSeen:string|null;terminalId:string|null};
 type ElliottReport={id:string;symbol:string;timeframes:string[];pageCount:number;createdAt:string|null;completedAt:string|null;fileName:string;pdfUrl:string};
 type ElliottJob={id:string;status:string;symbol:string;timeframes:string[];uploadedTimeframes:string[];createdAt:string|null;updatedAt:string|null;error:string|null;reportId:string|null};
 
 function formatTime(value:string|null){if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?value:d.toLocaleString();}
-function absolutePdfUrl(path:string){return new URL(path,window.location.origin).toString();}
+function absolutePdfUrl(path:string){return API_BASE?`${API_BASE}${path}`:new URL(path,window.location.origin).toString();}
 
 export function ElliottWaveReports(){
   const [symbol,setSymbol]=useState('XAUUSD');
