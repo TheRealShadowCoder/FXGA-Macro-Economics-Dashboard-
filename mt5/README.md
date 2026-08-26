@@ -2,46 +2,59 @@
 
 This folder contains the MetaTrader 5 components used by the FXGA dashboard.
 
-## Elliott Wave website PDF bridge
+## Elliott Wave 60-Day AI dossier bridge
 
-`EA Bridge.mq5` is the authenticated on-demand screenshot bridge for the **Elliott Wave PDF Reports** section.
+`EA Bridge.mq5` is the authenticated, on-demand MT5 worker for the **60-Day Elliott + Macro AI Dossier** section.
 
-### Version 13.22 behavior
+### EA Bridge v13.41
 
-EA Bridge now ships with the production Cloud Run API already configured:
+The default Cloud Run API base is:
 
 `https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app`
 
-The default terminal ID is also preconfigured as `FXGA-MT5-PRIMARY` and the poll interval is 3 seconds.
+The default terminal ID is `FXGA-MT5-PRIMARY` and the idle polling interval is 3 seconds.
 
-The bridge secret is deliberately **not committed to GitHub**. v13.22 first uses `InpWebsiteReportSecret` when supplied; otherwise it automatically looks for the private local file:
+The private report secret is deliberately **not committed to GitHub**. Enter the same protected value configured as `FXGA_MT5_REPORT_SECRET` into the local EA input `InpWebsiteReportSecret`. The v13.41 source requires a strong secret of at least 16 characters and remains safely attached/passive when configuration is incomplete.
 
-`MQL5/Files/Elliot Wave Indicator Report/EA_Bridge.secret`
-
-A one-time Windows helper is included as `Configure-EA-Bridge.ps1`. It securely prompts for `FXGA_MT5_REPORT_SECRET` and writes the local private secret file to the MT5 terminal data directory without printing the secret.
-
-When configuration is incomplete the EA stays attached in a passive state and performs no screenshots or uploads.
+Do not commit a populated secret, `.set` file or MT5 template containing the private value.
 
 When correctly connected it prints:
 
-`EA Bridge CONNECTED + AUTHENTICATED | terminal=FXGA-MT5-PRIMARY | ...`
+`EA Bridge v13.41 CONNECTED + AUTHENTICATED | terminal=FXGA-MT5-PRIMARY | ...`
 
-Screenshots are generated only after the user presses **Analyze Elliott Waves** on the website.
+Heavy work begins only after the website Analyze request is claimed. EA Bridge then:
+
+- exports at least 60 days of CLOSED-BAR M5/H1/H4/D1 history,
+- saves the parent chart's current Elliott template/settings,
+- uses one background worker chart so the user's working chart remains in front,
+- cycles all 21 standard MT5 timeframes,
+- waits for the indicator's `FXGA_EW_AI_EVIDENCE_READY_*` and `FXGA_EW_REPORT_READY_*` handshakes,
+- reads `FXGA_EW_AI_EVIDENCE_<chartId>.json`,
+- uploads strict structured evidence and one PNG for each timeframe,
+- asks Cloud Run to finalize the single 60-day dossier PDF.
+
+The current server contract is:
+
+- indicator evidence: `FXGA_EW_AI_EVIDENCE_1`
+- dossier: `FXGA_60D_AI_DOSSIER_2`
+- Gemini input: one PDF only
+- automatic order placement: disabled
 
 ### Install EA Bridge
 
 1. Copy `EA Bridge.mq5` into `MQL5/Experts/FXGA/` and compile it in MetaEditor.
-2. Run `Configure-EA-Bridge.ps1` once and enter the same private value stored as `FXGA_MT5_REPORT_SECRET`.
-3. In MetaTrader 5 open **Tools → Options → Expert Advisors**.
-4. Enable **Allow WebRequest for listed URL**.
-5. Add `https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app`.
-6. Attach **EA Bridge** to one chart and keep Algo Trading enabled.
-7. The default inputs already use the production API and `FXGA-MT5-PRIMARY` terminal ID.
-8. Do not commit `EA_Bridge.secret` or a populated bridge secret into source control.
+2. Attach the matching FXGA Elliott indicator build to the parent chart and configure its visual/analysis inputs as desired.
+3. Attach **EA Bridge** to that same parent chart.
+4. In MetaTrader 5 open **Tools → Options → Expert Advisors**.
+5. Enable **Allow WebRequest for listed URL**.
+6. Add `https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app` or the current deployed Cloud Run origin.
+7. In EA Bridge inputs set `InpWebsiteReportSecret` to the same private `FXGA_MT5_REPORT_SECRET` value held by the backend.
+8. Keep `InpWebsiteReportHistoryDays = 60` or greater and `InpWebsiteReportRenderTimeoutSeconds = 90` unless a deliberate reason exists to change them.
+9. Keep Algo Trading enabled.
 
-The companion Elliott indicator renders each requested timeframe and publishes the render-ready handshake. `WebRequest()` remains isolated in EA Bridge because MT5 custom indicators cannot call it safely.
+The companion indicator owns Elliott calculations and the strict non-repaint evidence export. `WebRequest()` remains isolated in EA Bridge because MT5 custom indicators cannot safely perform it.
 
-See `docs/ELLIOTT_MT5_PDF_REPORT_BRIDGE.md` for the complete website/backend workflow.
+See `docs/ELLIOTT_MT5_PDF_REPORT_BRIDGE.md` for the complete dossier, non-repaint, economic-event and Gemini workflow.
 
 ---
 

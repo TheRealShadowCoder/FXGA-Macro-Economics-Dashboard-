@@ -1,185 +1,96 @@
 //+------------------------------------------------------------------+
-//| FXGA Elliott Website Report Bridge EA v13.22                     |
-//| On-demand MT5 screenshot uploader for the FXGA dashboard.        |
-//| WebRequest is deliberately isolated in this EA because MT5       |
-//| does not permit WebRequest from custom indicators.                |
+//| EA Bridge v13.50 - FXGA 60-Day Elliott + RSI/BB + Macro AI Dossier        |
+//| Authenticated, on-demand, non-focus-stealing MT5 worker bridge.  |
 //+------------------------------------------------------------------+
 #property copyright "FX Global Avengers Trading Academy"
-#property version   "13.22"
+#property version   "13.50"
 #property strict
-#property description "EA Bridge v13.22 - production API preconfigured, private local secret autoload, authenticated on-demand Elliott screenshot/PDF bridge."
+#property description "FXGA EA Bridge v13.50 - strict dual-engine non-repaint evidence handshake, 60-day history and 21-chart dossier capture."
 
-input group "WEBSITE • FXGA Elliott PDF Report Bridge"
+input group "WEBSITE • FXGA 60-Day Elliott AI Dossier"
 input bool   InpWebsiteReportBridge=true;
-input string InpWebsiteReportApiBase="https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app"; // Production FXGA Cloud Run API.
-input string InpWebsiteReportSecret=""; // Optional private override. Leave blank to auto-load the local secret file.
-input bool   InpWebsiteReportAutoLoadSecretFile=true;
-input string InpWebsiteReportSecretFile="Elliot Wave Indicator Report\\EA_Bridge.secret"; // Relative to MQL5\Files.
+input string InpWebsiteReportApiBase="https://fxga-macro-dashboard-kbjj66blka-uc.a.run.app";
+input string InpWebsiteReportSecret=""; // exact FXGA_MT5_REPORT_SECRET; never commit the value
 input string InpWebsiteReportTerminalId="FXGA-MT5-PRIMARY";
 input int    InpWebsiteReportPollSeconds=3;
 input int    InpWebsiteReportHttpTimeoutMs=60000;
 input int    InpWebsiteReportChartLoadSeconds=4;
+input int    InpWebsiteReportRenderTimeoutSeconds=90;
 input int    InpWebsiteReportScreenshotWidth=1600;
 input int    InpWebsiteReportScreenshotHeight=900;
 input int    InpWebsiteReportMaxRetries=3;
-input string InpWebsiteReportTemplateName="FXGA_Elliott_Web_Report_v13_20.tpl";
+input int    InpWebsiteReportHistoryDays=60; // forced to >=60
+input string InpWebsiteReportTemplateName="FXGA_Elliott_Web_Report_AUTO.tpl";
+input bool   InpWebsiteReportBackgroundCapture=true;
+input bool   InpWebsiteReportRequireRSIBBEvidence=true; // Require RSI/BB v2.32 local evidence on every worker timeframe.
+input int    InpWebsiteReportRSIBBTimeoutSeconds=90; // Hard wait ceiling for secondary confirmation evidence.
 input bool   InpWebsiteReportVerbose=true;
 
-enum ENUM_FXGA_WEB_REPORT_STAGE
+enum ENUM_FXGA_WEB_STAGE
   {
    FXGA_WEB_IDLE=0,
    FXGA_WEB_WAIT_RENDER=1,
    FXGA_WEB_COMPLETE=2
   };
 
-ENUM_FXGA_WEB_REPORT_STAGE gWebStage=FXGA_WEB_IDLE;
-bool     gWebChildMode=false;
-bool     gWebOwnLock=false;
-string   gWebApiBase="";
-string   gWebJobId="";
-string   gWebSymbol="";
-string   gWebTimeframes[];
-int      gWebTimeframeCount=0;
-int      gWebTimeframeIndex=0;
-long     gWebChildChartId=0;
-ulong    gWebChildOpenedMs=0;
-datetime gWebChildOpenedLocal=0;
-string   gWebScreenshotFile="";
-int      gWebRetryCount=0;
-ulong    gWebLastPollMs=0;
-ulong    gWebLastCompleteAttemptMs=0;
-bool     gWebConfigReady=false;
-string   gWebConfigIssue="";
-bool     gWebConfigWarningPrinted=false;
-string   gWebSecret="";
-bool     gWebSecretFromFile=false;
-bool     gWebAuthConfirmed=false;
-int      gWebLastHttpStatus=0;
+ENUM_FXGA_WEB_STAGE gStage=FXGA_WEB_IDLE;
+bool     gChildMode=false;
+bool     gOwnLock=false;
+bool     gConfigReady=false;
+bool     gAuthConfirmed=false;
+bool     gWarned=false;
+string   gApi="";
+string   gSecret="";
+string   gJob="";
+string   gSymbol="";
+string   gTFs[];
+string   gShot="";
+string   gHistory="";
+int      gTFCount=0;
+int      gTFIndex=0;
+int      gRetry=0;
+long     gParent=0;
+long     gWorker=0;
+ulong    gOpenedMs=0;
+ulong    gLastPollMs=0;
+ulong    gLastCompleteMs=0;
+datetime gOpenedLocal=0;
 
-bool WebConfigValidate()
+string Trim(string v)
   {
-   gWebConfigIssue="";
-   if(!InpWebsiteReportBridge)
-     {
-      gWebConfigIssue="bridge disabled by input";
-      return false;
-     }
-
-   gWebApiBase=WebNormalizeBase(InpWebsiteReportApiBase);
-   WebLoadSecret();
-
-   if(gWebApiBase=="")
-     {
-      gWebConfigIssue="InpWebsiteReportApiBase is empty";
-      return false;
-     }
-   if(StringFind(gWebApiBase,"https://")!=0 && StringFind(gWebApiBase,"http://")!=0)
-     {
-      gWebConfigIssue="InpWebsiteReportApiBase must begin with https:// or http://";
-      return false;
-     }
-   if(gWebSecret=="")
-     {
-      gWebConfigIssue="bridge secret missing; create MQL5\\Files\\"+InpWebsiteReportSecretFile+" or set InpWebsiteReportSecret";
-      return false;
-     }
-   if(StringLen(gWebSecret)<16)
-     {
-      gWebConfigIssue="bridge secret is too short; it must match FXGA_MT5_REPORT_SECRET";
-      return false;
-     }
-   if(InpWebsiteReportPollSeconds<1)
-     {
-      gWebConfigIssue="InpWebsiteReportPollSeconds must be at least 1";
-      return false;
-     }
-   if(InpWebsiteReportHttpTimeoutMs<1000)
-     {
-      gWebConfigIssue="InpWebsiteReportHttpTimeoutMs must be at least 1000";
-      return false;
-     }
-   if(InpWebsiteReportScreenshotWidth<640 || InpWebsiteReportScreenshotHeight<360)
-     {
-      gWebConfigIssue="screenshot dimensions are too small";
-      return false;
-     }
-   return true;
+   StringTrimLeft(v);
+   StringTrimRight(v);
+   return v;
   }
 
-void WebPrintConfigurationGuide()
+string Base(string v)
   {
-   if(gWebConfigWarningPrinted) return;
-   gWebConfigWarningPrinted=true;
-   Print("EA Bridge v13.22 | CONFIGURATION REQUIRED | ",gWebConfigIssue);
-   Print("EA Bridge | Production API is already configured: ",InpWebsiteReportApiBase);
-   Print("EA Bridge | Store FXGA_MT5_REPORT_SECRET privately in MQL5\\Files\\",InpWebsiteReportSecretFile," or use InpWebsiteReportSecret once.");
-   Print("EA Bridge | Also add the Cloud Run base URL in MT5: Tools > Options > Expert Advisors > Allow WebRequest for listed URL.");
-   Print("EA Bridge | The EA remains loaded and passive. It will not capture or upload screenshots while configuration is incomplete.");
+   v=Trim(v);
+   while(StringLen(v)>0 && StringSubstr(v,StringLen(v)-1,1)=="/")
+      v=StringSubstr(v,0,StringLen(v)-1);
+   return v;
   }
 
-string WebLockKey() { return "FXGA_EW_WEB_REPORT_LOCK"; }
-string WebLockHeartbeatKey() { return "FXGA_EW_WEB_REPORT_LOCK_HB"; }
-string WebChildKey(const long chart_id) { return "FXGA_EW_REPORT_CHILD_"+IntegerToString(chart_id); }
-string WebReadyKey(const long chart_id) { return "FXGA_EW_REPORT_READY_"+IntegerToString(chart_id); }
-
-string WebTrim(string value)
+string Esc(string v)
   {
-   StringTrimLeft(value);
-   StringTrimRight(value);
-   return value;
+   StringReplace(v,"\\","\\\\");
+   StringReplace(v,"\"","\\\"");
+   StringReplace(v,"\r"," ");
+   StringReplace(v,"\n"," ");
+   return v;
   }
 
-string WebNormalizeBase(string value)
-  {
-   value=WebTrim(value);
-   while(StringLen(value)>0 && StringSubstr(value,StringLen(value)-1,1)=="/")
-      value=StringSubstr(value,0,StringLen(value)-1);
-   return value;
-  }
+string LockKey()                    { return "FXGA_EW_WEB_REPORT_LOCK"; }
+string LockHB()                     { return "FXGA_EW_WEB_REPORT_LOCK_HB"; }
+string ChildKey(const long id)      { return "FXGA_EW_REPORT_CHILD_"+IntegerToString(id); }
+string ReadyKey(const long id)      { return "FXGA_EW_REPORT_READY_"+IntegerToString(id); }
+string EvidenceReadyKey(const long id){ return "FXGA_EW_AI_EVIDENCE_READY_"+IntegerToString(id); }
+string EvidenceFile(const long id)  { return "FXGA_EW_AI_EVIDENCE_"+IntegerToString(id)+".json"; }
+string RSIEvidenceReadyKey(const long id){ return "FXGA_RSI_BB_AI_EVIDENCE_READY_"+IntegerToString(id); }
+string RSIEvidenceFile(const long id) { return "FXGA_RSI_BB_AI_EVIDENCE_"+IntegerToString(id)+".json"; }
+string HistoryFile()                { return "FXGA_EW_60D_HISTORY_"+IntegerToString(ChartID())+".csv"; }
 
-bool WebLoadSecret()
-  {
-   gWebSecret=WebTrim(InpWebsiteReportSecret);
-   gWebSecretFromFile=false;
-   if(StringLen(gWebSecret)>=16) return true;
-   gWebSecret="";
-   if(!InpWebsiteReportAutoLoadSecretFile) return false;
-
-   string candidates[2];
-   candidates[0]=WebTrim(InpWebsiteReportSecretFile);
-   candidates[1]="EA_Bridge.secret";
-   for(int i=0;i<2;i++)
-     {
-      if(candidates[i]=="") continue;
-      ResetLastError();
-      int h=FileOpen(candidates[i],FILE_READ|FILE_TXT|FILE_ANSI);
-      if(h==INVALID_HANDLE) continue;
-      string secret="";
-      while(!FileIsEnding(h)) secret+=FileReadString(h);
-      FileClose(h);
-      secret=WebTrim(secret);
-      if(StringLen(secret)>=16)
-        {
-         gWebSecret=secret;
-         gWebSecretFromFile=true;
-         if(InpWebsiteReportVerbose)
-            Print("EA Bridge v13.22 | private secret loaded from MQL5\\Files\\",candidates[i]);
-         return true;
-        }
-     }
-   return false;
-  }
-
-string WebJsonEscape(string value)
-  {
-   StringReplace(value,"\\","\\\\");
-   StringReplace(value,"\"","\\\"");
-   StringReplace(value,"\r"," ");
-   StringReplace(value,"\n"," ");
-   return value;
-  }
-
-string WebJsonString(const string json,const string key)
+string JsonString(const string json,const string key)
   {
    string needle="\""+key+"\":";
    int p=StringFind(json,needle);
@@ -209,138 +120,161 @@ string WebJsonString(const string json,const string key)
    return out;
   }
 
-bool WebJsonJobIsNull(const string json)
+bool JobNull(const string json)
   {
    return StringFind(json,"\"job\":null")>=0;
   }
 
-ENUM_TIMEFRAMES WebTimeframeFromName(string tf)
+ENUM_TIMEFRAMES TF(string s)
   {
-   tf=WebTrim(tf);
-   StringToUpper(tf);
-   if(tf=="M1") return PERIOD_M1;
-   if(tf=="M2") return PERIOD_M2;
-   if(tf=="M3") return PERIOD_M3;
-   if(tf=="M4") return PERIOD_M4;
-   if(tf=="M5") return PERIOD_M5;
-   if(tf=="M6") return PERIOD_M6;
-   if(tf=="M10") return PERIOD_M10;
-   if(tf=="M12") return PERIOD_M12;
-   if(tf=="M15") return PERIOD_M15;
-   if(tf=="M20") return PERIOD_M20;
-   if(tf=="M30") return PERIOD_M30;
-   if(tf=="H1") return PERIOD_H1;
-   if(tf=="H2") return PERIOD_H2;
-   if(tf=="H3") return PERIOD_H3;
-   if(tf=="H4") return PERIOD_H4;
-   if(tf=="H6") return PERIOD_H6;
-   if(tf=="H8") return PERIOD_H8;
-   if(tf=="H12") return PERIOD_H12;
-   if(tf=="D1") return PERIOD_D1;
-   if(tf=="W1") return PERIOD_W1;
-   if(tf=="MN1") return PERIOD_MN1;
+   s=Trim(s);
+   StringToUpper(s);
+   if(s=="M1") return PERIOD_M1;
+   if(s=="M2") return PERIOD_M2;
+   if(s=="M3") return PERIOD_M3;
+   if(s=="M4") return PERIOD_M4;
+   if(s=="M5") return PERIOD_M5;
+   if(s=="M6") return PERIOD_M6;
+   if(s=="M10") return PERIOD_M10;
+   if(s=="M12") return PERIOD_M12;
+   if(s=="M15") return PERIOD_M15;
+   if(s=="M20") return PERIOD_M20;
+   if(s=="M30") return PERIOD_M30;
+   if(s=="H1") return PERIOD_H1;
+   if(s=="H2") return PERIOD_H2;
+   if(s=="H3") return PERIOD_H3;
+   if(s=="H4") return PERIOD_H4;
+   if(s=="H6") return PERIOD_H6;
+   if(s=="H8") return PERIOD_H8;
+   if(s=="H12") return PERIOD_H12;
+   if(s=="D1") return PERIOD_D1;
+   if(s=="W1") return PERIOD_W1;
+   if(s=="MN1") return PERIOD_MN1;
    return PERIOD_CURRENT;
   }
 
-bool WebAcquireWorkerLock()
+bool Config()
   {
-   if(gWebChildMode) return false;
-   string key=WebLockKey(),hbkey=WebLockHeartbeatKey();
+   gApi=Base(InpWebsiteReportApiBase);
+   gSecret=Trim(InpWebsiteReportSecret);
+   if(!InpWebsiteReportBridge) return false;
+   if(gApi=="" || (StringFind(gApi,"https://")!=0 && StringFind(gApi,"http://")!=0))
+     {
+      Print("EA Bridge v13.50 | invalid API base");
+      return false;
+     }
+   if(StringLen(gSecret)<16)
+     {
+      Print("EA Bridge v13.50 | paste the exact strong FXGA_MT5_REPORT_SECRET into InpWebsiteReportSecret");
+      return false;
+     }
+   if(InpWebsiteReportPollSeconds<1 || InpWebsiteReportHttpTimeoutMs<1000 ||
+      InpWebsiteReportScreenshotWidth<640 || InpWebsiteReportScreenshotHeight<360 ||
+      InpWebsiteReportRenderTimeoutSeconds<10)
+      return false;
+   return true;
+  }
+
+void Guide()
+  {
+   if(gWarned) return;
+   gWarned=true;
+   Print("EA Bridge v13.50 | CONFIGURATION REQUIRED | API=",InpWebsiteReportApiBase,
+         " | paste FXGA_MT5_REPORT_SECRET into EA Inputs");
+   Print("EA Bridge | Whitelist the Cloud Run URL under MT5 Tools > Options > Expert Advisors > Allow WebRequest for listed URL. EA remains safely attached/passive.");
+  }
+
+bool Acquire()
+  {
+   if(gChildMode) return false;
    double me=(double)ChartID();
    datetime now=TimeLocal();
-   if(!GlobalVariableCheck(key))
+   if(!GlobalVariableCheck(LockKey()))
      {
-      GlobalVariableSet(key,me);
-      GlobalVariableSet(hbkey,(double)now);
+      GlobalVariableSet(LockKey(),me);
+      GlobalVariableSet(LockHB(),(double)now);
      }
-   double owner=GlobalVariableGet(key);
-   if((long)owner==ChartID())
+   if((long)GlobalVariableGet(LockKey())==ChartID())
      {
-      GlobalVariableSet(hbkey,(double)now);
-      gWebOwnLock=true;
+      GlobalVariableSet(LockHB(),(double)now);
+      gOwnLock=true;
       return true;
      }
-   datetime heartbeat=0;
-   if(GlobalVariableCheck(hbkey)) heartbeat=(datetime)(long)GlobalVariableGet(hbkey);
-   if(heartbeat<=0 || now-heartbeat>30)
+   datetime hb=GlobalVariableCheck(LockHB()) ? (datetime)(long)GlobalVariableGet(LockHB()) : 0;
+   if(hb<=0 || now-hb>30)
      {
-      GlobalVariableSet(key,me);
-      GlobalVariableSet(hbkey,(double)now);
-      gWebOwnLock=true;
+      GlobalVariableSet(LockKey(),me);
+      GlobalVariableSet(LockHB(),(double)now);
+      gOwnLock=true;
       if(InpWebsiteReportVerbose) Print("EA Bridge | recovered stale terminal worker lock");
       return true;
      }
-   gWebOwnLock=false;
+   gOwnLock=false;
    return false;
   }
 
-void WebReleaseWorkerLock()
+void Release()
   {
-   if(!gWebOwnLock) return;
-   if(GlobalVariableCheck(WebLockKey()) && (long)GlobalVariableGet(WebLockKey())==ChartID())
+   if(!gOwnLock) return;
+   if(GlobalVariableCheck(LockKey()) && (long)GlobalVariableGet(LockKey())==ChartID())
      {
-      GlobalVariableDel(WebLockKey());
-      GlobalVariableDel(WebLockHeartbeatKey());
+      GlobalVariableDel(LockKey());
+      GlobalVariableDel(LockHB());
      }
-   gWebOwnLock=false;
+   gOwnLock=false;
   }
 
-bool WebHttp(const string method,const string path,const string content_type,
-             const char &data[],int &status,string &body)
+bool Http(const string method,const string path,const string contentType,const char &data[],int &status,string &body)
   {
-   body=""; status=-1;
-   if(gWebApiBase=="") return false;
-   string headers="Accept: application/json\r\nX-FXGA-MT5-Secret: "+gWebSecret+"\r\n";
-   if(content_type!="") headers+="Content-Type: "+content_type+"\r\n";
+   body="";
+   status=-1;
+   string headers="Accept: application/json\r\nX-FXGA-MT5-Secret: "+gSecret+"\r\n";
+   if(contentType!="") headers+="Content-Type: "+contentType+"\r\n";
    char result[];
-   string response_headers="";
+   string responseHeaders="";
    ResetLastError();
    int timeout=(InpWebsiteReportHttpTimeoutMs<1000 ? 1000 : InpWebsiteReportHttpTimeoutMs);
-   status=WebRequest(method,gWebApiBase+path,headers,timeout,data,result,response_headers);
+   status=WebRequest(method,gApi+path,headers,timeout,data,result,responseHeaders);
    if(status==-1)
      {
       int err=GetLastError();
-      if(InpWebsiteReportVerbose)
-        {
-         Print("EA Bridge WebRequest failed | err=",err," | ",method," ",gWebApiBase+path);
-         if(err==4014) Print("EA Bridge | Add the Cloud Run API URL to MT5 Tools > Options > Expert Advisors > Allow WebRequest for listed URL.");
-        }
+      if(InpWebsiteReportVerbose) Print("EA Bridge WebRequest failed | err=",err," | ",method," ",gApi+path);
+      if(err==4014) Print("EA Bridge | whitelist ",gApi," in MT5 Expert Advisors WebRequest URLs");
       return false;
      }
    if(ArraySize(result)>0) body=CharArrayToString(result,0,-1,CP_UTF8);
-   return (status>=200 && status<300);
+   return status>=200 && status<300;
   }
 
-bool WebHttpEmpty(const string method,const string path,int &status,string &body)
+bool HttpEmpty(const string method,const string path,int &status,string &body)
   {
-   char data[];
-   ArrayResize(data,0);
-   return WebHttp(method,path,"application/json",data,status,body);
+   char d[];
+   ArrayResize(d,0);
+   return Http(method,path,"application/json",d,status,body);
   }
 
-bool WebHttpJson(const string method,const string path,const string json,int &status,string &body)
+bool HttpJson(const string method,const string path,const string json,int &status,string &body)
   {
-   char data[];
-   int n=StringToCharArray(json,data,0,WHOLE_ARRAY,CP_UTF8);
-   if(n>0 && data[n-1]==0) ArrayResize(data,n-1);
-   return WebHttp(method,path,"application/json",data,status,body);
+   char d[];
+   int n=StringToCharArray(json,d,0,WHOLE_ARRAY,CP_UTF8);
+   if(n>0 && d[n-1]==0) ArrayResize(d,n-1);
+   return Http(method,path,"application/json",d,status,body);
   }
 
-bool WebReadBinaryFile(const string file_name,char &bytes[])
+bool ReadFile(const string name,char &bytes[],const long limit)
   {
-   int h=FileOpen(file_name,FILE_READ|FILE_BIN|FILE_SHARE_READ);
+   int h=FileOpen(name,FILE_READ|FILE_BIN|FILE_SHARE_READ);
    if(h==INVALID_HANDLE) return false;
    long size=FileSize(h);
-   if(size<=0 || size>8*1024*1024)
+   if(size<=0 || size>limit)
      {
       FileClose(h);
       return false;
      }
-   int count=(int)size;
-   ArrayResize(bytes,count);
-   uint read=FileReadArray(h,bytes,0,count);
+   ArrayResize(bytes,(int)size);
+   uint n=FileReadArray(h,bytes,0,(int)size);
    FileClose(h);
-   if(read!=(uint)count)
+   if(n!=(uint)size)
      {
       ArrayResize(bytes,0);
       return false;
@@ -348,312 +282,461 @@ bool WebReadBinaryFile(const string file_name,char &bytes[])
    return true;
   }
 
-void WebCloseChildChart()
+bool FileExistsReadable(const string name)
   {
-   if(gWebChildChartId>0)
+   int h=FileOpen(name,FILE_READ|FILE_BIN|FILE_SHARE_READ);
+   if(h==INVALID_HANDLE) return false;
+   long size=FileSize(h);
+   FileClose(h);
+   return size>2;
+  }
+
+void BringParent()
+  {
+   if(!InpWebsiteReportBackgroundCapture) return;
+   if(gParent<=0) gParent=ChartID();
+   if(gParent>0)
      {
-      GlobalVariableDel(WebReadyKey(gWebChildChartId));
-      GlobalVariableDel(WebChildKey(gWebChildChartId));
-      ChartClose(gWebChildChartId);
+      ChartSetInteger(gParent,CHART_BRING_TO_TOP,true);
+      ChartRedraw(gParent);
      }
-   gWebChildChartId=0;
-   gWebChildOpenedMs=0;
-   gWebChildOpenedLocal=0;
   }
 
-void WebResetJob()
+void ClearWorkerHandshake(const long id)
   {
-   WebCloseChildChart();
-   if(gWebScreenshotFile!="") FileDelete(gWebScreenshotFile);
-   gWebJobId="";
-   gWebSymbol="";
-   ArrayResize(gWebTimeframes,0);
-   gWebTimeframeCount=0;
-   gWebTimeframeIndex=0;
-   gWebScreenshotFile="";
-   gWebRetryCount=0;
-   gWebStage=FXGA_WEB_IDLE;
+   if(id<=0) return;
+   FileDelete(EvidenceFile(id));
+   GlobalVariableDel(ReadyKey(id));
+   GlobalVariableDel(EvidenceReadyKey(id));
+   GlobalVariableDel(RSIEvidenceReadyKey(id));
+   FileDelete(RSIEvidenceFile(id));
   }
 
-void WebFailJob(const string reason)
+void CloseWorker()
   {
-   if(gWebJobId!="")
+   if(gWorker>0)
      {
-      int status=-1; string body="";
-      string json="{\"error\":\""+WebJsonEscape(reason)+"\"}";
-      WebHttpJson("POST","/api/elliott-reports/fail?jobId="+gWebJobId+"&terminalId="+InpWebsiteReportTerminalId,json,status,body);
+      ClearWorkerHandshake(gWorker);
+      GlobalVariableDel(ChildKey(gWorker));
+      ChartClose(gWorker);
+     }
+   gWorker=0;
+   gOpenedMs=0;
+   gOpenedLocal=0;
+   BringParent();
+  }
+
+void ResetJob()
+  {
+   CloseWorker();
+   if(gShot!="") FileDelete(gShot);
+   if(gHistory!="") FileDelete(gHistory);
+   gJob="";
+   gSymbol="";
+   gShot="";
+   gHistory="";
+   ArrayResize(gTFs,0);
+   gTFCount=0;
+   gTFIndex=0;
+   gRetry=0;
+   gStage=FXGA_WEB_IDLE;
+  }
+
+void Fail(const string reason)
+  {
+   if(gJob!="")
+     {
+      int st=-1;
+      string body="";
+      HttpJson("POST","/api/elliott-reports/fail?jobId="+gJob+"&terminalId="+InpWebsiteReportTerminalId,
+               "{\"error\":\""+Esc(reason)+"\"}",st,body);
      }
    Print("EA Bridge FAILED | ",reason);
-   WebResetJob();
+   ResetJob();
   }
 
-bool WebOpenCurrentTimeframe()
+bool WriteHistoryTF(const int h,const ENUM_TIMEFRAMES tf,const string name,const int days,const long offset)
   {
-   if(gWebTimeframeIndex<0 || gWebTimeframeIndex>=gWebTimeframeCount) return false;
-   string tf_name=gWebTimeframes[gWebTimeframeIndex];
-   ENUM_TIMEFRAMES tf=WebTimeframeFromName(tf_name);
-   if(tf==PERIOD_CURRENT && tf_name!="M1") return false;
-   if(!SymbolSelect(gWebSymbol,true)) return false;
-
-   long chart=ChartOpen(gWebSymbol,tf);
-   if(chart<=0) return false;
-   gWebChildChartId=chart;
-   GlobalVariableSet(WebChildKey(chart),1.0); // child bridge EA instances stay passive
-   GlobalVariableDel(WebReadyKey(chart));
-
-   if(!ChartApplyTemplate(chart,InpWebsiteReportTemplateName))
+   datetime to=TimeCurrent();
+   datetime from=to-(datetime)((days+3)*86400);
+   MqlRates r[];
+   ArraySetAsSeries(r,false);
+   int copied=-1;
+   for(int a=0;a<4;a++)
      {
-      if(InpWebsiteReportVerbose) Print("EA Bridge | ChartApplyTemplate failed for ",tf_name," err=",GetLastError());
-      WebCloseChildChart();
+      copied=CopyRates(gSymbol,tf,from,to,r);
+      if(copied>0) break;
+      Sleep(350);
+     }
+   if(copied<=0)
+     {
+      Print("EA Bridge | CopyRates failed ",gSymbol," ",name," err=",GetLastError());
       return false;
      }
-   gWebChildOpenedMs=GetTickCount64();
-   gWebChildOpenedLocal=TimeLocal();
-   gWebRetryCount=0;
-   gWebStage=FXGA_WEB_WAIT_RENDER;
-   if(InpWebsiteReportVerbose) Print("EA Bridge | opened ",gWebSymbol," ",tf_name," (",gWebTimeframeIndex+1,"/",gWebTimeframeCount,")");
-   return true;
+   datetime current=iTime(gSymbol,tf,0);
+   int written=0;
+   for(int i=0;i<copied;i++)
+     {
+      if(current>0 && r[i].time>=current) continue; // closed bars only
+      long utc=(long)r[i].time-offset;
+      string line=name+","+TimeToString(r[i].time,TIME_DATE|TIME_MINUTES|TIME_SECONDS)+","+
+                  IntegerToString(utc)+","+DoubleToString(r[i].open,_Digits)+","+
+                  DoubleToString(r[i].high,_Digits)+","+DoubleToString(r[i].low,_Digits)+","+
+                  DoubleToString(r[i].close,_Digits)+","+IntegerToString((long)r[i].tick_volume)+","+
+                  IntegerToString((long)r[i].spread)+","+IntegerToString((long)r[i].real_volume)+"\r\n";
+      FileWriteString(h,line);
+      written++;
+     }
+   if(InpWebsiteReportVerbose) Print("EA Bridge | history ",name," rows=",written);
+   return written>0;
   }
 
-bool WebCaptureAndUploadCurrent()
+bool UploadHistory()
   {
-   if(gWebChildChartId<=0 || gWebTimeframeIndex>=gWebTimeframeCount) return false;
-   string tf_name=gWebTimeframes[gWebTimeframeIndex];
-   int job_len=StringLen(gWebJobId);
-   int short_len=(job_len<8 ? job_len : 8);
-   string short_id=StringSubstr(gWebJobId,0,short_len);
-   gWebScreenshotFile="FXGA_Elliott_"+short_id+"_"+tf_name+".png";
-   FileDelete(gWebScreenshotFile);
-   ChartRedraw(gWebChildChartId);
-   Sleep(200);
-   ResetLastError();
-   int shot_width=(InpWebsiteReportScreenshotWidth<800 ? 800 : InpWebsiteReportScreenshotWidth);
-   int shot_height=(InpWebsiteReportScreenshotHeight<450 ? 450 : InpWebsiteReportScreenshotHeight);
-   if(!ChartScreenShot(gWebChildChartId,gWebScreenshotFile,shot_width,shot_height,ALIGN_RIGHT))
-     {
-      if(InpWebsiteReportVerbose) Print("EA Bridge | ChartScreenShot failed ",tf_name," err=",GetLastError());
-      return false;
-     }
-   Sleep(250);
-
-   char png[];
-   if(!WebReadBinaryFile(gWebScreenshotFile,png))
-     {
-      if(InpWebsiteReportVerbose) Print("EA Bridge | screenshot file not ready/readable ",gWebScreenshotFile);
-      return false;
-     }
-
-   int status=-1; string body="";
-   string path="/api/elliott-reports/upload?jobId="+gWebJobId+"&timeframe="+tf_name+"&terminalId="+InpWebsiteReportTerminalId;
-   bool ok=WebHttp("POST",path,"image/png",png,status,body);
+   int days=(InpWebsiteReportHistoryDays<60 ? 60 : InpWebsiteReportHistoryDays);
+   if(!SymbolSelect(gSymbol,true)) return false;
+   gHistory=HistoryFile();
+   FileDelete(gHistory);
+   int h=FileOpen(gHistory,FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(h==INVALID_HANDLE) return false;
+   long offset=(long)(TimeCurrent()-TimeGMT());
+   FileWriteString(h,"#FXGA_HISTORY_SCHEMA,2\r\n");
+   FileWriteString(h,"#symbol,"+gSymbol+"\r\n");
+   FileWriteString(h,"#history_days,"+IntegerToString(days)+"\r\n");
+   FileWriteString(h,"#generated_server_time,"+TimeToString(TimeCurrent(),TIME_DATE|TIME_MINUTES|TIME_SECONDS)+"\r\n");
+   FileWriteString(h,"#generated_gmt_time,"+TimeToString(TimeGMT(),TIME_DATE|TIME_MINUTES|TIME_SECONDS)+"\r\n");
+   FileWriteString(h,"#server_gmt_offset_seconds,"+IntegerToString(offset)+"\r\n");
+   FileWriteString(h,"#utc_quality,CURRENT_SERVER_OFFSET_ESTIMATE\r\n");
+   FileWriteString(h,"#causal_policy,CLOSED_BARS_ONLY\r\n");
+   FileWriteString(h,"tf,time_server,time_utc_epoch,open,high,low,close,tick_volume,spread,real_volume\r\n");
+   bool ok=true;
+   ok=WriteHistoryTF(h,PERIOD_M5,"M5",days,offset) && ok;
+   ok=WriteHistoryTF(h,PERIOD_H1,"H1",days,offset) && ok;
+   ok=WriteHistoryTF(h,PERIOD_H4,"H4",days,offset) && ok;
+   ok=WriteHistoryTF(h,PERIOD_D1,"D1",days,offset) && ok;
+   FileClose(h);
    if(!ok)
      {
-      if(InpWebsiteReportVerbose) Print("EA Bridge | upload failed ",tf_name," HTTP=",status," body=",body);
+      FileDelete(gHistory);
+      gHistory="";
       return false;
      }
-   FileDelete(gWebScreenshotFile);
-   gWebScreenshotFile="";
-   if(InpWebsiteReportVerbose) Print("EA Bridge | uploaded ",tf_name," HTTP=",status);
+   char data[];
+   if(!ReadFile(gHistory,data,16*1024*1024))
+     {
+      FileDelete(gHistory);
+      gHistory="";
+      return false;
+     }
+   int st=-1;
+   string body="";
+   ok=Http("POST","/api/elliott-reports/history?jobId="+gJob+"&terminalId="+InpWebsiteReportTerminalId,
+           "text/csv",data,st,body);
+   FileDelete(gHistory);
+   gHistory="";
+   if(!ok)
+     {
+      Print("EA Bridge | history upload failed HTTP=",st," body=",body);
+      return false;
+     }
+   Print("EA Bridge | 60-day CLOSED-BAR M5/H1/H4/D1 history uploaded | UTC=broker-offset estimate");
    return true;
   }
 
-bool WebPrepareJob(const string body)
+bool PrepareWorker()
   {
-   string id=WebJsonString(body,"id");
-   string symbol=WebJsonString(body,"symbol");
-   string csv=WebJsonString(body,"timeframes_csv");
-   if(id=="" || symbol=="" || csv=="") return false;
+   if(gTFIndex<0 || gTFIndex>=gTFCount) return false;
+   string name=gTFs[gTFIndex];
+   ENUM_TIMEFRAMES tf=TF(name);
+   if(tf==PERIOD_CURRENT && name!="M1") return false;
+   if(!SymbolSelect(gSymbol,true)) return false;
+
+   if(gWorker<=0)
+     {
+      gWorker=ChartOpen(gSymbol,tf);
+      if(gWorker<=0) return false;
+      GlobalVariableSet(ChildKey(gWorker),1.0);
+      ClearWorkerHandshake(gWorker);
+      if(!ChartApplyTemplate(gWorker,InpWebsiteReportTemplateName))
+        {
+         CloseWorker();
+         return false;
+        }
+     }
+   else
+     {
+      ClearWorkerHandshake(gWorker);
+      if(!ChartSetSymbolPeriod(gWorker,gSymbol,tf)) return false;
+     }
+
+   BringParent();
+   gOpenedMs=GetTickCount64();
+   gOpenedLocal=TimeLocal();
+   gRetry=0;
+   gStage=FXGA_WEB_WAIT_RENDER;
+   if(InpWebsiteReportVerbose)
+      Print("EA Bridge | BACKGROUND worker ",gSymbol," ",name," ",gTFIndex+1,"/",gTFCount,
+            " | waiting for strict indicator evidence handshake; working chart untouched");
+   return true;
+  }
+
+bool CaptureCurrent()
+  {
+   if(gWorker<=0 || gTFIndex>=gTFCount) return false;
+   string name=gTFs[gTFIndex];
+   string eFile=EvidenceFile(gWorker),rFile=RSIEvidenceFile(gWorker);
+   char evidenceBytes[],rsiBytes[];
+   if(!ReadFile(eFile,evidenceBytes,8*1024*1024))
+     {
+      if(InpWebsiteReportVerbose) Print("EA Bridge | Elliott evidence not readable yet | ",eFile);
+      return false;
+     }
+   if(InpWebsiteReportRequireRSIBBEvidence && !ReadFile(rFile,rsiBytes,8*1024*1024))
+     {
+      if(InpWebsiteReportVerbose) Print("EA Bridge | RSI/BB evidence not readable yet | ",rFile);
+      return false;
+     }
+
+   string elliott=CharArrayToString(evidenceBytes,0,-1,CP_UTF8);
+   string combined=elliott;
+   if(InpWebsiteReportRequireRSIBBEvidence)
+     {
+      string rsi=CharArrayToString(rsiBytes,0,-1,CP_UTF8);
+      StringTrimLeft(elliott); StringTrimRight(elliott);
+      StringTrimLeft(rsi); StringTrimRight(rsi);
+      int n=StringLen(elliott);
+      if(n<2 || StringSubstr(elliott,n-1,1)!="}" || StringLen(rsi)<2 || StringSubstr(rsi,0,1)!="{" || StringSubstr(rsi,StringLen(rsi)-1,1)!="}") return false;
+      combined=StringSubstr(elliott,0,n-1)+",\"rsi_bb_confirmation\":{\"schema_version\":\"FXGA_RSI_BB_AI_EVIDENCE_1\",\"role\":\"SECONDARY_CONFIRMATION_FILTER_ONLY\",\"evidence\":"+rsi+"}}";
+     }
+
+   int st=-1; string body="";
+   if(!HttpJson("POST","/api/elliott-ai/evidence?jobId="+gJob+"&timeframe="+name+"&terminalId="+InpWebsiteReportTerminalId,combined,st,body))
+     {
+      if(InpWebsiteReportVerbose) Print("EA Bridge | dual-engine evidence upload failed | ",name," HTTP=",st," body=",body);
+      return false;
+     }
+
+   int shortLen=(StringLen(gJob)<8 ? StringLen(gJob) : 8);
+   string shortId=StringSubstr(gJob,0,shortLen);
+   gShot="FXGA_Elliott_"+shortId+"_"+name+".png";
+   FileDelete(gShot);
+   ChartRedraw(gWorker);
+   Sleep(200);
+   int shotW=(InpWebsiteReportScreenshotWidth<800 ? 800 : InpWebsiteReportScreenshotWidth);
+   int shotH=(InpWebsiteReportScreenshotHeight<450 ? 450 : InpWebsiteReportScreenshotHeight);
+   if(!ChartScreenShot(gWorker,gShot,shotW,shotH,ALIGN_RIGHT)) return false;
+   Sleep(250);
+   char png[];
+   if(!ReadFile(gShot,png,8*1024*1024)) return false;
+
+   st=-1; body="";
+   bool ok=Http("POST","/api/elliott-reports/upload?jobId="+gJob+"&timeframe="+name+"&terminalId="+InpWebsiteReportTerminalId,
+                "image/png",png,st,body);
+   if(ok)
+     {
+      FileDelete(gShot); gShot="";
+      FileDelete(eFile);
+      if(InpWebsiteReportRequireRSIBBEvidence) FileDelete(rFile);
+      if(InpWebsiteReportVerbose) Print("EA Bridge | uploaded Elliott + RSI/BB evidence + screenshot ",name);
+     }
+   else if(InpWebsiteReportVerbose)
+      Print("EA Bridge | screenshot upload failed | ",name," HTTP=",st," body=",body);
+   BringParent();
+   return ok;
+  }
+
+bool PrepareJob(const string body)
+  {
+   string id=JsonString(body,"id");
+   string sym=JsonString(body,"symbol");
+   string csv=JsonString(body,"timeframes_csv");
+   if(id=="" || sym=="" || csv=="") return false;
 
    string parts[];
    ushort sep=StringGetCharacter(",",0);
-   int count=StringSplit(csv,sep,parts);
-   if(count<=0) return false;
-
-   ArrayResize(gWebTimeframes,count);
-   gWebTimeframeCount=0;
-   for(int i=0;i<count;i++)
+   int n=StringSplit(csv,sep,parts);
+   if(n<=0) return false;
+   ArrayResize(gTFs,n);
+   gTFCount=0;
+   for(int i=0;i<n;i++)
      {
-      string tf=WebTrim(parts[i]);
-      StringToUpper(tf);
-      if(tf=="") continue;
-      ENUM_TIMEFRAMES mapped=WebTimeframeFromName(tf);
-      if(mapped==PERIOD_CURRENT && tf!="M1") continue;
-      gWebTimeframes[gWebTimeframeCount++]=tf;
+      string t=Trim(parts[i]);
+      StringToUpper(t);
+      if(t=="") continue;
+      ENUM_TIMEFRAMES mapped=TF(t);
+      if(mapped==PERIOD_CURRENT && t!="M1") continue;
+      gTFs[gTFCount++]=t;
      }
-   ArrayResize(gWebTimeframes,gWebTimeframeCount);
-   if(gWebTimeframeCount<=0) return false;
+   ArrayResize(gTFs,gTFCount);
+   if(gTFCount<=0) return false;
 
-   gWebJobId=id;
-   gWebSymbol=symbol;
-   gWebTimeframeIndex=0;
-   gWebRetryCount=0;
-
-   // Save the exact chart/indicator configuration only after an Analyze job exists.
-   // This keeps screenshot activity and report-specific template work fully on-demand.
-   if(!ChartSaveTemplate(ChartID(),InpWebsiteReportTemplateName))
+   gJob=id;
+   gSymbol=sym;
+   gTFIndex=0;
+   gRetry=0;
+   gParent=ChartID();
+   if(!ChartSaveTemplate(gParent,InpWebsiteReportTemplateName))
      {
-      Print("EA Bridge | could not save capture template ",InpWebsiteReportTemplateName," err=",GetLastError());
+      Print("EA Bridge | ChartSaveTemplate failed err=",GetLastError());
       return false;
      }
-   return WebOpenCurrentTimeframe();
+   if(!UploadHistory()) return false;
+   BringParent();
+   return PrepareWorker();
   }
 
-void WebPollForJob()
+void Poll()
   {
-   if(gWebJobId!="") return;
+   if(gJob!="") return;
    ulong now=GetTickCount64();
-   int poll_seconds=(InpWebsiteReportPollSeconds<1 ? 1 : InpWebsiteReportPollSeconds);
-   if(gWebLastPollMs>0 && now-gWebLastPollMs<(ulong)poll_seconds*1000) return;
-   gWebLastPollMs=now;
-   int status=-1; string body="";
-   bool ok=WebHttpEmpty("GET","/api/elliott-reports/jobs/next?terminalId="+InpWebsiteReportTerminalId,status,body);
-   gWebLastHttpStatus=status;
+   int poll=(InpWebsiteReportPollSeconds<1 ? 1 : InpWebsiteReportPollSeconds);
+   if(gLastPollMs>0 && now-gLastPollMs<(ulong)poll*1000) return;
+   gLastPollMs=now;
+
+   int st=-1;
+   string body="";
+   bool ok=HttpEmpty("GET","/api/elliott-reports/jobs/next?terminalId="+InpWebsiteReportTerminalId,st,body);
    if(!ok)
      {
-      gWebAuthConfirmed=false;
-      if(status==401)
-         Print("EA Bridge AUTH FAILED | HTTP 401 | local secret does not match FXGA_MT5_REPORT_SECRET");
-      else if(status==-1)
-         Print("EA Bridge CONNECTION FAILED | add ",gWebApiBase," to MT5 Tools > Options > Expert Advisors > Allow WebRequest for listed URL");
-      else if(InpWebsiteReportVerbose)
-         Print("EA Bridge | poll HTTP=",status," body=",body);
+      gAuthConfirmed=false;
+      if(st==401) Print("EA Bridge AUTH FAILED | secret mismatch");
       return;
      }
-   if(!gWebAuthConfirmed)
+   if(!gAuthConfirmed)
      {
-      gWebAuthConfirmed=true;
-      Print("EA Bridge CONNECTED + AUTHENTICATED | terminal=",InpWebsiteReportTerminalId,
-            " | API=",gWebApiBase,
-            " | secret_source=",(gWebSecretFromFile ? "private-file" : "input-override"));
+      gAuthConfirmed=true;
+      Print("EA Bridge v13.50 CONNECTED + AUTHENTICATED | terminal=",InpWebsiteReportTerminalId,
+            " | API=",gApi," | strict 60-day dossier capture ready");
      }
-   if(WebJsonJobIsNull(body)) return; // IMPORTANT: no screenshots are taken while the website queue is empty.
-   if(!WebPrepareJob(body)) WebFailJob("Invalid job payload or unable to prepare capture template");
+   if(JobNull(body)) return;
+   if(!PrepareJob(body)) Fail("Invalid job or unable to prepare 60-day background dossier capture");
   }
 
-void WebProcessRenderWait()
+void ProcessWorker()
   {
-   if(gWebChildChartId<=0) { WebFailJob("Temporary report chart was lost"); return; }
-   ulong elapsed=GetTickCount64()-gWebChildOpenedMs;
-   bool ready=false;
-   string ready_key=WebReadyKey(gWebChildChartId);
-   if(GlobalVariableCheck(ready_key))
+   if(gWorker<=0)
      {
-      datetime published=(datetime)(long)GlobalVariableGet(ready_key);
-      ready=(published>=gWebChildOpenedLocal);
-     }
-   int load_seconds=(InpWebsiteReportChartLoadSeconds<2 ? 2 : InpWebsiteReportChartLoadSeconds);
-   bool fallback=(elapsed>=(ulong)load_seconds*1000);
-   if(!ready && !fallback) return;
-
-   if(!WebCaptureAndUploadCurrent())
-     {
-      gWebRetryCount++;
-      int max_retries=(InpWebsiteReportMaxRetries<1 ? 1 : InpWebsiteReportMaxRetries);
-      if(gWebRetryCount>=max_retries)
-        {
-         WebFailJob("Screenshot/upload failed for "+gWebTimeframes[gWebTimeframeIndex]+" after retries");
-         return;
-        }
+      Fail("Background worker chart was lost");
       return;
      }
 
-   WebCloseChildChart();
-   gWebTimeframeIndex++;
-   gWebRetryCount=0;
-   if(gWebTimeframeIndex>=gWebTimeframeCount)
+   ulong elapsed=GetTickCount64()-gOpenedMs;
+   int hardTimeout=(InpWebsiteReportRenderTimeoutSeconds<10 ? 10 : InpWebsiteReportRenderTimeoutSeconds);
+   if(InpWebsiteReportRequireRSIBBEvidence && InpWebsiteReportRSIBBTimeoutSeconds>hardTimeout)
+      hardTimeout=InpWebsiteReportRSIBBTimeoutSeconds;
+   if(elapsed>=(ulong)hardTimeout*1000)
      {
-      gWebStage=FXGA_WEB_COMPLETE;
-      gWebLastCompleteAttemptMs=0;
+      Fail("Timed out waiting for strict Elliott + RSI/BB evidence on "+gTFs[gTFIndex]+". Capture template must contain Elliott v13.30+ and RSI/BB v2.32+.");
       return;
      }
-   if(!WebOpenCurrentTimeframe()) WebFailJob("Unable to open/apply Elliott template for "+gWebTimeframes[gWebTimeframeIndex]);
+
+   bool renderReady=false,elliottReady=false,rsiReady=!InpWebsiteReportRequireRSIBBEvidence;
+   if(GlobalVariableCheck(ReadyKey(gWorker)))
+     {
+      datetime published=(datetime)(long)GlobalVariableGet(ReadyKey(gWorker));
+      renderReady=(published>=gOpenedLocal);
+     }
+   if(GlobalVariableCheck(EvidenceReadyKey(gWorker)))
+     {
+      datetime published=(datetime)(long)GlobalVariableGet(EvidenceReadyKey(gWorker));
+      elliottReady=(published>=gOpenedLocal && FileExistsReadable(EvidenceFile(gWorker)));
+     }
+   if(InpWebsiteReportRequireRSIBBEvidence && GlobalVariableCheck(RSIEvidenceReadyKey(gWorker)))
+     {
+      datetime published=(datetime)(long)GlobalVariableGet(RSIEvidenceReadyKey(gWorker));
+      rsiReady=(published>=gOpenedLocal && FileExistsReadable(RSIEvidenceFile(gWorker)));
+     }
+   if(!(renderReady && elliottReady && rsiReady)) return;
+
+   if(!CaptureCurrent())
+     {
+      gRetry++;
+      int maxRetry=(InpWebsiteReportMaxRetries<1 ? 1 : InpWebsiteReportMaxRetries);
+      if(gRetry>=maxRetry) Fail("Dual-engine evidence/screenshot upload failed for "+gTFs[gTFIndex]);
+      return;
+     }
+
+   gTFIndex++;
+   gRetry=0;
+   if(gTFIndex>=gTFCount)
+     {
+      gStage=FXGA_WEB_COMPLETE;
+      gLastCompleteMs=0;
+      return;
+     }
+   if(!PrepareWorker()) Fail("Unable to retarget background worker to "+gTFs[gTFIndex]);
   }
 
-void WebCompleteJob()
+void Complete()
   {
    ulong now=GetTickCount64();
-   if(gWebLastCompleteAttemptMs>0 && now-gWebLastCompleteAttemptMs<3000) return;
-   gWebLastCompleteAttemptMs=now;
-   int status=-1; string body="";
-   bool ok=WebHttpEmpty("POST","/api/elliott-reports/complete?jobId="+gWebJobId+"&terminalId="+InpWebsiteReportTerminalId,status,body);
-   if(ok && status==200)
+   if(gLastCompleteMs>0 && now-gLastCompleteMs<3000) return;
+   gLastCompleteMs=now;
+   int st=-1;
+   string body="";
+   bool ok=HttpEmpty("POST","/api/elliott-reports/complete?jobId="+gJob+"&terminalId="+InpWebsiteReportTerminalId,st,body);
+   if(ok && st==200)
      {
-      Print("EA Bridge READY | job=",gWebJobId," | ",gWebSymbol," | pages=",gWebTimeframeCount);
-      WebResetJob();
+      Print("EA Bridge READY | job=",gJob," | ",gSymbol,
+            " | 60-day history + 21 charts + strict Elliott + RSI/BB evidence -> ONE AI dossier PDF");
+      ResetJob();
       return;
      }
-   if(status==202) return; // backend is still assembling the PDF; retry until READY/200
-   gWebRetryCount++;
-   if(InpWebsiteReportVerbose) Print("EA Bridge | PDF finalize retry ",gWebRetryCount," HTTP=",status," body=",body);
-   int max_retries=(InpWebsiteReportMaxRetries<1 ? 1 : InpWebsiteReportMaxRetries);
-   if(gWebRetryCount>=max_retries) WebFailJob("Server could not finalize the PDF report");
+   if(st==202) return;
+   gRetry++;
+   if(InpWebsiteReportVerbose) Print("EA Bridge | dossier finalize retry ",gRetry," HTTP=",st," body=",body);
+   int maxRetry=(InpWebsiteReportMaxRetries<1 ? 1 : InpWebsiteReportMaxRetries);
+   if(gRetry>=maxRetry) Fail("Server could not finalize 60-day dossier PDF");
   }
 
 int OnInit()
   {
-   gWebApiBase=WebNormalizeBase(InpWebsiteReportApiBase);
-   gWebChildMode=GlobalVariableCheck(WebChildKey(ChartID()));
-
-   // Child charts created for screenshot rendering must always initialize
-   // passively even if the parent bridge is temporarily unconfigured.
-   if(gWebChildMode)
+   gParent=ChartID();
+   gApi=Base(InpWebsiteReportApiBase);
+   gChildMode=GlobalVariableCheck(ChildKey(ChartID()));
+   if(gChildMode)
      {
-      if(InpWebsiteReportVerbose)
-         Print("EA Bridge v13.22 | child capture chart passive | chart=",ChartID());
+      if(InpWebsiteReportVerbose) Print("EA Bridge v13.50 | passive worker child | chart=",ChartID());
       return INIT_SUCCEEDED;
      }
-
    EventSetTimer(1);
-
    if(!InpWebsiteReportBridge)
      {
-      gWebConfigReady=false;
-      gWebConfigIssue="bridge disabled by input";
-      Print("EA Bridge v13.22 | loaded successfully | bridge disabled");
+      Print("EA Bridge v13.50 | loaded, bridge disabled");
       return INIT_SUCCEEDED;
      }
-
-   gWebConfigReady=WebConfigValidate();
-
-   if(!gWebConfigReady)
+   gConfigReady=Config();
+   if(!gConfigReady)
      {
-      // v13.22: keep the EA attached instead of failing initialization.
-      // Staying attached makes configuration failures visible and prevents
-      // MT5 from immediately removing the EA from the chart.
-      WebPrintConfigurationGuide();
+      Guide();
       return INIT_SUCCEEDED;
      }
-
-   WebAcquireWorkerLock();
-   Print("EA Bridge v13.22 | READY | terminal=",InpWebsiteReportTerminalId,
-         " | API=",gWebApiBase,
-         " | secret_source=",(gWebSecretFromFile ? "private-file" : "input-override"),
-         " | screenshots occur ONLY after a website Analyze job");
+   Acquire();
+   Print("EA Bridge v13.50 | READY | terminal=",InpWebsiteReportTerminalId,
+         " | strict 60-day background capture ONLY after website Analyze");
    return INIT_SUCCEEDED;
   }
 
 void OnDeinit(const int reason)
   {
-   if(!gWebChildMode) EventKillTimer();
-   WebCloseChildChart();
-   if(gWebScreenshotFile!="") FileDelete(gWebScreenshotFile);
-   WebReleaseWorkerLock();
+   if(!gChildMode) EventKillTimer();
+   CloseWorker();
+   if(gShot!="") FileDelete(gShot);
+   if(gHistory!="") FileDelete(gHistory);
+   Release();
   }
 
 void OnTimer()
   {
-   if(gWebChildMode || !InpWebsiteReportBridge) return;
-
-   if(!gWebConfigReady)
+   if(gChildMode || !InpWebsiteReportBridge) return;
+   if(!gConfigReady)
      {
-      // Inputs are reapplied by MT5 through reinitialization, so there is no
-      // network activity while configuration is incomplete.
-      if(!gWebConfigWarningPrinted) WebPrintConfigurationGuide();
+      Guide();
       return;
      }
-
-   if(!WebAcquireWorkerLock()) return;
-   if(gWebStage==FXGA_WEB_IDLE) { WebPollForJob(); return; }
-   if(gWebStage==FXGA_WEB_WAIT_RENDER) { WebProcessRenderWait(); return; }
-   if(gWebStage==FXGA_WEB_COMPLETE) { WebCompleteJob(); return; }
+   if(!Acquire()) return;
+   if(gStage==FXGA_WEB_IDLE) { Poll(); return; }
+   if(gStage==FXGA_WEB_WAIT_RENDER) { ProcessWorker(); return; }
+   if(gStage==FXGA_WEB_COMPLETE) { Complete(); return; }
   }
+//+------------------------------------------------------------------+
