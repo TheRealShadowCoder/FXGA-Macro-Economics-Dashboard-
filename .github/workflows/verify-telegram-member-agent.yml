@@ -7,6 +7,7 @@ on:
       - 'agents/telegram-member-agent/**'
       - 'agents/README.md'
       - '.github/workflows/deploy-telegram-member-agent.yml'
+      - '.github/workflows/start-telegram-member-agent.yml'
       - '.github/workflows/verify-telegram-member-agent.yml'
 
 permissions:
@@ -59,9 +60,17 @@ jobs:
           grep -q 'introspect-admin-session' admin-server.js
           grep -q "payload?.member?.role !== 'super_admin'" admin-server.js
           grep -q "url.pathname === '/api/run'" admin-server.js
-          ! grep -REn 'FXGA_AGENT_ADMIN_KEY|X-FXGA-Agent-Admin-Key' admin-server.js .github 2>/dev/null \
+          ! grep -En 'FXGA_AGENT_ADMIN_KEY|X-FXGA-Agent-Admin-Key' admin-server.js \
             || { echo '::error::Legacy standalone Telegram admin-password gate must not return'; exit 1; }
           echo 'Persistence, safe preflight and FXGA super-admin control contracts verified.'
+
+      - name: Verify gated operations workflow
+        run: |
+          set -euo pipefail
+          grep -q 'fxga-telegram-member-agent-preflight' .github/workflows/start-telegram-member-agent.yml
+          grep -q 'Production preflight passed' .github/workflows/start-telegram-member-agent.yml
+          grep -q 'gcloud run jobs execute "$JOB_NAME"' .github/workflows/start-telegram-member-agent.yml
+          echo 'Operations can only start after the production preflight succeeds.'
 
       - name: Verify protected Telegram bot token
         env:
