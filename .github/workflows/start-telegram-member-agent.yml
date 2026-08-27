@@ -1,0 +1,64 @@
+name: Start FXGA Telegram Member Agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/start-telegram-member-agent.trigger'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  JOB_NAME: fxga-telegram-member-agent
+  PREFLIGHT_JOB: fxga-telegram-member-agent-preflight
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - id: config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify production readiness
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          gcloud run jobs describe "$JOB_NAME" --region "$GCP_REGION" >/dev/null
+          gcloud run jobs describe "$PREFLIGHT_JOB" --region "$GCP_REGION" >/dev/null
+          gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
+          echo 'Production preflight passed. Direct-add execution is permitted.'
+
+      - name: Begin direct-add operations
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$JOB_NAME" --region "$GCP_REGION" --wait --quiet
+          echo 'FXGA Telegram Member Agent operational run completed.'
+
+      - name: Operation summary
+        run: |
+          echo "Job: $JOB_NAME"
+          echo 'Mode: direct Add only'
+          echo 'Daily cap: 50 successful additions, persisted in Firestore'
+          echo 'Rate-limit and privacy restrictions remain enforced.'
