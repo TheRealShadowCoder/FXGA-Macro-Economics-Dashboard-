@@ -1,0 +1,303 @@
+name: Deploy FXGA Telegram Member Agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'agents/telegram-member-agent/**'
+      - 'agents/README.md'
+      - '.github/workflows/deploy-telegram-member-agent.yml'
+
+concurrency:
+  group: fxga-telegram-member-agent-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  GAR_REPOSITORY: fxga-containers
+  JOB_NAME: fxga-telegram-member-agent
+  PREFLIGHT_JOB: fxga-telegram-member-agent-preflight
+  ADMIN_SERVICE: fxga-telegram-member-agent-admin
+  SCHEDULER_NAME: fxga-telegram-member-agent-daily
+  SCHEDULE_CRON: '0 8 * * *'
+  SCHEDULE_TIME_ZONE: Africa/Johannesburg
+  AUTH_SERVICE_URL: https://fxga-trading-academy.few-nose.workers.dev
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  TELEGRAM_API_ID_SECRET: fxga-telegram-api-id
+  TELEGRAM_API_HASH_SECRET: fxga-telegram-api-hash
+  TELEGRAM_SESSION_SECRET: fxga-telegram-session
+  TELEGRAM_CHANNEL_SECRET: fxga-telegram-channel
+  TELEGRAM_BOT_TOKEN_SECRET: fxga-telegram-bot-token
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Validate agent source
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npm run check
+          node -e "const p=require('./package.json'); if(p.version !== '1.3.0' || !p.dependencies['@google-cloud/secret-manager']) process.exit(1)"
+          ! grep -REn "(api[_-]?hash|session)[[:space:]]*[:=][[:space:]]*['\"][A-Za-z0-9_=-]{20,}" . \
+            --exclude='package-lock.json' || { echo '::error::Possible Telegram credential committed to source'; exit 1; }
+          ! grep -REn "[0-9]{6,12}:AA[A-Za-z0-9_-]{20,}" . \
+            --exclude='package-lock.json' || { echo '::error::Possible Telegram bot token committed to source'; exit 1; }
+          ! find . -maxdepth 3 \( -name '*.xlsx' -o -name '*.xls' -o -name '*.csv' -o -name '*.session' \) -print -quit | grep -q . \
+            || { echo '::error::Member/source data must not be committed under the agent directory'; exit 1; }
+          ! grep -REn 'FXGA_AGENT_ADMIN_KEY|X-FXGA-Agent-Admin-Key' admin-server.js \
+            || { echo '::error::Legacy standalone agent password gate detected'; exit 1; }
+
+      - id: config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify Google Cloud resources
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          gcloud artifacts repositories describe "$GAR_REPOSITORY" \
+            --location "$GCP_REGION" --format='value(name)'
+          gcloud firestore databases describe --database='(default)' --format='value(name)' >/dev/null
+          gcloud services enable secretmanager.googleapis.com run.googleapis.com cloudscheduler.googleapis.com --quiet
+
+      - name: Best-effort Firestore runtime access
+        run: |
+          set +e
+          gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/datastore.user' \
+            --condition=None \
+            --quiet
+          STATUS=$?
+          if [ "$STATUS" -eq 0 ]; then
+            echo 'Firestore runtime access is configured.'
+          else
+            echo '::warning::Could not grant roles/datastore.user automatically. The runtime service account must already have Firestore read/write access.'
+          fi
+          exit 0
+
+      - name: Synchronize Telegram direct-add secrets to Secret Manager
+        env:
+          TG_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TG_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TG_SESSION: ${{ secrets.TELEGRAM_SESSION }}
+          TG_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+
+          sync_secret() {
+            local secret_name="$1"
+            local value="$2"
+            local github_name="$3"
+
+            if [ -n "$value" ]; then
+              if gcloud secrets describe "$secret_name" >/dev/null 2>&1; then
+                printf '%s' "$value" | gcloud secrets versions add "$secret_name" --data-file=- --quiet
+              else
+                printf '%s' "$value" | gcloud secrets create "$secret_name" \
+                  --replication-policy=automatic --data-file=- --quiet
+              fi
+              echo "$github_name synchronized to Google Secret Manager."
+            elif gcloud secrets versions access latest --secret="$secret_name" >/dev/null 2>&1; then
+              echo "$github_name is not set in GitHub; retaining the existing Secret Manager value."
+            else
+              echo "::error::$github_name is missing and no usable Secret Manager version exists for $secret_name."
+              exit 1
+            fi
+
+            gcloud secrets add-iam-policy-binding "$secret_name" \
+              --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+              --role='roles/secretmanager.secretAccessor' \
+              --quiet
+          }
+
+          sync_secret "$TELEGRAM_API_ID_SECRET" "$TG_API_ID" TELEGRAM_API_ID
+          sync_secret "$TELEGRAM_API_HASH_SECRET" "$TG_API_HASH" TELEGRAM_API_HASH
+          sync_secret "$TELEGRAM_SESSION_SECRET" "$TG_SESSION" TELEGRAM_SESSION
+          sync_secret "$TELEGRAM_CHANNEL_SECRET" "$TG_CHANNEL" TELEGRAM_CHANNEL
+
+      - name: Prepare secure Telegram bot-token setting
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+
+          if ! gcloud secrets describe "$TELEGRAM_BOT_TOKEN_SECRET" >/dev/null 2>&1; then
+            gcloud secrets create "$TELEGRAM_BOT_TOKEN_SECRET" --replication-policy=automatic --quiet
+          fi
+          if [ -n "${TG_BOT_TOKEN:-}" ]; then
+            printf '%s' "$TG_BOT_TOKEN" | gcloud secrets versions add "$TELEGRAM_BOT_TOKEN_SECRET" --data-file=- --quiet
+            echo 'TELEGRAM_BOT_TOKEN synchronized without exposing its value.'
+          else
+            echo 'TELEGRAM_BOT_TOKEN is not set in GitHub; retaining existing Secret Manager versions.'
+          fi
+
+          gcloud secrets add-iam-policy-binding "$TELEGRAM_BOT_TOKEN_SECRET" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/secretmanager.secretAccessor' \
+            --quiet
+          gcloud secrets add-iam-policy-binding "$TELEGRAM_BOT_TOKEN_SECRET" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/secretmanager.secretVersionAdder' \
+            --quiet
+
+      - name: Build and push agent image
+        run: |
+          set -euo pipefail
+          IMAGE="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/$JOB_NAME:${GITHUB_SHA}"
+          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+          docker build --pull -f agents/telegram-member-agent/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Create or update Cloud Run direct-add job
+        run: |
+          set -euo pipefail
+          gcloud run jobs deploy "$JOB_NAME" \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --tasks 1 \
+            --max-retries 0 \
+            --task-timeout 3600s \
+            --cpu 1 \
+            --memory 512Mi \
+            --set-env-vars 'DAILY_TARGET_MIN=20,DAILY_TARGET_MAX=50,MAX_ATTEMPTS_PER_RUN=100,ATTEMPT_DELAY_MS=5000,TIME_ZONE=Africa/Johannesburg,LOCK_MINUTES=65,FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent,DRY_RUN=false' \
+            --set-secrets "TELEGRAM_API_ID=$TELEGRAM_API_ID_SECRET:latest,TELEGRAM_API_HASH=$TELEGRAM_API_HASH_SECRET:latest,TELEGRAM_SESSION=$TELEGRAM_SESSION_SECRET:latest,TELEGRAM_CHANNEL=$TELEGRAM_CHANNEL_SECRET:latest" \
+            --quiet
+
+      - name: Create or update production preflight job
+        run: |
+          set -euo pipefail
+          gcloud run jobs deploy "$PREFLIGHT_JOB" \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --tasks 1 \
+            --max-retries 0 \
+            --task-timeout 300s \
+            --cpu 1 \
+            --memory 512Mi \
+            --command node \
+            --args preflight.mjs \
+            --set-env-vars 'FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent' \
+            --set-secrets "TELEGRAM_API_ID=$TELEGRAM_API_ID_SECRET:latest,TELEGRAM_API_HASH=$TELEGRAM_API_HASH_SECRET:latest,TELEGRAM_SESSION=$TELEGRAM_SESSION_SECRET:latest,TELEGRAM_CHANNEL=$TELEGRAM_CHANNEL_SECRET:latest" \
+            --quiet
+
+      - name: Authorize control service to invoke direct-add job
+        run: |
+          set -euo pipefail
+          gcloud run jobs add-iam-policy-binding "$JOB_NAME" \
+            --region "$GCP_REGION" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/run.invoker' \
+            --quiet
+
+      - name: Create or update FXGA super-admin control service
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$ADMIN_SERVICE" \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --cpu 1 \
+            --memory 256Mi \
+            --concurrency 20 \
+            --min 0 \
+            --max 1 \
+            --timeout 60 \
+            --command node \
+            --args admin-server.js \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,TELEGRAM_AGENT_JOB=$JOB_NAME,AUTH_SERVICE_URL=$AUTH_SERVICE_URL,TELEGRAM_BOT_TOKEN_SECRET=$TELEGRAM_BOT_TOKEN_SECRET,FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent" \
+            --quiet
+          ADMIN_URL="$(gcloud run services describe "$ADMIN_SERVICE" --region "$GCP_REGION" --format='value(status.url)')"
+          test -n "$ADMIN_URL" || { echo '::error::Telegram Agent control service URL is missing'; exit 1; }
+          curl --fail --silent --show-error "$ADMIN_URL/health" >/tmp/fxga-agent-admin-health.json
+          jq -e '.ok == true and .authMode == "fxga-super-admin-session"' /tmp/fxga-agent-admin-health.json >/dev/null
+          echo "AGENT_ADMIN_URL=$ADMIN_URL" >> "$GITHUB_ENV"
+          echo "Telegram Agent control service: $ADMIN_URL"
+
+      - name: Create or update daily Cloud Scheduler trigger
+        run: |
+          set -euo pipefail
+          URI="https://run.googleapis.com/v2/projects/$GCP_PROJECT_ID/locations/$GCP_REGION/jobs/$JOB_NAME:run"
+
+          if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http "$SCHEDULER_NAME" \
+              --location "$GCP_REGION" \
+              --schedule "$SCHEDULE_CRON" \
+              --time-zone "$SCHEDULE_TIME_ZONE" \
+              --uri "$URI" \
+              --http-method POST \
+              --oauth-service-account-email "$RUNTIME_SERVICE_ACCOUNT" \
+              --oauth-token-scope 'https://www.googleapis.com/auth/cloud-platform' \
+              --quiet
+          else
+            gcloud scheduler jobs create http "$SCHEDULER_NAME" \
+              --location "$GCP_REGION" \
+              --schedule "$SCHEDULE_CRON" \
+              --time-zone "$SCHEDULE_TIME_ZONE" \
+              --uri "$URI" \
+              --http-method POST \
+              --oauth-service-account-email "$RUNTIME_SERVICE_ACCOUNT" \
+              --oauth-token-scope 'https://www.googleapis.com/auth/cloud-platform' \
+              --quiet
+          fi
+
+      - name: Run production readiness preflight
+        run: |
+          set -euo pipefail
+          echo 'Running non-mutating Telegram production preflight using the production runtime identity and secrets.'
+          gcloud run jobs execute "$PREFLIGHT_JOB" \
+            --region "$GCP_REGION" \
+            --wait \
+            --quiet
+          echo 'Production preflight passed: queue, Telegram user session and target channel are ready.'
+
+      - name: Deployment summary
+        run: |
+          set -euo pipefail
+          echo "Cloud Run direct-add job: $JOB_NAME"
+          echo "Production preflight job: $PREFLIGHT_JOB"
+          echo "Super-admin control service: ${AGENT_ADMIN_URL:-missing}"
+          echo "Scheduler: $SCHEDULER_NAME ($SCHEDULE_CRON, $SCHEDULE_TIME_ZONE)"
+          echo 'Telegram bot token is isolated from the direct-add worker and stored only in Secret Manager.'
+          echo 'Human controls are authenticated by the existing FXGA super-admin session; there is no separate Telegram-agent password.'
+          gcloud run jobs describe "$JOB_NAME" --region "$GCP_REGION" \
+            --format='table(metadata.name,spec.template.template.spec.serviceAccountName)'
+          gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" \
+            --format='table(name,schedule,timeZone,state)'
