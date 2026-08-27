@@ -1,44 +1,37 @@
-import crypto from 'node:crypto';
 import http from 'node:http';
+import { Firestore, FieldValue } from '@google-cloud/firestore';
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 
 const PORT = Number(process.env.PORT || 8080);
 const PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '';
+const REGION = process.env.GCP_REGION || 'us-central1';
+const JOB_NAME = process.env.TELEGRAM_AGENT_JOB || 'fxga-telegram-member-agent';
+const AUTH_SERVICE_URL = String(process.env.AUTH_SERVICE_URL || 'https://fxga-trading-academy.few-nose.workers.dev').replace(/\/$/, '');
 const BOT_SECRET_NAME = process.env.TELEGRAM_BOT_TOKEN_SECRET || 'fxga-telegram-bot-token';
-const ADMIN_KEY = process.env.FXGA_AGENT_ADMIN_KEY || '';
+const QUEUE_COLLECTION = process.env.FIRESTORE_QUEUE_COLLECTION || 'telegram_member_queue';
+const STATE_COLLECTION = process.env.FIRESTORE_STATE_COLLECTION || 'agent_state';
+const STATE_DOCUMENT = process.env.FIRESTORE_STATE_DOCUMENT || 'telegram-member-agent';
+const db = new Firestore({ projectId: PROJECT_ID || undefined, ignoreUndefinedProperties: true });
 const secretManager = new SecretManagerServiceClient();
 const botSecret = `projects/${PROJECT_ID}/secrets/${BOT_SECRET_NAME}`;
+const stateRef = db.collection(STATE_COLLECTION).doc(STATE_DOCUMENT);
+const queue = db.collection(QUEUE_COLLECTION);
 const requestWindows = new Map();
 
 const SECURITY_HEADERS = Object.freeze({
   'Cache-Control': 'no-store',
-  'Content-Security-Policy': "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
   'Cross-Origin-Opener-Policy': 'same-origin',
-  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-site',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
   'Referrer-Policy': 'no-referrer',
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY'
 });
 
-function send(res, status, body, type = 'application/json; charset=utf-8') {
-  const payload = typeof body === 'string' ? body : JSON.stringify(body);
-  res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': type, 'Content-Length': Buffer.byteLength(payload) });
+function send(res, status, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(payload) });
   res.end(payload);
-}
-
-function sameSecret(a, b) {
-  const left = Buffer.from(String(a || ''));
-  const right = Buffer.from(String(b || ''));
-  if (!left.length || left.length !== right.length) return false;
-  return crypto.timingSafeEqual(left, right);
-}
-
-function authorized(req) {
-  const provided = Array.isArray(req.headers['x-fxga-agent-admin-key'])
-    ? req.headers['x-fxga-agent-admin-key'][0]
-    : req.headers['x-fxga-agent-admin-key'];
-  return ADMIN_KEY.length >= 16 && sameSecret(provided, ADMIN_KEY);
 }
 
 function rateLimited(req) {
@@ -50,7 +43,7 @@ function rateLimited(req) {
     return false;
   }
   current.count += 1;
-  return current.count > 20;
+  return current.count > 30;
 }
 
 async function readJson(req, maxBytes = 8192) {
@@ -64,6 +57,35 @@ async function readJson(req, maxBytes = 8192) {
   if (!chunks.length) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
   catch { throw new Error('INVALID_JSON'); }
+}
+
+function bearer(req) {
+  const value = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+  const match = String(value || '').match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || '';
+}
+
+async function requireSuperAdmin(req) {
+  const token = bearer(req);
+  if (token.length < 32) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(`${AUTH_SERVICE_URL}/api/auth/introspect-admin-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ token }),
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.valid !== true || payload?.member?.role !== 'super_admin') return null;
+    return payload.member;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function latestBotToken() {
@@ -94,9 +116,7 @@ async function testTelegramBot(token) {
       signal: controller.signal
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok || payload?.ok !== true || !payload?.result) {
-      return { ok: false, error: 'Telegram rejected the bot token.' };
-    }
+    if (!response.ok || payload?.ok !== true || !payload?.result) return { ok: false, error: 'Telegram rejected the bot token.' };
     return {
       ok: true,
       bot: {
@@ -116,57 +136,124 @@ async function testTelegramBot(token) {
 }
 
 async function saveBotToken(token) {
-  await secretManager.addSecretVersion({
-    parent: botSecret,
-    payload: { data: Buffer.from(token, 'utf8') }
-  });
+  await secretManager.addSecretVersion({ parent: botSecret, payload: { data: Buffer.from(token, 'utf8') } });
 }
 
-function page() {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FXGA Agents · Telegram Settings</title>
-<style>
-:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#07090d;color:#f5f7fb}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at top,#182033 0,#0a0d14 42%,#05070a 100%);padding:32px}.shell{max-width:860px;margin:auto}.top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;margin-bottom:24px}.eyebrow{letter-spacing:.14em;text-transform:uppercase;color:#aeb8ca;font-size:12px}h1{font-size:clamp(30px,5vw,50px);line-height:1;margin:8px 0 10px}.sub{color:#aeb8ca;max-width:680px}.card{background:rgba(15,19,28,.92);border:1px solid #252d3d;border-radius:18px;padding:22px;box-shadow:0 28px 80px rgba(0,0,0,.35);margin:14px 0}.row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}.badge{border:1px solid #344056;border-radius:999px;padding:7px 10px;font-size:12px;color:#c7d1e4}.ok{color:#86efac}.bad{color:#fca5a5}.muted{color:#99a5ba}label{display:block;font-size:13px;color:#b7c1d4;margin:16px 0 7px}input{width:100%;background:#090c12;border:1px solid #30394b;color:#fff;border-radius:11px;padding:13px 14px;outline:none}input:focus{border-color:#7c8fb5}button{border:0;border-radius:11px;padding:12px 16px;font-weight:700;cursor:pointer;background:#f4f7fb;color:#090b0f}button.secondary{background:#1a2130;color:#e7edf8;border:1px solid #30394b}button:disabled{opacity:.5;cursor:not-allowed}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.notice{font-size:13px;line-height:1.55;color:#b8c2d5}.status{min-height:24px;margin-top:12px;font-size:14px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.metric{background:#0b0f17;border:1px solid #242c3b;border-radius:12px;padding:14px}.metric small{display:block;color:#8490a4;margin-bottom:6px}.metric strong{word-break:break-word}@media(max-width:680px){body{padding:18px}.top,.row{display:block}.grid{grid-template-columns:1fr}.badge{display:inline-block;margin-top:12px}}
-</style>
-</head>
-<body><main class="shell">
-<div class="top"><div><div class="eyebrow">FX Global Avengers Trading Academy</div><h1>Agents Settings</h1><div class="sub">Telegram Member Agent · secure bot credential control</div></div><span class="badge">Direct-add worker isolated</span></div>
-<section class="card"><div class="row"><div><h2>Telegram Bot API</h2><p class="notice">The bot token is stored only in Google Secret Manager. It is never returned to this page. The direct member-add worker does not use this token and cannot fall back to sending invitations or DMs.</p></div><span id="stateBadge" class="badge">Not checked</span></div>
-<label for="adminKey">Agent admin key</label><input id="adminKey" type="password" autocomplete="current-password" placeholder="Enter FXGA agent admin key">
-<div class="actions"><button class="secondary" id="check">Check bot status</button></div>
-<div id="metrics" class="grid" style="margin-top:16px;display:none"><div class="metric"><small>Bot</small><strong id="botName">—</strong></div><div class="metric"><small>Username</small><strong id="botUser">—</strong></div><div class="metric"><small>Bot ID</small><strong id="botId">—</strong></div></div>
-</section>
-<section class="card"><h2>Replace bot token</h2><p class="notice">Paste a replacement token, then choose <b>Test & save</b>. Telegram's <code>getMe</code> endpoint is checked first; invalid tokens are not saved.</p><label for="token">New Telegram bot token</label><input id="token" type="password" autocomplete="new-password" placeholder="BotFather token"><div class="actions"><button id="save">Test & save</button><button class="secondary" id="clear">Clear field</button></div><div id="status" class="status muted"></div></section>
-</main><script>
-const $=id=>document.getElementById(id);const headers=()=>({'Content-Type':'application/json','X-FXGA-Agent-Admin-Key':$('adminKey').value});
-function show(data){$('stateBadge').textContent=data.configured?(data.valid?'Configured · valid':'Configured · invalid'):'Not configured';$('stateBadge').className='badge '+(data.valid?'ok':data.configured?'bad':'');if(data.bot){$('metrics').style.display='grid';$('botName').textContent=data.bot.firstName||'—';$('botUser').textContent=data.bot.username?'@'+data.bot.username:'—';$('botId').textContent=data.bot.id||'—'}else $('metrics').style.display='none'}
-async function call(path,opts={}){const r=await fetch(path,{...opts,headers:{...headers(),...(opts.headers||{})},cache:'no-store'});const data=await r.json().catch(()=>({error:'Invalid server response'}));if(!r.ok)throw new Error(data.error||('HTTP '+r.status));return data}
-$('check').onclick=async()=>{try{$('status').textContent='Checking…';const data=await call('/api/status');show(data);$('status').textContent=data.valid?'Bot token is working.':'Status checked.'}catch(e){$('status').textContent=e.message}}
-$('save').onclick=async()=>{const token=$('token').value.trim();if(!token){$('status').textContent='Enter a bot token first.';return}try{$('save').disabled=true;$('status').textContent='Testing with Telegram…';const data=await call('/api/settings/bot-token',{method:'POST',body:JSON.stringify({token})});$('token').value='';show(data);$('status').textContent='Token verified and stored as the latest Secret Manager version.'}catch(e){$('status').textContent=e.message}finally{$('save').disabled=false}}
-$('clear').onclick=()=>{$('token').value='';$('status').textContent=''};
-</script></body></html>`;
+function iso(value) {
+  try {
+    if (value?.toDate) return value.toDate().toISOString();
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === 'string') return value;
+  } catch {}
+  return null;
+}
+
+async function agentStatus() {
+  const [stateSnap, queueProbe, countSnap, token] = await Promise.all([
+    stateRef.get(),
+    queue.limit(1).get(),
+    queue.count().get(),
+    latestBotToken()
+  ]);
+  const state = stateSnap.exists ? stateSnap.data() : {};
+  const tokenTest = token ? await testTelegramBot(token) : { ok: false };
+  const queueTotal = Number(countSnap.data().count || state.queueRecordCount || 0);
+  const blockedUntil = iso(state.blockedUntil);
+  const blocked = blockedUntil ? Date.parse(blockedUntil) > Date.now() : false;
+  return {
+    directAddOnly: true,
+    bot: {
+      configured: Boolean(token),
+      valid: Boolean(tokenTest.ok),
+      identity: tokenTest.ok ? tokenTest.bot : null
+    },
+    queue: {
+      ready: !queueProbe.empty,
+      total: queueTotal,
+      importedAt: iso(state.queueImportedAt),
+      nextSequence: Number(state.nextSequence || 1)
+    },
+    worker: {
+      running: state.running === true,
+      runId: state.runId || null,
+      dailyDate: state.dailyDate || null,
+      dailyAdded: Number(state.dailyAdded || 0),
+      blocked,
+      blockedUntil,
+      lastError: state.lastError || null,
+      startedAt: iso(state.startedAt),
+      finishedAt: iso(state.finishedAt),
+      lastRunSummary: state.lastRunSummary || null
+    },
+    schedule: {
+      job: JOB_NAME,
+      timezone: 'Africa/Johannesburg',
+      dailyTime: '08:00'
+    }
+  };
+}
+
+async function accessToken() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
+      headers: { 'Metadata-Flavor': 'Google' },
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`metadata_token_http_${response.status}`);
+    const payload = await response.json();
+    if (!payload?.access_token) throw new Error('metadata_access_token_missing');
+    return payload.access_token;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function executeAgent(member) {
+  const stateSnap = await stateRef.get();
+  const state = stateSnap.exists ? stateSnap.data() : {};
+  if (state.running === true && (!state.lockUntil?.toDate || state.lockUntil.toDate() > new Date())) {
+    return { ok: false, status: 409, error: 'The Telegram Member Agent is already running.' };
+  }
+  const blockedUntil = state.blockedUntil?.toDate?.();
+  if (blockedUntil && blockedUntil > new Date()) {
+    return { ok: false, status: 409, error: `Telegram rate-limit protection is active until ${blockedUntil.toISOString()}.` };
+  }
+  const probe = await queue.limit(1).get();
+  if (probe.empty) return { ok: false, status: 409, error: 'The Telegram member queue is empty. Import the roster before starting operations.' };
+
+  const oauth = await accessToken();
+  const url = `https://run.googleapis.com/v2/projects/${encodeURIComponent(PROJECT_ID)}/locations/${encodeURIComponent(REGION)}/jobs/${encodeURIComponent(JOB_NAME)}:run`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${oauth}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: '{}'
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) return { ok: false, status: response.status, error: payload?.error?.message || 'Cloud Run rejected the job execution request.' };
+  await stateRef.set({
+    manualRunRequestedAt: FieldValue.serverTimestamp(),
+    manualRunRequestedBy: String(member?.email || 'super_admin').slice(0, 250),
+    manualRunOperation: payload.name || null
+  }, { merge: true });
+  return { ok: true, operation: payload.name || null };
 }
 
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || '/', 'http://localhost');
-    if (req.method === 'GET' && url.pathname === '/') return send(res, 200, page(), 'text/html; charset=utf-8');
     if (req.method === 'GET' && url.pathname === '/health') {
-      return send(res, 200, { ok: true, service: 'fxga-telegram-member-agent-admin', adminConfigured: ADMIN_KEY.length >= 16, tokenSecret: BOT_SECRET_NAME });
+      return send(res, 200, { ok: true, service: 'fxga-telegram-member-agent-admin', authMode: 'fxga-super-admin-session', job: JOB_NAME });
     }
-    if (rateLimited(req)) return send(res, 429, { error: 'Too many settings requests. Try again shortly.' });
-    if (!ADMIN_KEY || ADMIN_KEY.length < 16) return send(res, 503, { error: 'Agent admin authentication is not configured.' });
-    if (!authorized(req)) return send(res, 401, { error: 'Invalid agent admin key.' });
+    if (rateLimited(req)) return send(res, 429, { error: 'Too many administrative requests. Try again shortly.' });
+    if (!url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found.' });
+
+    const member = await requireSuperAdmin(req);
+    if (!member) return send(res, 403, { error: 'FXGA super-admin authentication is required.' });
 
     if (req.method === 'GET' && url.pathname === '/api/status') {
-      const token = await latestBotToken();
-      if (!token) return send(res, 200, { configured: false, valid: false, bot: null });
-      const test = await testTelegramBot(token);
-      return send(res, 200, { configured: true, valid: test.ok, bot: test.ok ? test.bot : null });
+      return send(res, 200, await agentStatus());
     }
 
     if (req.method === 'POST' && url.pathname === '/api/settings/bot-token') {
@@ -176,7 +263,13 @@ const server = http.createServer(async (req, res) => {
       const test = await testTelegramBot(token);
       if (!test.ok) return send(res, 400, { error: test.error });
       await saveBotToken(token);
+      await stateRef.set({ botSettingsUpdatedAt: FieldValue.serverTimestamp(), botSettingsUpdatedBy: String(member.email || '').slice(0, 250) }, { merge: true });
       return send(res, 200, { configured: true, valid: true, bot: test.bot });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/run') {
+      const result = await executeAgent(member);
+      return send(res, result.ok ? 202 : result.status, result.ok ? result : { error: result.error });
     }
 
     return send(res, 404, { error: 'Not found.' });
@@ -184,11 +277,11 @@ const server = http.createServer(async (req, res) => {
     const code = String(error?.message || '');
     if (code === 'REQUEST_TOO_LARGE') return send(res, 413, { error: 'Request body is too large.' });
     if (code === 'INVALID_JSON') return send(res, 400, { error: 'Request body must be valid JSON.' });
-    console.error(JSON.stringify({ event: 'agent_admin_error', message: 'Administrative request failed without logging credential material.' }));
-    return send(res, 500, { error: 'Agent settings operation failed.' });
+    console.error(JSON.stringify({ event: 'agent_admin_error', message: String(error?.message || 'administrative request failed').slice(0, 240) }));
+    return send(res, 500, { error: 'Agent administrative operation failed.' });
   }
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(JSON.stringify({ event: 'agent_admin_ready', port: PORT, botSecret: BOT_SECRET_NAME, adminConfigured: ADMIN_KEY.length >= 16 }));
+  console.log(JSON.stringify({ event: 'agent_admin_ready', port: PORT, authMode: 'fxga-super-admin-session', job: JOB_NAME }));
 });
