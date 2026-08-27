@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { TelegramClient } from "teleproto";
-import { StringSession } from "teleproto/sessions";
+import { StringSession } from "teleproto/sessions/index.js";
 
 const rl = createInterface({ input, output });
 
