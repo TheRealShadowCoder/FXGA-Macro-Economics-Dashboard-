@@ -28,7 +28,7 @@ jobs:
           set -euo pipefail
           npm install --no-audit --no-fund
           npm run check
-          node -e "const p=require('./package.json'); if(p.version !== '1.2.0') process.exit(1); if(!p.dependencies.teleproto || !p.dependencies['@google-cloud/firestore'] || !p.dependencies['@google-cloud/secret-manager']) process.exit(1)"
+          node -e "const p=require('./package.json'); if(p.version !== '1.3.0') process.exit(1); if(!p.dependencies.teleproto || !p.dependencies['@google-cloud/firestore'] || !p.dependencies['@google-cloud/secret-manager']) process.exit(1)"
 
       - name: Reject credentials and member datasets in source
         working-directory: agents/telegram-member-agent
@@ -41,7 +41,7 @@ jobs:
           ! find . -maxdepth 3 \( -name '*.xlsx' -o -name '*.xls' -o -name '*.csv' -o -name '*.session' \) -print -quit | grep -q . \
             || { echo '::error::Member/source data must not be committed under the agent directory'; exit 1; }
 
-      - name: Verify persistence and settings contracts
+      - name: Verify persistence, preflight and super-admin contracts
         working-directory: agents/telegram-member-agent
         run: |
           set -euo pipefail
@@ -51,27 +51,25 @@ jobs:
           grep -q 'FLOOD_WAIT' index.js
           grep -q 'PEER_FLOOD' index.js
           grep -q 'lastImportedAt' scripts/import-members.mjs
+          grep -q 'TELEGRAM_MEMBER_QUEUE_EMPTY' scripts/preflight.mjs
+          grep -q 'checkAuthorization' scripts/preflight.mjs
           grep -q 'SecretManagerServiceClient' admin-server.js
           grep -q 'getMe' admin-server.js
-          grep -q 'timingSafeEqual' admin-server.js
           grep -q 'addSecretVersion' admin-server.js
-          grep -q 'X-FXGA-Agent-Admin-Key' admin-server.js
-          echo 'Telegram member agent persistence and secure settings contracts verified.'
+          grep -q 'introspect-admin-session' admin-server.js
+          grep -q "payload?.member?.role !== 'super_admin'" admin-server.js
+          grep -q "url.pathname === '/api/run'" admin-server.js
+          ! grep -REn 'FXGA_AGENT_ADMIN_KEY|X-FXGA-Agent-Admin-Key' admin-server.js .github 2>/dev/null \
+            || { echo '::error::Legacy standalone Telegram admin-password gate must not return'; exit 1; }
+          echo 'Persistence, safe preflight and FXGA super-admin control contracts verified.'
 
-      - name: Verify protected Telegram bot settings
+      - name: Verify protected Telegram bot token
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          FXGA_AGENT_ADMIN_KEY: ${{ secrets.FXGA_AGENT_ADMIN_KEY }}
         run: |
           set -euo pipefail
           test -n "${TELEGRAM_BOT_TOKEN:-}" || { echo '::error::TELEGRAM_BOT_TOKEN is not configured in GitHub Actions secrets'; exit 1; }
           echo 'TELEGRAM_BOT_TOKEN is configured in GitHub Actions.'
-          if [ -n "${FXGA_AGENT_ADMIN_KEY:-}" ]; then
-            test "${#FXGA_AGENT_ADMIN_KEY}" -ge 16 || { echo '::error::FXGA_AGENT_ADMIN_KEY must be at least 16 characters'; exit 1; }
-            echo 'FXGA_AGENT_ADMIN_KEY is configured.'
-          else
-            echo '::warning::FXGA_AGENT_ADMIN_KEY is not configured yet; the settings service will remain locked until it is added.'
-          fi
           node <<'NODE'
           const token = process.env.TELEGRAM_BOT_TOKEN;
           const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
