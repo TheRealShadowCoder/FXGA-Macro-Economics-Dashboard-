@@ -1,0 +1,58 @@
+name: Configure Market Minds Telegram Target
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/configure-marketminds-telegram-target.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  TELEGRAM_CHANNEL_SECRET: fxga-telegram-channel
+  TARGET_CHANNEL: '@marketmindszaofficial'
+  RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure production Telegram group
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          if ! gcloud secrets describe "$TELEGRAM_CHANNEL_SECRET" >/dev/null 2>&1; then
+            gcloud secrets create "$TELEGRAM_CHANNEL_SECRET" --replication-policy=automatic --quiet
+          fi
+          printf '%s' "$TARGET_CHANNEL" | gcloud secrets versions add "$TELEGRAM_CHANNEL_SECRET" --data-file=- --quiet
+          gcloud secrets add-iam-policy-binding "$TELEGRAM_CHANNEL_SECRET" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/secretmanager.secretAccessor' --quiet
+          echo 'Telegram production target configured as @marketmindszaofficial.'
+          echo 'No Telegram message, invite link or member-add operation was sent by this configuration step.'
