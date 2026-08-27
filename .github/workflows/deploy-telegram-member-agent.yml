@@ -35,6 +35,7 @@ env:
   TELEGRAM_SESSION_SECRET: fxga-telegram-session
   TELEGRAM_CHANNEL_SECRET: fxga-telegram-channel
   TELEGRAM_BOT_TOKEN_SECRET: fxga-telegram-bot-token
+  NOT_CONFIGURED: __FXGA_NOT_CONFIGURED__
 
 jobs:
   deploy:
@@ -103,25 +104,66 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           set -euo pipefail
-          gcloud config set project "$GCP_PROJECT_ID"
           if ! gcloud secrets describe "$TELEGRAM_BOT_TOKEN_SECRET" >/dev/null 2>&1; then
             gcloud secrets create "$TELEGRAM_BOT_TOKEN_SECRET" --replication-policy=automatic --quiet
           fi
           if [ -n "${TG_BOT_TOKEN:-}" ]; then
             printf '%s' "$TG_BOT_TOKEN" | gcloud secrets versions add "$TELEGRAM_BOT_TOKEN_SECRET" --data-file=- --quiet
             echo 'TELEGRAM_BOT_TOKEN synchronized without exposing its value.'
-          else
-            echo '::warning::TELEGRAM_BOT_TOKEN is not set in GitHub; retaining existing Secret Manager versions.'
           fi
-          set +e
           gcloud secrets add-iam-policy-binding "$TELEGRAM_BOT_TOKEN_SECRET" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role='roles/secretmanager.secretAccessor' --quiet
-          ACCESS_STATUS=$?
           gcloud secrets add-iam-policy-binding "$TELEGRAM_BOT_TOKEN_SECRET" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role='roles/secretmanager.secretVersionAdder' --quiet
-          ADD_STATUS=$?
-          set -e
-          if [ "$ACCESS_STATUS" -ne 0 ] || [ "$ADD_STATUS" -ne 0 ]; then
-            echo '::warning::Could not change bot-secret IAM automatically. Existing runtime Secret Manager permissions will be used.'
-          fi
+
+      - name: Prepare protected MTProto credential slots
+        run: |
+          set -euo pipefail
+          prepare_slot() {
+            local secret_name="$1"
+            if ! gcloud secrets describe "$secret_name" >/dev/null 2>&1; then
+              gcloud secrets create "$secret_name" --replication-policy=automatic --quiet
+            fi
+            if ! gcloud secrets versions access latest --secret="$secret_name" >/dev/null 2>&1; then
+              printf '%s' "$NOT_CONFIGURED" | gcloud secrets versions add "$secret_name" --data-file=- --quiet
+            fi
+            gcloud secrets add-iam-policy-binding "$secret_name" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role='roles/secretmanager.secretAccessor' --quiet
+            gcloud secrets add-iam-policy-binding "$secret_name" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role='roles/secretmanager.secretVersionAdder' --quiet
+          }
+          prepare_slot "$TELEGRAM_API_ID_SECRET"
+          prepare_slot "$TELEGRAM_API_HASH_SECRET"
+          prepare_slot "$TELEGRAM_SESSION_SECRET"
+          prepare_slot "$TELEGRAM_CHANNEL_SECRET"
+          echo 'Secure MTProto credential slots are ready for super-admin configuration.'
+
+      - name: Synchronize GitHub MTProto credentials and determine readiness
+        env:
+          TG_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TG_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TG_SESSION: ${{ secrets.TELEGRAM_SESSION }}
+          TG_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+        run: |
+          set -euo pipefail
+          READY=true
+          sync_value() {
+            local secret_name="$1" value="$2" github_name="$3" current
+            if [ -n "$value" ]; then
+              printf '%s' "$value" | gcloud secrets versions add "$secret_name" --data-file=- --quiet
+              echo "$github_name synchronized to Secret Manager."
+            else
+              current="$(gcloud secrets versions access latest --secret="$secret_name" 2>/dev/null || true)"
+              if [ -z "$current" ] || [ "$current" = "$NOT_CONFIGURED" ]; then
+                echo "::warning::$github_name is not configured; it can now be entered in FXGA Admin."
+                READY=false
+              else
+                echo "$github_name retained from Secret Manager."
+              fi
+            fi
+          }
+          sync_value "$TELEGRAM_API_ID_SECRET" "$TG_API_ID" TELEGRAM_API_ID
+          sync_value "$TELEGRAM_API_HASH_SECRET" "$TG_API_HASH" TELEGRAM_API_HASH
+          sync_value "$TELEGRAM_SESSION_SECRET" "$TG_SESSION" TELEGRAM_SESSION
+          sync_value "$TELEGRAM_CHANNEL_SECRET" "$TG_CHANNEL" TELEGRAM_CHANNEL
+          echo "DIRECT_ADD_READY=$READY" >> "$GITHUB_ENV"
+          if [ "$READY" = 'true' ]; then echo 'All direct-add credentials are configured.'; else echo '::warning::Direct-add execution is locked until Admin configuration is complete.'; fi
 
       - name: Build and push agent image
         run: |
@@ -139,7 +181,7 @@ jobs:
             --image "$IMAGE" --region "$GCP_REGION" --platform managed --allow-unauthenticated \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" --cpu 1 --memory 256Mi --concurrency 20 --min 0 --max 1 --timeout 60 \
             --command node --args admin-server.js \
-            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,TELEGRAM_AGENT_JOB=$JOB_NAME,AUTH_SERVICE_URL=$AUTH_SERVICE_URL,TELEGRAM_BOT_TOKEN_SECRET=$TELEGRAM_BOT_TOKEN_SECRET,FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent" \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,GCP_REGION=$GCP_REGION,TELEGRAM_AGENT_JOB=$JOB_NAME,AUTH_SERVICE_URL=$AUTH_SERVICE_URL,TELEGRAM_BOT_TOKEN_SECRET=$TELEGRAM_BOT_TOKEN_SECRET,TELEGRAM_API_ID_SECRET=$TELEGRAM_API_ID_SECRET,TELEGRAM_API_HASH_SECRET=$TELEGRAM_API_HASH_SECRET,TELEGRAM_SESSION_SECRET=$TELEGRAM_SESSION_SECRET,TELEGRAM_CHANNEL_SECRET=$TELEGRAM_CHANNEL_SECRET,FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent" \
             --quiet
           ADMIN_URL="$(gcloud run services describe "$ADMIN_SERVICE" --region "$GCP_REGION" --format='value(status.url)')"
           test -n "$ADMIN_URL" || { echo '::error::Telegram Agent control service URL is missing'; exit 1; }
@@ -148,44 +190,7 @@ jobs:
           echo "AGENT_ADMIN_URL=$ADMIN_URL" >> "$GITHUB_ENV"
           echo "Telegram Agent control service: $ADMIN_URL"
 
-      - name: Synchronize direct-add credentials and determine readiness
-        env:
-          TG_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TG_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          TG_SESSION: ${{ secrets.TELEGRAM_SESSION }}
-          TG_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-        run: |
-          set -euo pipefail
-          READY=true
-          sync_secret() {
-            local secret_name="$1" value="$2" github_name="$3"
-            if [ -n "$value" ]; then
-              if gcloud secrets describe "$secret_name" >/dev/null 2>&1; then
-                printf '%s' "$value" | gcloud secrets versions add "$secret_name" --data-file=- --quiet
-              else
-                printf '%s' "$value" | gcloud secrets create "$secret_name" --replication-policy=automatic --data-file=- --quiet
-              fi
-              echo "$github_name synchronized to Secret Manager."
-            elif gcloud secrets versions access latest --secret="$secret_name" >/dev/null 2>&1; then
-              echo "$github_name retained from Secret Manager."
-            else
-              echo "::warning::$github_name is not configured."
-              READY=false
-              return 0
-            fi
-            set +e
-            gcloud secrets add-iam-policy-binding "$secret_name" --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role='roles/secretmanager.secretAccessor' --quiet
-            set -e
-          }
-          sync_secret "$TELEGRAM_API_ID_SECRET" "$TG_API_ID" TELEGRAM_API_ID
-          sync_secret "$TELEGRAM_API_HASH_SECRET" "$TG_API_HASH" TELEGRAM_API_HASH
-          sync_secret "$TELEGRAM_SESSION_SECRET" "$TG_SESSION" TELEGRAM_SESSION
-          sync_secret "$TELEGRAM_CHANNEL_SECRET" "$TG_CHANNEL" TELEGRAM_CHANNEL
-          echo "DIRECT_ADD_READY=$READY" >> "$GITHUB_ENV"
-          if [ "$READY" = 'true' ]; then echo 'All direct-add credentials are configured.'; else echo '::warning::Direct-add jobs will remain disabled until all four MTProto credentials are configured.'; fi
-
-      - name: Create or update Cloud Run direct-add job
-        if: env.DIRECT_ADD_READY == 'true'
+      - name: Create or update locked Cloud Run direct-add job
         run: |
           set -euo pipefail
           gcloud run jobs deploy "$JOB_NAME" \
@@ -195,7 +200,6 @@ jobs:
             --set-secrets "TELEGRAM_API_ID=$TELEGRAM_API_ID_SECRET:latest,TELEGRAM_API_HASH=$TELEGRAM_API_HASH_SECRET:latest,TELEGRAM_SESSION=$TELEGRAM_SESSION_SECRET:latest,TELEGRAM_CHANNEL=$TELEGRAM_CHANNEL_SECRET:latest" --quiet
 
       - name: Create or update production preflight job
-        if: env.DIRECT_ADD_READY == 'true'
         run: |
           set -euo pipefail
           gcloud run jobs deploy "$PREFLIGHT_JOB" \
@@ -205,8 +209,7 @@ jobs:
             --set-env-vars 'FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent' \
             --set-secrets "TELEGRAM_API_ID=$TELEGRAM_API_ID_SECRET:latest,TELEGRAM_API_HASH=$TELEGRAM_API_HASH_SECRET:latest,TELEGRAM_SESSION=$TELEGRAM_SESSION_SECRET:latest,TELEGRAM_CHANNEL=$TELEGRAM_CHANNEL_SECRET:latest" --quiet
 
-      - name: Authorize control service to invoke direct-add job
-        if: env.DIRECT_ADD_READY == 'true'
+      - name: Authorize super-admin controller to invoke direct-add job
         run: |
           set -euo pipefail
           gcloud run jobs add-iam-policy-binding "$JOB_NAME" --region "$GCP_REGION" \
@@ -223,22 +226,21 @@ jobs:
             gcloud scheduler jobs create http "$SCHEDULER_NAME" --location "$GCP_REGION" --schedule "$SCHEDULE_CRON" --time-zone "$SCHEDULE_TIME_ZONE" --uri "$URI" --http-method POST --oauth-service-account-email "$RUNTIME_SERVICE_ACCOUNT" --oauth-token-scope 'https://www.googleapis.com/auth/cloud-platform' --quiet
           fi
 
-      - name: Run production readiness preflight
+      - name: Run production readiness preflight when already configured
         if: env.DIRECT_ADD_READY == 'true'
         run: |
           set -euo pipefail
-          echo 'Running non-mutating production preflight.'
           gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
           echo 'Production preflight passed: queue, Telegram user session and target channel are ready.'
 
       - name: Deployment summary
         run: |
           echo "Super-admin control service: ${AGENT_ADMIN_URL:-missing}"
+          echo "Direct-add job: $JOB_NAME (execution guarded by live MTProto and queue validation)"
+          echo "Preflight job: $PREFLIGHT_JOB"
           if [ "${DIRECT_ADD_READY:-false}" = 'true' ]; then
-            echo "Direct-add job: $JOB_NAME"
-            echo "Preflight job: $PREFLIGHT_JOB"
             echo "Scheduler: $SCHEDULER_NAME ($SCHEDULE_CRON, $SCHEDULE_TIME_ZONE)"
           else
-            echo 'Direct-add runtime: BLOCKED — add TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION and TELEGRAM_CHANNEL.'
+            echo 'Scheduler: not activated until all MTProto credentials are configured.'
           fi
-          echo 'Human controls use the existing FXGA super-admin session; no second admin password is used.'
+          echo 'MTProto credentials and roster can be configured from the existing FXGA super-admin page.'
