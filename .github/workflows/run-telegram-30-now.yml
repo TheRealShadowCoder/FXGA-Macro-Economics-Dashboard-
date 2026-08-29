@@ -62,12 +62,13 @@ jobs:
         run: |
           set -euo pipefail
           gcloud config set project "$GCP_PROJECT_ID"
-          npm ci --omit=dev --no-audit --no-fund
+          npm install --omit=dev --no-audit --no-fund
           gcloud run jobs describe "$JOB_NAME" --region "$GCP_REGION" --format='value(metadata.name)' >/dev/null
           gcloud run jobs describe "$PREFLIGHT_JOB" --region "$GCP_REGION" --format='value(metadata.name)' >/dev/null
           gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" --format='value(name)' >/dev/null
 
-      - name: Pause normal daily scheduler
+      - id: pause
+        name: Pause normal daily scheduler
         run: |
           set -euo pipefail
           gcloud scheduler jobs pause "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet
@@ -175,7 +176,8 @@ jobs:
           gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
           echo 'Post-batch preflight passed.'
 
-      - name: Resume normal daily scheduler
+      - id: resume
+        name: Resume normal daily scheduler
         if: steps.controlled.outcome == 'success' && steps.restore.outcome == 'success' && steps.postflight.outcome == 'success'
         run: |
           set -euo pipefail
@@ -194,8 +196,14 @@ jobs:
           echo "Controlled batch outcome: ${{ steps.controlled.outcome }}"
           echo "Production configuration restore: ${{ steps.restore.outcome }}"
           echo "Postflight: ${{ steps.postflight.outcome }}"
-          if [ "${{ steps.controlled.outcome }}" != 'success' ] || [ "${{ steps.restore.outcome }}" != 'success' ] || [ "${{ steps.postflight.outcome }}" != 'success' ]; then
-            echo 'Scheduler intentionally remains paused because the guarded batch did not finish all safety gates.'
+          echo "Scheduler pause: ${{ steps.pause.outcome }}"
+          echo "Scheduler resume: ${{ steps.resume.outcome }}"
+          if [ "${{ steps.controlled.outcome }}" != 'success' ] || [ "${{ steps.restore.outcome }}" != 'success' ] || [ "${{ steps.postflight.outcome }}" != 'success' ] || [ "${{ steps.resume.outcome }}" != 'success' ]; then
+            if [ "${{ steps.pause.outcome }}" = 'success' ] && [ "${{ steps.resume.outcome }}" != 'success' ]; then
+              echo 'Scheduler intentionally remains paused because the guarded batch did not finish all safety gates.'
+            else
+              echo 'The guarded batch did not finish all safety gates; no unverified success is being reported.'
+            fi
             exit 1
           fi
           echo 'Verified result: exactly 30 new successful direct additions completed; production scheduler restored.'
