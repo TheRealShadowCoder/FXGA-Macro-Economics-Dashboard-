@@ -1,9 +1,10 @@
 import { Firestore } from '@google-cloud/firestore';
+import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 import bigInt from 'big-integer';
 import { TelegramClient, Api } from 'teleproto';
 import { StringSession } from 'teleproto/sessions/index.js';
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const startedAt = Date.now();
 let stage = 'configuration';
 let client;
@@ -11,6 +12,8 @@ let client;
 const queueCollection = process.env.FIRESTORE_QUEUE_COLLECTION || 'telegram_member_queue';
 const stateCollection = process.env.FIRESTORE_STATE_COLLECTION || 'agent_state';
 const stateDocument = process.env.FIRESTORE_STATE_DOCUMENT || 'telegram-member-agent';
+const diagnosticSecret = process.env.PREFLIGHT_DIAGNOSTIC_SECRET || '';
+const projectId = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '';
 
 try {
   log('preflight_start', {
@@ -18,6 +21,7 @@ try {
     queueCollection,
     stateCollection,
     stateDocument,
+    diagnosticHandoffConfigured: Boolean(diagnosticSecret && projectId),
     credentialPresence: {
       apiId: configured('TELEGRAM_API_ID'),
       apiHash: configured('TELEGRAM_API_HASH'),
@@ -170,9 +174,10 @@ try {
   });
 
   stage = 'complete';
-  log('preflight_passed', {
+  const passed = {
     ok: true,
     version: VERSION,
+    stage,
     queueReady: true,
     queueRecordCount: liveQueueCount ?? (Number(state.queueRecordCount || 0) || null),
     sessionAuthorized: true,
@@ -182,10 +187,14 @@ try {
     candidateMembership,
     directAddOnly: true,
     mutationPerformed: false,
-    elapsedMs: Date.now() - startedAt
-  });
+    secretsExposed: false,
+    elapsedMs: Date.now() - startedAt,
+    timestamp: new Date().toISOString()
+  };
+  log('preflight_passed', passed);
+  await persistDiagnostic(passed);
 } catch (error) {
-  logError('preflight_failed', {
+  const failed = {
     ok: false,
     version: VERSION,
     stage,
@@ -194,8 +203,11 @@ try {
     message: safeMessage(error),
     secretsExposed: false,
     mutationPerformed: false,
-    elapsedMs: Date.now() - startedAt
-  });
+    elapsedMs: Date.now() - startedAt,
+    timestamp: new Date().toISOString()
+  };
+  logError('preflight_failed', failed);
+  await persistDiagnostic(failed);
   process.exitCode = 1;
 } finally {
   if (client) {
@@ -215,6 +227,36 @@ try {
     ok: process.exitCode !== 1,
     elapsedMs: Date.now() - startedAt
   });
+}
+
+async function persistDiagnostic(payload) {
+  if (!diagnosticSecret || !projectId) {
+    log('preflight_warning', {
+      check: 'diagnostic_handoff',
+      code: 'DIAGNOSTIC_HANDOFF_NOT_CONFIGURED'
+    });
+    return;
+  }
+  try {
+    const sm = new SecretManagerServiceClient();
+    const parent = `projects/${projectId}/secrets/${diagnosticSecret}`;
+    await sm.addSecretVersion({
+      parent,
+      payload: { data: Buffer.from(JSON.stringify(payload), 'utf8') }
+    });
+    log('preflight_diagnostic_persisted', {
+      stored: true,
+      secretName: diagnosticSecret,
+      secretsExposed: false
+    });
+  } catch (error) {
+    logError('preflight_diagnostic_persist_failed', {
+      stored: false,
+      code: normalizeCode(error),
+      message: safeMessage(error),
+      secretsExposed: false
+    });
+  }
 }
 
 async function resolveInputUser(clientInstance, member) {
@@ -278,8 +320,9 @@ function normalizeCode(error) {
   const text = String(raw).toUpperCase();
   const flood = text.match(/FLOOD_WAIT_?(\d+)?/);
   if (flood) return flood[1] ? `FLOOD_WAIT_${flood[1]}` : 'FLOOD_WAIT';
-  const peerFlood = text.match(/PEER_FLOOD/);
-  if (peerFlood) return 'PEER_FLOOD';
+  if (text.includes('PEER_FLOOD')) return 'PEER_FLOOD';
+  if (text.includes('PERMISSION_DENIED')) return 'PERMISSION_DENIED';
+  if (text.includes('UNAUTHENTICATED')) return 'UNAUTHENTICATED';
   const rpcCode = text.match(/\b[A-Z][A-Z0-9_]{2,}\b/);
   return rpcCode?.[0] || 'UNKNOWN';
 }
@@ -289,6 +332,8 @@ function safeMessage(error) {
   return message
     .replace(/[A-Za-z0-9+/_=-]{40,}/g, '[REDACTED]')
     .replace(/\b\d{6,12}:AA[A-Za-z0-9_-]+\b/g, '[REDACTED_BOT_TOKEN]')
+    .replace(/@[A-Za-z0-9_]{3,}/g, '[REDACTED_USERNAME]')
+    .replace(/\+?\d[\d\s()-]{7,}\d/g, '[REDACTED_PHONE]')
     .slice(0, 500);
 }
 
