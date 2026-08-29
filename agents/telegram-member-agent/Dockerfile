@@ -10,6 +10,7 @@ COPY agents/telegram-member-agent/index.js ./index.js
 COPY agents/telegram-member-agent/admin-server.js ./admin-server.js
 COPY agents/telegram-member-agent/admin-bootstrap.js ./admin-bootstrap.js
 COPY agents/telegram-member-agent/scripts/preflight.mjs ./preflight.mjs
+COPY agents/telegram-member-agent/scripts/test-runner.mjs ./test-runner.mjs
 
 # Node 24 ESM does not permit directory imports. teleproto exposes its
 # StringSession implementation through the sessions index module, so normalize
