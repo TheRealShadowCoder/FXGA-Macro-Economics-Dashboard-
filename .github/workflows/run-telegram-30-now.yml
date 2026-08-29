@@ -2,6 +2,10 @@ name: Run FXGA Telegram One Member
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-telegram-one-member.trigger'
 
 concurrency:
   group: fxga-telegram-member-agent-single-add
