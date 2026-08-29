@@ -1,14 +1,10 @@
-name: Run FXGA Telegram 30-Add Batch
+name: Run FXGA Telegram One Member
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/run-telegram-30-now.yml'
 
 concurrency:
-  group: fxga-telegram-member-agent-30-batch
+  group: fxga-telegram-member-agent-single-add
   cancel-in-progress: false
 
 permissions:
@@ -21,15 +17,14 @@ env:
   JOB_NAME: fxga-telegram-member-agent
   PREFLIGHT_JOB: fxga-telegram-member-agent-preflight
   SCHEDULER_NAME: fxga-telegram-member-agent-daily
-  RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
   DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
   TIME_ZONE: Africa/Johannesburg
   FIRESTORE_STATE_COLLECTION: agent_state
   FIRESTORE_STATE_DOCUMENT: telegram-member-agent
-  REQUESTED_ADDS: '30'
+  REQUESTED_ADDS: '1'
 
 jobs:
-  batch:
+  single-add:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -57,7 +52,7 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Prepare guarded batch controller
+      - name: Prepare guarded single-add controller
         working-directory: agents/telegram-member-agent
         run: |
           set -euo pipefail
@@ -67,21 +62,8 @@ jobs:
           gcloud run jobs describe "$PREFLIGHT_JOB" --region "$GCP_REGION" --format='value(metadata.name)' >/dev/null
           gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" --format='value(name)' >/dev/null
 
-      - id: pause
-        name: Pause normal daily scheduler
-        run: |
-          set -euo pipefail
-          gcloud scheduler jobs pause "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet
-          echo 'Normal daily scheduler is paused for the controlled 30-add batch.'
-
-      - name: Run mandatory preflight
-        run: |
-          set -euo pipefail
-          gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
-          echo 'Preflight passed before member mutation.'
-
       - id: state
-        name: Determine today baseline and exact batch ceiling
+        name: Check cooldown and determine one-member ceiling
         working-directory: agents/telegram-member-agent
         run: |
           set -euo pipefail
@@ -92,42 +74,57 @@ jobs:
           const db = new Firestore();
           const snap = await db.collection(process.env.FIRESTORE_STATE_COLLECTION).doc(process.env.FIRESTORE_STATE_DOCUMENT).get();
           const state = snap.exists ? snap.data() : {};
+          const now = new Date();
+          const blockedUntil = state.blockedUntil?.toDate?.();
+
+          if (blockedUntil && blockedUntil > now) {
+            console.error(`::error::Telegram cooldown is active until ${blockedUntil.toISOString()}. No member-add attempt will be made.`);
+            process.exit(5);
+          }
+
           const parts = new Intl.DateTimeFormat('en-US', {
             timeZone: process.env.TIME_ZONE,
             year: 'numeric', month: '2-digit', day: '2-digit'
-          }).formatToParts(new Date());
+          }).formatToParts(now);
           const values = Object.fromEntries(parts.map(p => [p.type, p.value]));
           const today = `${values.year}-${values.month}-${values.day}`;
           const baseline = state.dailyDate === today ? Math.max(0, Number(state.dailyAdded || 0)) : 0;
-          const requested = Number(process.env.REQUESTED_ADDS || 30);
-          const target = baseline + requested;
+          const target = baseline + 1;
 
-          if (!Number.isInteger(baseline) || !Number.isInteger(requested) || requested <= 0) {
-            console.error('::error::Invalid Firestore daily baseline or requested batch size.');
-            process.exit(2);
-          }
-          if (target > 50) {
-            console.error(`::error::Requested ${requested} new additions would raise today's total from ${baseline} to ${target}, above the existing 50/day safety ceiling.`);
+          if (!Number.isInteger(baseline) || target > 50) {
+            console.error(`::error::Cannot run one-member add: today's verified total is ${baseline} and the 50/day safety ceiling must remain intact.`);
             process.exit(3);
           }
 
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `today=${today}\nbaseline=${baseline}\ntarget=${target}\nrequested=${requested}\n`);
-          console.log(`Controlled batch baseline=${baseline}; requested=${requested}; exact daily ceiling=${target}.`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `today=${today}\nbaseline=${baseline}\ntarget=${target}\n`);
+          console.log(`Single-add controller: baseline=${baseline}; exact ceiling=${target}.`);
           NODE
 
+      - id: pause
+        name: Pause normal daily scheduler
+        run: |
+          set -euo pipefail
+          gcloud scheduler jobs pause "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet
+          echo 'Normal scheduler paused for one controlled member addition.'
+
+      - name: Run mandatory preflight
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
+          echo 'Preflight passed before member mutation.'
+
       - id: controlled
-        name: Execute exactly 30 new successful direct adds
+        name: Add one successful member and stop
         working-directory: agents/telegram-member-agent
         env:
           BASELINE: ${{ steps.state.outputs.baseline }}
           TARGET: ${{ steps.state.outputs.target }}
-          EXPECTED_DELTA: ${{ steps.state.outputs.requested }}
           TODAY: ${{ steps.state.outputs.today }}
         run: |
           set -euo pipefail
 
           gcloud run jobs update "$JOB_NAME" --region "$GCP_REGION" \
-            --update-env-vars "DAILY_TARGET_MIN=$TARGET,DAILY_TARGET_MAX=$TARGET,MAX_ATTEMPTS_PER_RUN=300" --quiet
+            --update-env-vars "DAILY_TARGET_MIN=$TARGET,DAILY_TARGET_MAX=$TARGET,MAX_ATTEMPTS_PER_RUN=100" --quiet
 
           set +e
           gcloud run jobs execute "$JOB_NAME" --region "$GCP_REGION" --wait --quiet
@@ -141,15 +138,14 @@ jobs:
           const state = snap.exists ? snap.data() : {};
           const baseline = Number(process.env.BASELINE);
           const target = Number(process.env.TARGET);
-          const expectedDelta = Number(process.env.EXPECTED_DELTA);
           const current = state.dailyDate === process.env.TODAY ? Math.max(0, Number(state.dailyAdded || 0)) : 0;
           const delta = current - baseline;
           const blocked = Boolean(state.blockedUntil?.toDate?.() && state.blockedUntil.toDate() > new Date());
           const errorCode = typeof state.lastError === 'string' ? state.lastError.replace(/[^A-Z0-9_]/gi, '').slice(0, 80) : '';
 
-          console.log(`Controlled batch result: ${delta}/${expectedDelta} new successful additions; daily total=${current}; rateLimitBlock=${blocked ? 'yes' : 'no'}${errorCode ? `; lastError=${errorCode}` : ''}.`);
-          if (current !== target || delta !== expectedDelta) {
-            console.error(`::error::Controlled batch stopped before the requested ${expectedDelta} successful additions. No further additions will be forced.`);
+          console.log(`Single-add result: ${delta}/1 new successful addition; daily total=${current}; rateLimitBlock=${blocked ? 'yes' : 'no'}${errorCode ? `; lastError=${errorCode}` : ''}.`);
+          if (current !== target || delta !== 1) {
+            console.error('::error::No verified successful addition was completed. No further member will be forced in this execution.');
             process.exit(4);
           }
           NODE
@@ -169,12 +165,12 @@ jobs:
           echo 'Production worker limits restored to 20-50/day.'
 
       - id: postflight
-        name: Run post-batch non-mutating preflight
+        name: Run post-add non-mutating preflight
         if: steps.controlled.outcome == 'success' && steps.restore.outcome == 'success'
         run: |
           set -euo pipefail
           gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
-          echo 'Post-batch preflight passed.'
+          echo 'Post-add preflight passed.'
 
       - id: resume
         name: Resume normal daily scheduler
@@ -182,28 +178,28 @@ jobs:
         run: |
           set -euo pipefail
           gcloud scheduler jobs resume "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet
-          echo 'Normal daily scheduler resumed after verified 30-add batch.'
+          echo 'Normal daily scheduler resumed after the verified single-member addition.'
 
-      - name: Batch summary
+      - name: Single-add summary
         if: always()
         env:
           BASELINE: ${{ steps.state.outputs.baseline }}
           TARGET: ${{ steps.state.outputs.target }}
         run: |
-          echo "Requested new successful additions: $REQUESTED_ADDS"
+          echo "Maximum successful additions this execution: 1"
           echo "Starting daily count: ${BASELINE:-unavailable}"
           echo "Exact controlled ceiling: ${TARGET:-unavailable}"
-          echo "Controlled batch outcome: ${{ steps.controlled.outcome }}"
+          echo "Single-add outcome: ${{ steps.controlled.outcome }}"
           echo "Production configuration restore: ${{ steps.restore.outcome }}"
           echo "Postflight: ${{ steps.postflight.outcome }}"
           echo "Scheduler pause: ${{ steps.pause.outcome }}"
           echo "Scheduler resume: ${{ steps.resume.outcome }}"
           if [ "${{ steps.controlled.outcome }}" != 'success' ] || [ "${{ steps.restore.outcome }}" != 'success' ] || [ "${{ steps.postflight.outcome }}" != 'success' ] || [ "${{ steps.resume.outcome }}" != 'success' ]; then
             if [ "${{ steps.pause.outcome }}" = 'success' ] && [ "${{ steps.resume.outcome }}" != 'success' ]; then
-              echo 'Scheduler intentionally remains paused because the guarded batch did not finish all safety gates.'
+              echo 'Scheduler remains paused because the guarded single-add did not finish all safety gates.'
             else
-              echo 'The guarded batch did not finish all safety gates; no unverified success is being reported.'
+              echo 'The guarded single-add did not finish all safety gates; no unverified success is being reported.'
             fi
             exit 1
           fi
-          echo 'Verified result: exactly 30 new successful direct additions completed; production scheduler restored.'
+          echo 'Verified result: exactly one new successful direct addition completed; worker stopped at the one-member ceiling.'
