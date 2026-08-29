@@ -1,0 +1,109 @@
+name: Finalize FXGA Telegram Controlled Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/finalize-telegram-controlled-test.yml'
+
+concurrency:
+  group: fxga-telegram-member-agent-controlled-test-finalize
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  PREFLIGHT_JOB: fxga-telegram-member-agent-preflight
+  SCHEDULER_NAME: fxga-telegram-member-agent-daily
+  TEST_DIAGNOSTIC_SECRET: fxga-telegram-test-diagnostic
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Keep production scheduler paused during final verification
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs pause "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
+          fi
+          echo 'Production scheduler is PAUSED during final verification.'
+
+      - name: Verify the completed one-member mutation from redacted evidence
+        run: |
+          set -euo pipefail
+          DIAG="$(gcloud secrets versions access latest --secret="$TEST_DIAGNOSTIC_SECRET")"
+          test -n "$DIAG" || { echo '::error::No controlled-test diagnostic is available.'; exit 1; }
+          echo '=== REDACTED COMPLETED TEST EVIDENCE ==='
+          printf '%s\n' "$DIAG" | jq '{version,stage,childExitCode,mutationPerformed,addedDelta,dailyAddedBefore,dailyAddedAfter,attempted,stoppedByRateLimit,fatalError,eventSequence,directAddOnly,secretsExposed,memberIdentityExposed,timestamp}'
+          echo '=== END REDACTED EVIDENCE ==='
+          printf '%s' "$DIAG" | jq -e '
+            .version == "1.0.0" and
+            .stage == "worker" and
+            .childExitCode == 0 and
+            .mutationPerformed == true and
+            .addedDelta == 1 and
+            (.dailyAddedAfter == (.dailyAddedBefore + 1)) and
+            .directAddOnly == true and
+            .secretsExposed == false and
+            .memberIdentityExposed == false and
+            .stoppedByRateLimit == false and
+            (.fatalError == null) and
+            (.eventSequence | index("MEMBER_ADDED") != null) and
+            (.eventSequence | index("AGENT_SUMMARY") != null)
+          ' >/dev/null || {
+            echo '::error::Stored evidence does not prove exactly one successful controlled direct add.'
+            exit 1
+          }
+          echo 'Stored evidence VERIFIED: exactly one successful direct add occurred.'
+          echo 'The prior workflow failure was diagnostic-parser-only; no second mutation will be attempted.'
+
+      - name: Run mandatory post-test non-mutating preflight
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
+          echo 'Post-test production preflight PASSED.'
+
+      - name: Resume normal production scheduler
+        run: |
+          set -euo pipefail
+          if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs resume "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
+            echo 'Normal daily scheduler RESUMED after verified post-test health check.'
+          else
+            echo '::warning::Daily scheduler does not exist.'
+          fi
+
+      - name: Finalization summary
+        run: |
+          echo 'Controlled production test finalized successfully.'
+          echo 'Exactly one member-add mutation was verified; no second test mutation was performed.'
+          echo 'Post-test preflight passed and normal daily scheduling was restored.'
