@@ -2,10 +2,9 @@ name: Diagnose FXGA Telegram Member Agent
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/diagnose-telegram-member-agent.yml'
+  workflow_run:
+    workflows: ["Deploy FXGA Telegram Member Agent"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -16,7 +15,9 @@ env:
   GCP_REGION: us-central1
   PREFLIGHT_JOB: fxga-telegram-member-agent-preflight
   SCHEDULER_NAME: fxga-telegram-member-agent-daily
+  DIAGNOSTIC_SECRET: fxga-telegram-preflight-diagnostic
   DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
 
 jobs:
   diagnose:
@@ -54,6 +55,24 @@ jobs:
             echo "Scheduler does not exist yet."
           fi
 
+      - name: Prepare secure diagnostic handoff
+        run: |
+          set -euo pipefail
+          if ! gcloud secrets describe "$DIAGNOSTIC_SECRET" >/dev/null 2>&1; then
+            gcloud secrets create "$DIAGNOSTIC_SECRET" --replication-policy=automatic --quiet
+          fi
+          gcloud secrets add-iam-policy-binding "$DIAGNOSTIC_SECRET" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/secretmanager.secretVersionAdder' --quiet
+          gcloud secrets add-iam-policy-binding "$DIAGNOSTIC_SECRET" \
+            --member="serviceAccount:$DEPLOY_SERVICE_ACCOUNT" \
+            --role='roles/secretmanager.secretAccessor' --quiet
+          gcloud run jobs update "$PREFLIGHT_JOB" \
+            --region "$GCP_REGION" \
+            --update-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,PREFLIGHT_DIAGNOSTIC_SECRET=$DIAGNOSTIC_SECRET" \
+            --quiet
+          echo "Secure redacted diagnostic handoff configured."
+
       - id: preflight
         name: Execute non-mutating production smoke test
         continue-on-error: true
@@ -66,7 +85,7 @@ jobs:
           if [ "$STATUS" -eq 0 ]; then
             echo "Preflight command completed successfully."
           else
-            echo "::warning::Preflight command failed with exit code $STATUS. Collecting Cloud Run diagnostics next."
+            echo "::warning::Preflight command failed with exit code $STATUS. Reading the secure redacted diagnostic result next."
           fi
           exit 0
 
@@ -83,26 +102,37 @@ jobs:
             --format='table(metadata.name,status.conditions[0].type,status.conditions[0].status,status.conditions[0].message,metadata.creationTimestamp)'
           exit 0
 
-      - name: Print detailed Cloud Run diagnostic logs
+      - id: diagnostic
+        name: Read redacted production diagnostic
         if: always()
         run: |
           set +e
-          echo "=== Structured Telegram preflight logs ==="
-          gcloud logging read \
-            "resource.type=cloud_run_job AND resource.labels.job_name=$PREFLIGHT_JOB" \
-            --freshness=30m \
-            --limit=200 \
-            --order=asc \
-            --format='value(timestamp,severity,textPayload,jsonPayload.message)'
-          echo "=== End structured Telegram preflight logs ==="
-          exit 0
+          DIAG="$(gcloud secrets versions access latest --secret="$DIAGNOSTIC_SECRET" 2>/tmp/fxga-diag-error.txt)"
+          STATUS=$?
+          if [ "$STATUS" -ne 0 ] || [ -z "$DIAG" ]; then
+            echo "::warning::No persisted diagnostic result could be read."
+            cat /tmp/fxga-diag-error.txt || true
+            echo "diagnostic_available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "=== REDACTED TELEGRAM PREFLIGHT DIAGNOSTIC ==="
+          printf '%s\n' "$DIAG" | jq . || printf '%s\n' "$DIAG"
+          echo "=== END DIAGNOSTIC ==="
+          echo "diagnostic_available=true" >> "$GITHUB_OUTPUT"
+          OK="$(printf '%s' "$DIAG" | jq -r '.ok // false' 2>/dev/null)"
+          STAGE="$(printf '%s' "$DIAG" | jq -r '.stage // "unknown"' 2>/dev/null)"
+          ERROR_CODE="$(printf '%s' "$DIAG" | jq -r '.errorCode // "NONE"' 2>/dev/null)"
+          echo "diagnostic_ok=$OK" >> "$GITHUB_OUTPUT"
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+          echo "error_code=$ERROR_CODE" >> "$GITHUB_OUTPUT"
 
       - name: Resume scheduler only after passing smoke test
         if: always()
         run: |
           set -euo pipefail
           STATUS="${{ steps.preflight.outputs.exit_code }}"
-          if [ "$STATUS" = "0" ]; then
+          DIAG_OK="${{ steps.diagnostic.outputs.diagnostic_ok }}"
+          if [ "$STATUS" = "0" ] && [ "$DIAG_OK" = "true" ]; then
             if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
               gcloud scheduler jobs resume "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
               echo "Scheduler resumed: production preflight passed."
@@ -115,9 +145,12 @@ jobs:
         if: always()
         run: |
           STATUS="${{ steps.preflight.outputs.exit_code }}"
-          if [ "$STATUS" = "0" ]; then
+          DIAG_OK="${{ steps.diagnostic.outputs.diagnostic_ok }}"
+          STAGE="${{ steps.diagnostic.outputs.stage }}"
+          ERROR_CODE="${{ steps.diagnostic.outputs.error_code }}"
+          if [ "$STATUS" = "0" ] && [ "$DIAG_OK" = "true" ]; then
             echo "Telegram Agent diagnostic smoke test PASSED. No member was added during this test."
             exit 0
           fi
-          echo "::error::Telegram Agent diagnostic smoke test FAILED. Review the structured diagnostic logs above."
+          echo "::error::Telegram Agent diagnostic smoke test FAILED at stage=$STAGE error=$ERROR_CODE. Scheduler remains paused."
           exit 1
