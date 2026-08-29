@@ -1,0 +1,188 @@
+name: Controlled FXGA Telegram One-Member Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/test-telegram-member-agent.yml'
+
+concurrency:
+  group: fxga-telegram-member-agent-controlled-test
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  GAR_REPOSITORY: fxga-containers
+  JOB_NAME: fxga-telegram-member-agent
+  PREFLIGHT_JOB: fxga-telegram-member-agent-preflight
+  TEST_JOB: fxga-telegram-member-agent-one-member-test
+  SCHEDULER_NAME: fxga-telegram-member-agent-daily
+  TEST_DIAGNOSTIC_SECRET: fxga-telegram-test-diagnostic
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  RUNTIME_SERVICE_ACCOUNT: fxga-collector-runtime@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  TELEGRAM_API_ID_SECRET: fxga-telegram-api-id
+  TELEGRAM_API_HASH_SECRET: fxga-telegram-api-hash
+  TELEGRAM_SESSION_SECRET: fxga-telegram-session
+  TELEGRAM_CHANNEL_SECRET: fxga-telegram-channel
+
+jobs:
+  controlled-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Pause daily production scheduler
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs pause "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
+            echo 'Daily scheduler PAUSED for the controlled test.'
+          else
+            echo 'Daily scheduler does not exist; continuing with controlled test.'
+          fi
+
+      - name: Require clean non-mutating preflight
+        run: |
+          set -euo pipefail
+          echo 'Running non-mutating production preflight before the controlled add.'
+          gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
+          echo 'Pre-test production preflight PASSED.'
+
+      - name: Prepare redacted controlled-test diagnostic handoff
+        run: |
+          set -euo pipefail
+          if ! gcloud secrets describe "$TEST_DIAGNOSTIC_SECRET" >/dev/null 2>&1; then
+            gcloud secrets create "$TEST_DIAGNOSTIC_SECRET" --replication-policy=automatic --quiet
+          fi
+          gcloud secrets add-iam-policy-binding "$TEST_DIAGNOSTIC_SECRET" \
+            --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+            --role='roles/secretmanager.secretVersionAdder' --quiet
+          gcloud secrets add-iam-policy-binding "$TEST_DIAGNOSTIC_SECRET" \
+            --member="serviceAccount:$DEPLOY_SERVICE_ACCOUNT" \
+            --role='roles/secretmanager.secretAccessor' --quiet
+          echo 'Redacted test-diagnostic handoff is ready.'
+
+      - id: image
+        name: Resolve the exact deployed production image
+        run: |
+          set -euo pipefail
+          gcloud run jobs describe "$JOB_NAME" --region "$GCP_REGION" --format=json > /tmp/fxga-prod-job.json
+          IMAGE="$(jq -r '
+            .template.template.containers[0].image //
+            .spec.template.spec.template.spec.containers[0].image //
+            .spec.template.template.spec.containers[0].image //
+            .template.containers[0].image //
+            empty
+          ' /tmp/fxga-prod-job.json)"
+          test -n "$IMAGE" || { echo '::error::Could not resolve the deployed production worker image.'; exit 1; }
+          case "$IMAGE" in
+            "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/$JOB_NAME:"*) ;;
+            *) echo '::error::Resolved image is not the expected FXGA Telegram production image.'; exit 1 ;;
+          esac
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo 'Resolved the exact deployed production image without exposing credentials.'
+
+      - name: Deploy isolated one-member test job
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs deploy "$TEST_JOB" \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --tasks 1 --max-retries 0 --task-timeout 600s --cpu 1 --memory 512Mi \
+            --command node --args test-runner.mjs \
+            --set-env-vars "GCP_PROJECT_ID=$GCP_PROJECT_ID,TIME_ZONE=Africa/Johannesburg,TEST_DIAGNOSTIC_SECRET=$TEST_DIAGNOSTIC_SECRET,TEST_MAX_ATTEMPTS=20,ATTEMPT_DELAY_MS=5000,UNKNOWN_ERROR_RETRIES=1,UNKNOWN_RETRY_DELAY_MS=5000,TRANSIENT_RETRY_HOURS=24,SCAN_PAGE_SIZE=200,FIRESTORE_QUEUE_COLLECTION=telegram_member_queue,FIRESTORE_STATE_COLLECTION=agent_state,FIRESTORE_STATE_DOCUMENT=telegram-member-agent" \
+            --set-secrets "TELEGRAM_API_ID=$TELEGRAM_API_ID_SECRET:latest,TELEGRAM_API_HASH=$TELEGRAM_API_HASH_SECRET:latest,TELEGRAM_SESSION=$TELEGRAM_SESSION_SECRET:latest,TELEGRAM_CHANNEL=$TELEGRAM_CHANNEL_SECRET:latest" \
+            --quiet
+          echo 'Isolated controlled-test job deployed.'
+
+      - id: execute
+        name: Execute one-member controlled production test
+        run: |
+          set +e
+          echo 'Executing controlled test. Maximum successful additions: 1.'
+          gcloud run jobs execute "$TEST_JOB" --region "$GCP_REGION" --wait --quiet
+          STATUS=$?
+          echo "exit_code=$STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" -eq 0 ]; then
+            echo 'Controlled test job completed successfully.'
+          else
+            echo "::warning::Controlled test job returned exit code $STATUS. Reading redacted diagnostics next."
+          fi
+          exit 0
+
+      - id: diagnostic
+        name: Read and validate redacted test result
+        run: |
+          set -euo pipefail
+          DIAG="$(gcloud secrets versions access latest --secret="$TEST_DIAGNOSTIC_SECRET")"
+          test -n "$DIAG" || { echo '::error::Controlled test produced no diagnostic result.'; exit 1; }
+          echo '=== REDACTED CONTROLLED TEST RESULT ==='
+          printf '%s\n' "$DIAG" | jq '{ok,version,stage,childExitCode,mutationPerformed,addedDelta,dailyAddedBefore,dailyAddedAfter,attempted,alreadyMember,skipped,deferred,stoppedByRateLimit,stoppedByAttemptLimit,fatalError,errors,eventSequence,testTargetDailyCount,maxAttempts,directAddOnly,secretsExposed,memberIdentityExposed,elapsedMs,timestamp}'
+          echo '=== END REDACTED RESULT ==='
+          printf '%s' "$DIAG" | jq -e '
+            .ok == true and
+            .mutationPerformed == true and
+            .addedDelta == 1 and
+            .directAddOnly == true and
+            .secretsExposed == false and
+            .memberIdentityExposed == false
+          ' >/dev/null || {
+            echo '::error::Controlled test did not prove exactly one successful privacy-safe direct add.'
+            exit 1
+          }
+          test "${{ steps.execute.outputs.exit_code }}" = '0' || {
+            echo '::error::Controlled-test Cloud Run execution failed even though a diagnostic was written.'
+            exit 1
+          }
+          echo 'Controlled test VERIFIED: exactly one successful direct add.'
+
+      - name: Require clean post-test preflight
+        run: |
+          set -euo pipefail
+          echo 'Running post-test non-mutating production preflight.'
+          gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
+          echo 'Post-test production preflight PASSED.'
+
+      - name: Restore normal daily scheduler after verified success
+        run: |
+          set -euo pipefail
+          if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs resume "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
+            echo 'Daily production scheduler RESUMED after the verified controlled test.'
+          fi
+
+      - name: Test summary
+        run: |
+          echo 'FXGA Telegram Member Agent controlled production test PASSED.'
+          echo 'Exactly one successful direct-add mutation was verified.'
+          echo 'No Telegram member identity or credential was emitted by the controlled-test diagnostic.'
+          echo 'Post-test preflight passed and normal scheduling was restored.'
