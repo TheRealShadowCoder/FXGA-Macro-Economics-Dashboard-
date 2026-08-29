@@ -230,7 +230,17 @@ jobs:
           gcloud run jobs add-iam-policy-binding "$JOB_NAME" --region "$GCP_REGION" \
             --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role='roles/run.invoker' --quiet
 
-      - name: Create or update daily Cloud Scheduler trigger
+      - name: Pause any existing daily scheduler before validation
+        run: |
+          set -euo pipefail
+          if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs pause "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
+            echo 'Existing Telegram scheduler is PAUSED until this deployment passes preflight.'
+          else
+            echo 'No existing Telegram scheduler to pause.'
+          fi
+
+      - name: Create or update daily Cloud Scheduler trigger in paused state
         if: env.DIRECT_ADD_READY == 'true'
         run: |
           set -euo pipefail
@@ -240,13 +250,22 @@ jobs:
           else
             gcloud scheduler jobs create http "$SCHEDULER_NAME" --location "$GCP_REGION" --schedule "$SCHEDULE_CRON" --time-zone "$SCHEDULE_TIME_ZONE" --uri "$URI" --http-method POST --oauth-service-account-email "$RUNTIME_SERVICE_ACCOUNT" --oauth-token-scope 'https://www.googleapis.com/auth/cloud-platform' --quiet
           fi
+          gcloud scheduler jobs pause "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
+          echo 'Scheduler configuration updated and held PAUSED pending production preflight.'
 
       - name: Run production readiness preflight when already configured
         if: env.DIRECT_ADD_READY == 'true'
         run: |
           set -euo pipefail
           gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
-          echo 'Production preflight passed: queue, Telegram user session and target channel are ready.'
+          echo 'Production preflight passed: queue, Telegram user session, target channel, permissions and candidate resolution are ready.'
+
+      - name: Resume scheduler only after successful production preflight
+        if: env.DIRECT_ADD_READY == 'true'
+        run: |
+          set -euo pipefail
+          gcloud scheduler jobs resume "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet
+          echo 'Scheduler RESUMED only after production preflight passed.'
 
       - name: Deployment summary
         run: |
@@ -254,8 +273,8 @@ jobs:
           echo "Direct-add job: $JOB_NAME (execution guarded by live MTProto and queue validation)"
           echo "Preflight job: $PREFLIGHT_JOB"
           if [ "${DIRECT_ADD_READY:-false}" = 'true' ]; then
-            echo "Scheduler: $SCHEDULER_NAME ($SCHEDULE_CRON, $SCHEDULE_TIME_ZONE)"
+            echo "Scheduler: $SCHEDULER_NAME ($SCHEDULE_CRON, $SCHEDULE_TIME_ZONE) — validated and active"
           else
-            echo 'Scheduler: not activated until all MTProto credentials are configured.'
+            echo 'Scheduler: PAUSED/not activated until all MTProto credentials are configured and preflight passes.'
           fi
           echo 'MTProto credentials and roster can be configured from the existing FXGA super-admin page.'
