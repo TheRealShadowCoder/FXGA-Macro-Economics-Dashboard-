@@ -174,7 +174,7 @@ try {
     ok: true,
     version: VERSION,
     queueReady: true,
-    queueRecordCount: liveQueueCount ?? Number(state.queueRecordCount || 0) || null,
+    queueRecordCount: liveQueueCount ?? (Number(state.queueRecordCount || 0) || null),
     sessionAuthorized: true,
     channelResolved: true,
     canInviteUsers: true,
