@@ -1,0 +1,55 @@
+name: Restore FXGA Telegram Scheduler After Guarded Stop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/resume-telegram-scheduler-peer-flood.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  SCHEDULER_NAME: fxga-telegram-member-agent-daily
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resume normal scheduler without executing worker
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          gcloud scheduler jobs resume "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || {
+            STATUS="$(gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" --format='value(state)')"
+            [ "$STATUS" = 'ENABLED' ] || { echo "::error::Scheduler state is $STATUS"; exit 1; }
+          }
+          STATUS="$(gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" --format='value(state)')"
+          test "$STATUS" = 'ENABLED' || { echo "::error::Scheduler did not return to ENABLED state: $STATUS"; exit 1; }
+          echo 'Normal daily scheduler restored. This workflow does not execute the Telegram worker.'
