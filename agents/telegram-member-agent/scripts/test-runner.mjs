@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { Firestore } from '@google-cloud/firestore';
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '';
 const STATE_COLLECTION = process.env.FIRESTORE_STATE_COLLECTION || 'agent_state';
 const STATE_DOCUMENT = process.env.FIRESTORE_STATE_DOCUMENT || 'telegram-member-agent';
@@ -135,7 +135,7 @@ function parseWorkerOutput(stdout, stderr) {
       const value = JSON.parse(trimmed);
       const event = safeCode(value?.event);
       if (event) events.push(event);
-      if (event === 'agent_summary') summary = value;
+      if (event === 'AGENT_SUMMARY') summary = value;
     } catch {}
   }
   return { events, summary };
