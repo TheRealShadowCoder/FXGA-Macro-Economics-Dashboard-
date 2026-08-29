@@ -1,0 +1,123 @@
+name: Diagnose FXGA Telegram Member Agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-telegram-member-agent.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  PREFLIGHT_JOB: fxga-telegram-member-agent-preflight
+  SCHEDULER_NAME: fxga-telegram-member-agent-daily
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Pause production scheduler during diagnostics
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs pause "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
+            echo "Production scheduler paused while diagnostics run."
+          else
+            echo "Scheduler does not exist yet."
+          fi
+
+      - id: preflight
+        name: Execute non-mutating production smoke test
+        continue-on-error: true
+        run: |
+          set +e
+          echo "Running production preflight. This test does not add or message any Telegram user."
+          gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
+          STATUS=$?
+          echo "exit_code=$STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" -eq 0 ]; then
+            echo "Preflight command completed successfully."
+          else
+            echo "::warning::Preflight command failed with exit code $STATUS. Collecting Cloud Run diagnostics next."
+          fi
+          exit 0
+
+      - name: Print preflight execution metadata
+        if: always()
+        run: |
+          set +e
+          echo "=== Latest preflight execution ==="
+          gcloud run jobs executions list \
+            --job "$PREFLIGHT_JOB" \
+            --region "$GCP_REGION" \
+            --limit 3 \
+            --sort-by='~metadata.creationTimestamp' \
+            --format='table(metadata.name,status.conditions[0].type,status.conditions[0].status,status.conditions[0].message,metadata.creationTimestamp)'
+          exit 0
+
+      - name: Print detailed Cloud Run diagnostic logs
+        if: always()
+        run: |
+          set +e
+          echo "=== Structured Telegram preflight logs ==="
+          gcloud logging read \
+            "resource.type=cloud_run_job AND resource.labels.job_name=$PREFLIGHT_JOB" \
+            --freshness=30m \
+            --limit=200 \
+            --order=asc \
+            --format='value(timestamp,severity,textPayload,jsonPayload.message)'
+          echo "=== End structured Telegram preflight logs ==="
+          exit 0
+
+      - name: Resume scheduler only after passing smoke test
+        if: always()
+        run: |
+          set -euo pipefail
+          STATUS="${{ steps.preflight.outputs.exit_code }}"
+          if [ "$STATUS" = "0" ]; then
+            if gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" >/dev/null 2>&1; then
+              gcloud scheduler jobs resume "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
+              echo "Scheduler resumed: production preflight passed."
+            fi
+          else
+            echo "::warning::Scheduler remains PAUSED because production preflight did not pass."
+          fi
+
+      - name: Diagnostic result
+        if: always()
+        run: |
+          STATUS="${{ steps.preflight.outputs.exit_code }}"
+          if [ "$STATUS" = "0" ]; then
+            echo "Telegram Agent diagnostic smoke test PASSED. No member was added during this test."
+            exit 0
+          fi
+          echo "::error::Telegram Agent diagnostic smoke test FAILED. Review the structured diagnostic logs above."
+          exit 1
