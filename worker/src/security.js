@@ -138,6 +138,17 @@ export function hardenResponse(response, request) {
     headers.set('pragma', 'no-cache');
   }
   if (!headers.has('x-request-id')) headers.set('x-request-id', crypto.randomUUID());
+
+  // Cloudflare WebSocket upgrade responses carry a non-standard webSocket handle.
+  // Preserve that handle while applying the same security headers to the handshake.
+  if (response.webSocket) {
+    return new Response(null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+      webSocket: response.webSocket,
+    });
+  }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
