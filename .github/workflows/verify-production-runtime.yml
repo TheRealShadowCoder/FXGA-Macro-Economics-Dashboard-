@@ -35,9 +35,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: '24'
 
@@ -49,6 +49,7 @@ jobs:
           node --check worker/src/index.js
           node --check worker/src/r0-entry.js
           node --check worker/src/auth-gateway.js
+          node --check worker/src/security.js
           node --check scripts/r0-collect-market.mjs
           node --check scripts/r0-collect-macro.mjs
           node scripts/verify-upgrade-program.mjs
@@ -72,9 +73,13 @@ jobs:
 
           const gateway=read('worker/src/auth-gateway.js');
           assert(gateway.includes("import r0Worker from './r0-entry.js'"),'Auth gateway must delegate authorized requests to R0 runtime');
-          for(const marker of ['/api/auth/status','/api/auth/exchange','/api/auth/introspect-transfer','/api/auth/introspect-session','authentication_required','member_auth_enforced']) assert(gateway.includes(marker),`Member gateway missing ${marker}`);
+          for(const marker of ['/api/auth/status','/api/auth/exchange','/api/auth/introspect-transfer','/api/auth/introspect-session','authentication_required','member_auth_enforced','serviceReachable: false','clientFingerprint']) assert(gateway.includes(marker),`Member gateway missing ${marker}`);
+          assert(gateway.includes('an auth-service outage must never turn a private program public'),'Auth outage must fail closed');
           assert(gateway.includes("'/api/internal/state/'"),'Collector ingestion must remain reachable through its existing token auth');
           assert(gateway.includes("'/api/mt5/batch'"),'MT5 ingestion must remain reachable through its existing token auth');
+
+          const security=read('worker/src/security.js');
+          for(const marker of ['BLOCKED_METHODS','strict-transport-security',"frame-ancestors 'none'",'security_rate_limits','origin_mismatch']) assert(security.includes(marker),`Security gateway missing ${marker}`);
 
           const entry=read('worker/src/r0-entry.js');
           assert(entry.includes("import coreWorker from './index.js'"),'R0 compatibility entry must delegate to core Worker');
@@ -88,11 +93,12 @@ jobs:
           assert(core.includes('env.DB'),'Core runtime must use D1');
 
           const schema=read('worker/schema.sql');
-          for(const table of ['state_snapshots','gemini_cache','mt5_batches','runtime_meta']) assert(schema.includes(table),`D1 schema missing ${table}`);
+          for(const table of ['state_snapshots','gemini_cache','mt5_batches','runtime_meta','security_rate_limits','security_events']) assert(schema.includes(table),`D1 schema missing ${table}`);
           assert(read('src/google-cloud-routing.ts').includes('same-origin'),'Browser API routing must remain same-origin');
+          assert(read('vite.config.ts').includes('sourcemap: false'),'Production source maps must remain disabled');
 
           const deploy=read('.github/workflows/deploy-cloudflare-static.yml');
-          for(const marker of ['worker/src/auth-gateway.js','AUTH_ENFORCED','/api/auth/status','authentication ENFORCED','Cloudflare D1 Free','GEMINI_API_KEY']) assert(deploy.includes(marker),`Deployment workflow missing ${marker}`);
+          for(const marker of ['worker/src/auth-gateway.js','AUTH_ENFORCED','/api/auth/status','fail-closed','Cloudflare D1 Free','GEMINI_API_KEY','TRACE must be rejected']) assert(deploy.includes(marker),`Deployment workflow missing ${marker}`);
 
           const collectors=read('.github/workflows/r0-free-market-collector.yml');
           assert(collectors.includes("cron: '*/15 * * * *'"),'Market collector must run every 15 minutes');
@@ -111,8 +117,6 @@ jobs:
           assert(macroScript.includes('fredgraph.csv'),'Macro collector must retain public FRED fallback');
           assert(macroScript.includes("'fred-public-csv-fallback'"),'Macro collector must report fallback transport');
 
-          // These are the only workflows that deploy or feed the Macro Dashboard production runtime.
-          // Telegram-agent workflows are a separate optional service and are deliberately outside this R0 gate.
           const macroProductionWorkflows=[
             '.github/workflows/deploy-cloudflare-static.yml',
             '.github/workflows/r0-free-market-collector.yml',
@@ -125,9 +129,9 @@ jobs:
           }
           assert(!violations.length,`Macro production runtime reintroduced Google Cloud infrastructure:\n${violations.join('\n')}`);
 
-          console.log('PASS: FXGA R0 architecture + owner-approved member access verified');
-          console.log('Public: landing page, health, authenticated collectors');
+          console.log('PASS: FXGA R0 architecture + fail-closed owner-approved member access verified');
+          console.log('Public: health and authenticated collector ingestion only');
           console.log('Protected: dashboard SPA, analysis APIs, realtime WebSocket, Gemini member features');
-          console.log('Authorization: Google identity + owner-controlled member service');
+          console.log('Security: fail-closed auth, browser-bound sessions, edge rate limits, CSRF/origin controls and hardened headers');
           console.log('Macro compute: Cloudflare Workers; data: Cloudflare D1; AI: Gemini retained');
           NODE
