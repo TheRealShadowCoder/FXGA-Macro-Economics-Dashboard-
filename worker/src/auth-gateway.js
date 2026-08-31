@@ -1,4 +1,5 @@
 import r0Worker from './r0-entry.js';
+import { clientFingerprint, guardRequest, hardenResponse, securityFailure } from './security.js';
 
 const PROGRAM_COOKIE = 'fxga_program_session';
 const STATUS_CACHE_MS = 30_000;
@@ -41,9 +42,11 @@ async function authFetch(env, path, payload) {
     headers: {
       'content-type': 'application/json',
       'accept': 'application/json',
-      'user-agent': 'FXGA-Macro-Auth-Gateway/1.0',
+      'user-agent': 'FXGA-Macro-Auth-Gateway/2.0',
     },
     body: JSON.stringify(payload),
+    cache: 'no-store',
+    redirect: 'error',
   });
   const body = await response.json().catch(() => ({}));
   return { response, body };
@@ -79,32 +82,28 @@ async function resolveAuthStatus(env) {
     const response = await fetch(serviceUrl(env, '/api/auth/config'), {
       headers: { accept: 'application/json', 'cache-control': 'no-cache' },
       cache: 'no-store',
+      redirect: 'error',
     });
-    if (!response.ok) throw new Error(`auth_config_http_${response.status}`);
+    if (!response.ok) throw new Error('auth_config_unavailable');
     const config = await response.json();
     const googleConfigured = config?.googleConfigured === true;
     const latched = await persistedEnforcement(env);
     const enforced = googleConfigured || latched;
     if (googleConfigured && !latched) await latchEnforcement(env);
     value = { enforced, googleConfigured, serviceReachable: true, mode };
-  } catch (error) {
-    const latched = await persistedEnforcement(env);
-    value = {
-      enforced: latched,
-      googleConfigured: null,
-      serviceReachable: false,
-      mode,
-      error: String(error?.message || error),
-    };
+  } catch {
+    // Security invariant: an auth-service outage must never turn a private program public.
+    value = { enforced: true, googleConfigured: null, serviceReachable: false, mode };
   }
   statusCache = { expiresAt: Date.now() + STATUS_CACHE_MS, value };
   return value;
 }
 
 function isStaticAsset(path) {
+  if (path.endsWith('.map')) return false;
   if (path.startsWith('/assets/')) return true;
   if (path === '/favicon.ico' || path === '/favicon.svg' || path === '/robots.txt' || path === '/manifest.webmanifest') return true;
-  return /\.(?:js|mjs|css|map|woff2?|ttf|otf|png|jpe?g|gif|webp|avif|svg|ico)$/i.test(path);
+  return /\.(?:js|mjs|css|woff2?|ttf|otf|png|jpe?g|gif|webp|avif|svg|ico)$/i.test(path);
 }
 
 function isPublicOperationalApi(path) {
@@ -119,7 +118,8 @@ async function validateProgramSession(request, env) {
   const raw = cookieMap(request)[PROGRAM_COOKIE];
   if (!raw) return null;
   try {
-    const { response, body } = await authFetch(env, '/api/auth/introspect-session', { token: raw });
+    const fingerprint = await clientFingerprint(request);
+    const { response, body } = await authFetch(env, '/api/auth/introspect-session', { token: raw, clientFingerprint: fingerprint });
     if (!response.ok || body?.valid !== true || !body?.member) return null;
     return { token: raw, member: body.member, expiresAt: body.expiresAt || null };
   } catch {
@@ -146,7 +146,8 @@ async function exchange(request, env) {
   if (transferToken.length < 32) return loginRedirect(env, 'invalid-transfer');
 
   try {
-    const { response, body } = await authFetch(env, '/api/auth/introspect-transfer', { token: transferToken });
+    const fingerprint = await clientFingerprint(request);
+    const { response, body } = await authFetch(env, '/api/auth/introspect-transfer', { token: transferToken, clientFingerprint: fingerprint });
     if (!response.ok || body?.valid !== true || !body?.sessionToken) return loginRedirect(env, 'transfer-denied');
     return new Response(null, {
       status: 302,
@@ -154,7 +155,7 @@ async function exchange(request, env) {
         location: '/',
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
-        'set-cookie': `${PROGRAM_COOKIE}=${encodeURIComponent(body.sessionToken)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=86400`,
+        'set-cookie': `${PROGRAM_COOKIE}=${encodeURIComponent(body.sessionToken)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=86400; Priority=High`,
       },
     });
   } catch {
@@ -168,7 +169,7 @@ async function logout(request, env) {
     try { await authFetch(env, '/api/auth/revoke-program', { token: raw }); } catch {}
   }
   const headers = {
-    'set-cookie': `${PROGRAM_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
+    'set-cookie': `${PROGRAM_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Priority=High`,
     'cache-control': 'no-store',
   };
   if (request.method === 'GET') {
@@ -184,50 +185,49 @@ export default {
     const path = url.pathname;
 
     try {
+      const blocked = await guardRequest(request, env);
+      if (blocked) return hardenResponse(blocked, request);
+
       if (path === '/api/auth/status' && request.method === 'GET') {
         const status = await resolveAuthStatus(env);
-        return json({
+        return hardenResponse(json({
           architecture: 'cloudflare-r0',
           accessModel: 'owner-approved-google-email-allowlist',
           loginUrl: portalUrl(env),
           ...status,
-        });
+        }), request);
       }
 
-      if (path === '/api/auth/exchange' && request.method === 'GET') return exchange(request, env);
-      if (path === '/api/auth/logout' && (request.method === 'GET' || request.method === 'POST')) return logout(request, env);
+      if (path === '/api/auth/exchange' && request.method === 'GET') return hardenResponse(await exchange(request, env), request);
+      if (path === '/api/auth/logout' && (request.method === 'GET' || request.method === 'POST')) return hardenResponse(await logout(request, env), request);
 
       if (path === '/api/auth/session' && request.method === 'GET') {
         const status = await resolveAuthStatus(env);
-        if (!status.enforced) return json({ authenticated: false, enforcementPending: true, ...status });
+        if (!status.enforced) return hardenResponse(json({ authenticated: false, enforcementPending: true, ...status }), request);
         const session = await validateProgramSession(request, env);
-        return session
+        return hardenResponse(session
           ? json({ authenticated: true, member: session.member, expiresAt: session.expiresAt })
-          : json({ authenticated: false, loginUrl: portalUrl(env) }, 401);
+          : json({ authenticated: false, loginUrl: portalUrl(env) }, 401), request);
       }
 
-      if (isPublicOperationalApi(path) || isStaticAsset(path)) return r0Worker.fetch(request, env, ctx);
+      if (isPublicOperationalApi(path) || isStaticAsset(path)) return hardenResponse(await r0Worker.fetch(request, env, ctx), request);
 
       const status = await resolveAuthStatus(env);
-      if (!status.enforced) return r0Worker.fetch(request, env, ctx);
+      if (!status.enforced) return hardenResponse(await r0Worker.fetch(request, env, ctx), request);
 
       const session = await validateProgramSession(request, env);
-      if (session) return r0Worker.fetch(request, env, ctx);
+      if (session) return hardenResponse(await r0Worker.fetch(request, env, ctx), request);
 
       if (path.startsWith('/api/')) {
-        return json({
+        return hardenResponse(json({
           error: 'authentication_required',
           message: 'This FXGA program is available only to owner-authorized members.',
           loginUrl: portalUrl(env),
-        }, 401);
+        }, 401), request);
       }
-      return loginRedirect(env, 'authentication-required');
-    } catch (error) {
-      return json({
-        error: 'fxga_member_auth_gateway_error',
-        message: String(error?.message || error),
-        architecture: 'cloudflare-r0',
-      }, 500);
+      return hardenResponse(loginRedirect(env, 'authentication-required'), request);
+    } catch {
+      return securityFailure(env, request, path);
     }
   },
 };
