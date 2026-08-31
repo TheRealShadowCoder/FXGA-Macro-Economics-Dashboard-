@@ -1,0 +1,226 @@
+name: Run FXGA Telegram Until Mutual Contact
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/run-telegram-until-mutual-contact.trigger'
+
+concurrency:
+  group: fxga-telegram-until-mutual-contact
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  JOB_NAME: fxga-telegram-member-agent
+  PREFLIGHT_JOB: fxga-telegram-member-agent-preflight
+  SCHEDULER_NAME: fxga-telegram-member-agent-daily
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  FIRESTORE_STATE_COLLECTION: agent_state
+  FIRESTORE_STATE_DOCUMENT: telegram-member-agent
+  DAILY_HARD_MAX: '50'
+  MAX_SINGLE_USER_EXECUTIONS: '100'
+
+jobs:
+  guarded-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - id: auth-config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.auth-config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Prepare guarded controller
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          npm install --omit=dev --no-audit --no-fund
+          gcloud run jobs describe "$JOB_NAME" --region "$GCP_REGION" --format='value(metadata.name)' >/dev/null
+          gcloud run jobs describe "$PREFLIGHT_JOB" --region "$GCP_REGION" --format='value(metadata.name)' >/dev/null
+          gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" --format='value(name)' >/dev/null
+
+      - id: gate
+        name: Refuse to run during Telegram cooldown
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { Firestore } from '@google-cloud/firestore';
+          const db = new Firestore();
+          const snap = await db.collection(process.env.FIRESTORE_STATE_COLLECTION).doc(process.env.FIRESTORE_STATE_DOCUMENT).get();
+          const state = snap.exists ? snap.data() : {};
+          const blockedUntil = state.blockedUntil?.toDate?.();
+          if (blockedUntil && blockedUntil > new Date()) {
+            console.error(`::error::Telegram cooldown is active until ${blockedUntil.toISOString()}. No add attempt will be made.`);
+            process.exit(5);
+          }
+          console.log('No active stored Telegram cooldown.');
+          NODE
+
+      - id: pause
+        name: Pause normal daily scheduler
+        run: |
+          set -euo pipefail
+          gcloud scheduler jobs pause "$SCHEDULER_NAME" --location "$GCP_REGION" --quiet || true
+          echo 'Normal scheduler paused for guarded one-user-at-a-time operation.'
+
+      - name: Run mandatory non-mutating preflight
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$PREFLIGHT_JOB" --region "$GCP_REGION" --wait --quiet
+          echo 'Preflight passed.'
+
+      - id: configure
+        name: Configure worker for one attempted user per execution
+        run: |
+          set -euo pipefail
+          gcloud run jobs update "$JOB_NAME" --region "$GCP_REGION" \
+            --update-env-vars 'DAILY_TARGET_MIN=1,DAILY_TARGET_MAX=50,MAX_ATTEMPTS_PER_RUN=1,UNKNOWN_ERROR_RETRIES=0,ATTEMPT_DELAY_MS=5000' --quiet
+          echo 'Worker configured for exactly one attempted queue member per Cloud Run execution.'
+
+      - id: operate
+        name: Add one-by-one until Telegram requires mutual contact
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          STOP_REASON=''
+          EXECUTIONS=0
+
+          for i in $(seq 1 "$MAX_SINGLE_USER_EXECUTIONS"); do
+            EXECUTIONS=$i
+            echo "Starting single-user execution $i."
+
+            set +e
+            gcloud run jobs execute "$JOB_NAME" --region "$GCP_REGION" --wait --quiet
+            JOB_STATUS=$?
+            set -e
+
+            if [ "$JOB_STATUS" -ne 0 ]; then
+              STOP_REASON='worker_job_failure'
+              echo "::error::Single-user worker execution returned status $JOB_STATUS."
+              break
+            fi
+
+            DECISION="$(node --input-type=module <<'NODE'
+            import { Firestore } from '@google-cloud/firestore';
+            const db = new Firestore();
+            const snap = await db.collection(process.env.FIRESTORE_STATE_COLLECTION).doc(process.env.FIRESTORE_STATE_DOCUMENT).get();
+            const state = snap.exists ? snap.data() : {};
+            const s = state.lastRunSummary || {};
+            const errors = s.errors || {};
+            const blockedUntil = state.blockedUntil?.toDate?.();
+            const blocked = Boolean(blockedUntil && blockedUntil > new Date());
+            const dailyAdded = Math.max(0, Number(state.dailyAdded || s.dailyAddedTotal || 0));
+            const attempted = Math.max(0, Number(s.attempted || 0));
+            const added = Math.max(0, Number(s.added || 0));
+
+            console.error(`Redacted single-user result: attempted=${attempted}; added=${added}; dailyAdded=${dailyAdded}; rateLimited=${s.stoppedByRateLimit || blocked ? 'yes' : 'no'}; mutualContact=${Number(errors.USER_NOT_MUTUAL_CONTACT || 0) > 0 ? 'yes' : 'no'}.`);
+
+            if (Number(errors.USER_NOT_MUTUAL_CONTACT || 0) > 0) {
+              process.stdout.write('mutual_contact_required');
+            } else if (s.stoppedByRateLimit || blocked) {
+              process.stdout.write('rate_limit');
+            } else if (s.fatalError) {
+              process.stdout.write('fatal_error');
+            } else if (dailyAdded >= Number(process.env.DAILY_HARD_MAX || 50)) {
+              process.stdout.write('daily_max');
+            } else if (attempted === 0) {
+              process.stdout.write('no_progress');
+            } else {
+              process.stdout.write('continue');
+            }
+            NODE
+            )"
+
+            case "$DECISION" in
+              mutual_contact_required)
+                STOP_REASON='mutual_contact_required'
+                echo 'Telegram returned USER_NOT_MUTUAL_CONTACT. Stopping immediately as requested.'
+                break
+                ;;
+              rate_limit)
+                STOP_REASON='rate_limit'
+                echo '::warning::Telegram rate-limit condition detected. Stopping without further attempts.'
+                break
+                ;;
+              fatal_error)
+                STOP_REASON='fatal_error'
+                echo '::error::Fatal Telegram/account/channel condition detected. Stopping.'
+                break
+                ;;
+              daily_max)
+                STOP_REASON='daily_max'
+                echo 'Daily hard safety ceiling reached before a mutual-contact restriction appeared.'
+                break
+                ;;
+              no_progress)
+                STOP_REASON='no_progress'
+                echo '::warning::Worker made no queue progress. Stopping to avoid a loop.'
+                break
+                ;;
+              continue)
+                ;;
+              *)
+                STOP_REASON='diagnostic_error'
+                echo "::error::Unexpected controller decision: $DECISION"
+                break
+                ;;
+            esac
+          done
+
+          if [ -z "$STOP_REASON" ]; then
+            STOP_REASON='controller_execution_cap'
+          fi
+
+          echo "stop_reason=$STOP_REASON" >> "$GITHUB_OUTPUT"
+          echo "executions=$EXECUTIONS" >> "$GITHUB_OUTPUT"
+
+          if [ "$STOP_REASON" != 'mutual_contact_required' ]; then
+            echo "::warning::Guarded operation stopped for $STOP_REASON before receiving USER_NOT_MUTUAL_CONTACT."
+          fi
+
+      - id: restore
+        name: Restore normal production worker configuration
+        if: always()
+        run: |
+          set -euo pipefail
+          gcloud run jobs update "$JOB_NAME" --region "$GCP_REGION" \
+            --update-env-vars 'DAILY_TARGET_MIN=20,DAILY_TARGET_MAX=50,MAX_ATTEMPTS_PER_RUN=100,UNKNOWN_ERROR_RETRIES=2,ATTEMPT_DELAY_MS=5000' --quiet
+          echo 'Production worker configuration restored. Scheduler remains paused.'
+
+      - name: Guarded operation summary
+        if: always()
+        run: |
+          echo "Stop reason: ${{ steps.operate.outputs.stop_reason }}"
+          echo "Single-user executions: ${{ steps.operate.outputs.executions }}"
+          echo "Scheduler remains paused after this guarded operation."
+          if [ "${{ steps.operate.outputs.stop_reason }}" = 'mutual_contact_required' ]; then
+            echo 'Requested stop condition reached: Telegram requires mutual contact.'
+          fi
