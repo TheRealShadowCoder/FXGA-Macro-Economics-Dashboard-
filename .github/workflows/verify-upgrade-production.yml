@@ -41,7 +41,7 @@ jobs:
           ref: main
       - name: Download audit when available
         if: ${{ needs.audit.result == 'success' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fxga-upgrade-production-audit
           path: runtime
