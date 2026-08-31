@@ -28,7 +28,7 @@ jobs:
     env:
       SITE_URL: https://fxga-macro-intelligence-dashboard.caramel-snapper.workers.dev
     steps:
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
