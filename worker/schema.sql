@@ -34,3 +34,30 @@ CREATE TABLE IF NOT EXISTS runtime_meta (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS security_rate_limits (
+  bucket_key TEXT NOT NULL,
+  bucket INTEGER NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(bucket_key, bucket)
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_rate_limits_updated
+  ON security_rate_limits(updated_at);
+
+CREATE TABLE IF NOT EXISTS security_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type TEXT NOT NULL,
+  path TEXT,
+  method TEXT,
+  source_hash TEXT,
+  fingerprint_hash TEXT,
+  details TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_events_created
+  ON security_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_events_type
+  ON security_events(event_type, created_at DESC);
