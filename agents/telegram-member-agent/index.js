@@ -3,7 +3,7 @@ import bigInt from "big-integer";
 import { Api, TelegramClient } from "teleproto";
 import { StringSession } from "teleproto/sessions";
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const db = new Firestore();
 
 const config = Object.freeze({
@@ -36,7 +36,6 @@ const queue = db.collection(config.queueCollection);
 
 const PERMANENT_SKIPS = new Map([
   ["USER_PRIVACY_RESTRICTED", "privacy_restricted"],
-  ["USER_NOT_MUTUAL_CONTACT", "requires_mutual_contact"],
   ["INPUT_USER_DEACTIVATED", "deactivated"],
   ["USER_DEACTIVATED", "deactivated"],
   ["USER_ID_INVALID", "invalid_user"],
@@ -85,8 +84,10 @@ const summary = {
   attempted: 0,
   scanned: 0,
   stoppedByRateLimit: false,
+  stoppedByMutualContact: false,
   stoppedByAttemptLimit: false,
   minimumGoalReached: false,
+  stopReason: null,
   errors: {}
 };
 
@@ -119,6 +120,7 @@ try {
       }));
     } else if (state.blockedUntil && state.blockedUntil.toDate() > new Date()) {
       summary.stoppedByRateLimit = true;
+      summary.stopReason = "telegram_rate_limit_active";
       summary.blockedUntil = state.blockedUntil.toDate().toISOString();
       console.log(JSON.stringify({ event: "rate_limit_window_active", ...summary }));
     } else {
@@ -151,7 +153,7 @@ try {
   summary.dailyDate = dailyDate;
   summary.dailyAddedTotal = dailyAddedBeforeRun + summary.added;
   summary.minimumGoalReached = summary.dailyAddedTotal >= config.dailyTargetMin;
-  summary.stoppedByAttemptLimit = !dailyTargetReached() && summary.attempted >= config.maxAttemptsPerRun;
+  summary.stoppedByAttemptLimit = !dailyTargetReached() && !summary.stoppedByRateLimit && !summary.stoppedByMutualContact && summary.attempted >= config.maxAttemptsPerRun;
   summary.finishedAt = new Date().toISOString();
 
   if (client) {
@@ -296,6 +298,27 @@ async function processMember(doc, member, context) {
         return;
       }
 
+      if (normalized.code === "USER_NOT_MUTUAL_CONTACT") {
+        summary.skipped += 1;
+        summary.stoppedByMutualContact = true;
+        summary.stopReason = "mutual_contact_required";
+        await writeOutcome(doc, member, "requires_mutual_contact", normalized.code, context);
+        await stateRef.set({
+          lastError: normalized.code,
+          lastErrorAt: FieldValue.serverTimestamp(),
+          lastStopReason: "mutual_contact_required",
+          lastStoppedAt: FieldValue.serverTimestamp()
+        }, { merge: true });
+        console.log(JSON.stringify({
+          event: "mutual_contact_stop",
+          id: doc.id,
+          sequence: member.sequence,
+          username: member.username || null,
+          reason: normalized.code
+        }));
+        return;
+      }
+
       if (PERMANENT_SKIPS.has(normalized.code)) {
         summary.skipped += 1;
         await writeOutcome(doc, member, PERMANENT_SKIPS.get(normalized.code), normalized.code, context);
@@ -309,13 +332,16 @@ async function processMember(doc, member, context) {
 
       if (normalized.rateLimited) {
         summary.stoppedByRateLimit = true;
+        summary.stopReason = normalized.code;
         summary.deferred += 1;
         const blockedUntil = new Date(Date.now() + normalized.waitSeconds * 1000);
         summary.blockedUntil = blockedUntil.toISOString();
         await stateRef.set({
           blockedUntil: Timestamp.fromDate(blockedUntil),
           lastError: normalized.code,
-          lastErrorAt: FieldValue.serverTimestamp()
+          lastErrorAt: FieldValue.serverTimestamp(),
+          lastStopReason: normalized.code,
+          lastStoppedAt: FieldValue.serverTimestamp()
         }, { merge: true });
         await deferMember(doc, member, normalized.code, blockedUntil, context);
         return;
@@ -486,7 +512,7 @@ async function getState() {
 }
 
 function shouldContinue() {
-  return !summary.stoppedByRateLimit && !dailyTargetReached() && summary.attempted < config.maxAttemptsPerRun;
+  return !summary.stoppedByRateLimit && !summary.stoppedByMutualContact && !dailyTargetReached() && summary.attempted < config.maxAttemptsPerRun;
 }
 
 function dailyTargetReached() {
