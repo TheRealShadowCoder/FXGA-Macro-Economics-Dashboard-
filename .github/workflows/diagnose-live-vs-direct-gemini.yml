@@ -77,7 +77,7 @@ jobs:
           NODE
 
       - name: Persist sanitized correlation result
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ github.token }}
           script: |
