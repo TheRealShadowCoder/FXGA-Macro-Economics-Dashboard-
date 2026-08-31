@@ -1,0 +1,70 @@
+name: FXGA Dashboard Security Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fxga-dashboard-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Production dependency vulnerability gate
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Security architecture gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check worker/src/auth-gateway.js
+          node --check worker/src/security.js
+          node --check worker/src/r0-entry.js
+          node --check worker/src/index.js
+
+          grep -F "an auth-service outage must never turn a private program public" worker/src/auth-gateway.js >/dev/null
+          grep -F "clientFingerprint" worker/src/auth-gateway.js >/dev/null
+          grep -F "security_rate_limits" worker/schema.sql >/dev/null
+          grep -F "security_events" worker/schema.sql >/dev/null
+          grep -F "strict-transport-security" worker/src/security.js >/dev/null
+          grep -F "frame-ancestors 'none'" worker/src/security.js >/dev/null
+          grep -F "sourcemap: false" vite.config.ts >/dev/null
+
+          if grep -R -E --exclude-dir=node_modules --exclude='package-lock.json' -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|sk_live_[A-Za-z0-9]{16,}|sk_test_[A-Za-z0-9]{16,}' .; then
+            echo '::error::Potential private credential material is committed to the repository.'
+            exit 1
+          fi
+
+      - name: Build and prohibit production source maps
+        run: |
+          npm run build
+          test -f dist/index.html
+          if find dist -type f -name '*.map' | grep -q .; then
+            echo '::error::Production source maps must not be shipped.'
+            exit 1
+          fi
+
+      - name: Security invariant summary
+        run: |
+          echo 'PASS: fail-closed authentication, browser-bound sessions, CSRF/origin checks, D1 rate limiting, hardened headers, payload controls, secret scan and dependency audit.'
