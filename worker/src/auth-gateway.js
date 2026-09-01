@@ -1,5 +1,5 @@
 import r0Worker from './r0-entry.js';
-import { clientFingerprint, guardRequest, hardenResponse, securityFailure } from './security.js';
+import { clientFingerprint, clientLegacyFingerprint, guardRequest, hardenResponse, securityFailure } from './security.js';
 
 const PROGRAM_COOKIE = 'fxga_program_session';
 const STATUS_CACHE_MS = 30_000;
@@ -31,23 +31,32 @@ function portalUrl(env, suffix = '/member') {
   return `${origin}${suffix}`;
 }
 
+function authServiceBase(env) {
+  const configured = String(env.AUTH_SERVICE_URL || 'https://fxga-trading-academy.few-nose.workers.dev').replace(/\/$/, '');
+  const url = new URL(configured);
+  if (url.protocol !== 'https:') throw new Error('auth_service_must_use_https');
+  return url;
+}
+
 function serviceUrl(env, path) {
-  const base = String(env.AUTH_SERVICE_URL || 'https://fxga-trading-academy.few-nose.workers.dev').replace(/\/$/, '');
-  return `${base}${path}`;
+  const base = authServiceBase(env);
+  return new URL(path, `${base.origin}/`).toString();
 }
 
 async function authFetch(env, path, payload) {
+  const base = authServiceBase(env);
   const response = await fetch(serviceUrl(env, path), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'accept': 'application/json',
-      'user-agent': 'FXGA-Macro-Auth-Gateway/2.0',
+      'user-agent': 'FXGA-Macro-Auth-Gateway/3.0',
     },
     body: JSON.stringify(payload),
-    cache: 'no-store',
-    redirect: 'error',
+    redirect: 'follow',
   });
+  const finalUrl = new URL(response.url || serviceUrl(env, path));
+  if (finalUrl.protocol !== 'https:' || finalUrl.origin !== base.origin) throw new Error('auth_service_redirect_rejected');
   const body = await response.json().catch(() => ({}));
   return { response, body };
 }
@@ -79,11 +88,13 @@ async function resolveAuthStatus(env) {
 
   let value;
   try {
+    const base = authServiceBase(env);
     const response = await fetch(serviceUrl(env, '/api/auth/config'), {
       headers: { accept: 'application/json', 'cache-control': 'no-cache' },
-      cache: 'no-store',
-      redirect: 'error',
+      redirect: 'follow',
     });
+    const finalUrl = new URL(response.url || serviceUrl(env, '/api/auth/config'));
+    if (finalUrl.protocol !== 'https:' || finalUrl.origin !== base.origin) throw new Error('auth_config_redirect_rejected');
     if (!response.ok) throw new Error('auth_config_unavailable');
     const config = await response.json();
     const googleConfigured = config?.googleConfigured === true;
@@ -119,7 +130,12 @@ async function validateProgramSession(request, env) {
   if (!raw) return null;
   try {
     const fingerprint = await clientFingerprint(request);
-    const { response, body } = await authFetch(env, '/api/auth/introspect-session', { token: raw, clientFingerprint: fingerprint });
+    const legacyFingerprint = await clientLegacyFingerprint(request);
+    const { response, body } = await authFetch(env, '/api/auth/introspect-session', {
+      token: raw,
+      clientFingerprint: fingerprint,
+      legacyFingerprint,
+    });
     if (!response.ok || body?.valid !== true || !body?.member) return null;
     return { token: raw, member: body.member, expiresAt: body.expiresAt || null };
   } catch {
@@ -147,12 +163,17 @@ async function exchange(request, env) {
 
   try {
     const fingerprint = await clientFingerprint(request);
-    const { response, body } = await authFetch(env, '/api/auth/introspect-transfer', { token: transferToken, clientFingerprint: fingerprint });
+    const legacyFingerprint = await clientLegacyFingerprint(request);
+    const { response, body } = await authFetch(env, '/api/auth/introspect-transfer', {
+      token: transferToken,
+      clientFingerprint: fingerprint,
+      legacyFingerprint,
+    });
     if (!response.ok || body?.valid !== true || !body?.sessionToken) return loginRedirect(env, 'transfer-denied');
     return new Response(null, {
       status: 302,
       headers: {
-        location: '/',
+        location: '/?fxga_session=ready',
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
         'set-cookie': `${PROGRAM_COOKIE}=${encodeURIComponent(body.sessionToken)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=86400; Priority=High`,
@@ -194,6 +215,7 @@ export default {
           architecture: 'cloudflare-r0',
           accessModel: 'owner-approved-google-email-allowlist',
           loginUrl: portalUrl(env),
+          handoffVersion: 'stable-fingerprint-v2',
           ...status,
         }), request);
       }
