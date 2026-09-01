@@ -25,7 +25,7 @@ const ExplainabilityLayer = lazy(() => import('./components/ExplainabilityLayer'
 const GeminiIntelligenceDock = lazy(() => import('./components/GeminiIntelligenceDock').then((module) => ({ default: module.GeminiIntelligenceDock })));
 const EvidencePackDock = lazy(() => import('./components/EvidencePackDock').then((module) => ({ default: module.EvidencePackDock })));
 
-type IdleWindow = Window & {
+type IdleRuntime = {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
   cancelIdleCallback?: (handle: number) => void;
 };
@@ -34,12 +34,13 @@ function DeferredEnhancements() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const runtime = window as IdleWindow;
-    const handle = runtime.requestIdleCallback
-      ? runtime.requestIdleCallback(() => setReady(true), { timeout: 900 })
+    const runtime = window as unknown as IdleRuntime;
+    const scheduledWithIdleCallback = typeof runtime.requestIdleCallback === 'function';
+    const handle = scheduledWithIdleCallback
+      ? runtime.requestIdleCallback!(() => setReady(true), { timeout: 900 })
       : window.setTimeout(() => setReady(true), 320);
     return () => {
-      if (runtime.requestIdleCallback && runtime.cancelIdleCallback) runtime.cancelIdleCallback(handle);
+      if (scheduledWithIdleCallback && typeof runtime.cancelIdleCallback === 'function') runtime.cancelIdleCallback(handle);
       else window.clearTimeout(handle);
     };
   }, []);
