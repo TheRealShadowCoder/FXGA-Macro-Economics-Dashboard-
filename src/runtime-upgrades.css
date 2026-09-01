@@ -1,0 +1,163 @@
+:root{
+  --fxga-motion-scale:.72;
+  --fxga-particle-scale:.45;
+  --fxga-blur-scale:.68;
+  --fxga-dpr-cap:1.5;
+  --fxga-gold:#d6b35f;
+  --fxga-gold-soft:rgba(214,179,95,.16);
+  --fxga-edge:rgba(214,179,95,.14);
+}
+
+html,body,#root{min-height:100%;}
+body{min-width:280px;overflow-x:hidden;background:#05080c;}
+#root{isolation:isolate;position:relative;}
+.app-shell{position:relative;z-index:2;}
+
+.fxga-cinematic-runtime{
+  position:fixed;
+  inset:0;
+  z-index:0;
+  overflow:hidden;
+  pointer-events:none;
+  contain:strict;
+  background:
+    radial-gradient(circle at 74% 15%,rgba(190,145,49,.055),transparent 31%),
+    radial-gradient(circle at 18% 82%,rgba(51,111,128,.035),transparent 30%);
+}
+.fxga-cinematic-grid{
+  position:absolute;
+  inset:38% -18% -30%;
+  opacity:calc(.26 * var(--fxga-motion-scale));
+  background-image:
+    linear-gradient(rgba(210,177,95,.075) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(210,177,95,.075) 1px,transparent 1px);
+  background-size:54px 54px;
+  transform:perspective(760px) rotateX(66deg) translate3d(0,0,0);
+  transform-origin:center top;
+  mask-image:linear-gradient(to bottom,transparent,black 24%,black 76%,transparent);
+  animation:fxga-grid-drift 28s linear infinite;
+}
+.fxga-cinematic-orb{
+  position:absolute;
+  width:clamp(240px,34vw,620px);
+  aspect-ratio:1;
+  border-radius:50%;
+  opacity:calc(.2 * var(--fxga-particle-scale));
+  will-change:transform;
+  background:radial-gradient(circle at 42% 42%,rgba(228,195,111,.2),rgba(180,128,24,.045) 42%,transparent 69%);
+  box-shadow:0 0 100px rgba(184,138,42,.08);
+}
+.fxga-cinematic-orb--one{right:-12vw;top:-14vw;animation:fxga-orb-one 24s ease-in-out infinite alternate;}
+.fxga-cinematic-orb--two{left:5vw;bottom:-18vw;width:clamp(220px,29vw,520px);animation:fxga-orb-two 31s ease-in-out infinite alternate;}
+.fxga-cinematic-beam{
+  position:absolute;
+  top:-25%;
+  left:46%;
+  width:1px;
+  height:150%;
+  opacity:calc(.26 * var(--fxga-motion-scale));
+  background:linear-gradient(to bottom,transparent,rgba(223,187,92,.46),transparent);
+  box-shadow:0 0 28px rgba(223,187,92,.22);
+  transform:rotate(18deg) translate3d(0,0,0);
+  animation:fxga-beam 16s ease-in-out infinite alternate;
+}
+.fxga-cinematic-scan{
+  position:absolute;
+  left:0;right:0;top:-2px;height:1px;
+  opacity:calc(.18 * var(--fxga-motion-scale));
+  background:linear-gradient(90deg,transparent 10%,rgba(230,195,105,.75) 50%,transparent 90%);
+  animation:fxga-scan 14s linear infinite;
+}
+.fxga-cinematic-noise{
+  position:absolute;inset:0;opacity:.018;
+  background-image:repeating-radial-gradient(circle at 20% 30%,rgba(255,255,255,.65) 0 1px,transparent 1px 4px);
+  background-size:6px 6px;
+  mix-blend-mode:soft-light;
+}
+
+@keyframes fxga-grid-drift{to{transform:perspective(760px) rotateX(66deg) translate3d(0,54px,0)}}
+@keyframes fxga-orb-one{to{transform:translate3d(-6vw,7vh,0) scale(1.08)}}
+@keyframes fxga-orb-two{to{transform:translate3d(8vw,-5vh,0) scale(.92)}}
+@keyframes fxga-beam{to{transform:rotate(25deg) translate3d(8vw,0,0);opacity:calc(.12 * var(--fxga-motion-scale))}}
+@keyframes fxga-scan{0%{transform:translate3d(0,-5vh,0)}100%{transform:translate3d(0,105vh,0)}}
+
+/* Progressive card depth. Transform and opacity only; no layout animation. */
+.panel,.hero-card,.pipeline-card,.metric-card,.calendar-history-stat{
+  transform:translateZ(0);
+  backface-visibility:hidden;
+}
+@media (hover:hover) and (pointer:fine){
+  [data-fxga-quality="high"] .panel:hover,
+  [data-fxga-quality="ultra"] .panel:hover,
+  [data-fxga-quality="high"] .metric-card:hover,
+  [data-fxga-quality="ultra"] .metric-card:hover{
+    transform:translate3d(0,-2px,0);
+    border-color:rgba(214,179,95,.2);
+    box-shadow:0 18px 52px rgba(0,0,0,.24),0 0 0 1px rgba(214,179,95,.035) inset;
+  }
+}
+
+/* Near-viewport rendering budget for heavy below-fold sections. */
+@supports (content-visibility:auto){
+  .metrics-grid,.two-col,.panel.full,.universe-panel,.calendar-history-summary{
+    content-visibility:auto;
+    contain-intrinsic-size:auto 420px;
+  }
+}
+
+/* Runtime governor clamps visual cost without touching application functionality. */
+[data-fxga-quality="safe"] .fxga-cinematic-grid,
+[data-fxga-quality="safe"] .fxga-cinematic-orb,
+[data-fxga-quality="safe"] .fxga-cinematic-beam,
+[data-fxga-quality="safe"] .fxga-cinematic-scan,
+[data-fxga-runtime-health="strained"] .fxga-cinematic-grid,
+[data-fxga-runtime-health="strained"] .fxga-cinematic-orb,
+[data-fxga-runtime-health="strained"] .fxga-cinematic-beam,
+[data-fxga-runtime-health="strained"] .fxga-cinematic-scan{animation:none!important;opacity:0!important;}
+[data-fxga-quality="lite"] .fxga-cinematic-grid{background-size:78px 78px;opacity:.08;animation-duration:42s;}
+[data-fxga-quality="lite"] .fxga-cinematic-orb{opacity:.035;animation-duration:44s;}
+[data-fxga-quality="lite"] .fxga-cinematic-beam{display:none;}
+[data-fxga-quality="balanced"] .fxga-cinematic-noise{opacity:.012;}
+[data-fxga-quality="ultra"] .fxga-cinematic-grid{background-size:48px 48px;}
+[data-fxga-hidden="true"] .fxga-cinematic-runtime *,
+[data-fxga-interacting="true"][data-fxga-runtime-health="warm"] .fxga-cinematic-runtime *{animation-play-state:paused!important;}
+
+/* The former Firestore dock is now the R0 / D1 infrastructure ledger. */
+.fs-cap-runtime-copy{margin:5px 0 0;max-width:390px;font-size:9px!important;line-height:1.45;color:#74808d!important;}
+.fs-cap-storage>div:first-child{min-width:0;}
+.fs-cap-storage strong{overflow-wrap:anywhere;}
+.fs-cap-ring.ok{background:conic-gradient(#42d69d 100%,rgba(255,255,255,.08) 0);}
+.fs-cap-head button:disabled{opacity:.6;cursor:wait;}
+
+/* Responsive touch targets and safe-area spacing. */
+@media (pointer:coarse){
+  button,a,input,select,[role="button"]{min-height:44px;}
+  .sidebar nav button{min-height:46px;}
+}
+@media (max-width:900px){
+  .fxga-cinematic-grid{inset:48% -45% -40%;}
+  .fxga-cinematic-orb--one{right:-34vw;top:-12vw;}
+  .fxga-cinematic-orb--two{left:-24vw;bottom:-20vw;}
+}
+@media (max-width:700px){
+  .fs-cap-panel{max-height:min(76dvh,650px);overflow:auto;overscroll-behavior:contain;}
+  .fs-cap-storage{align-items:flex-start;}
+  .fs-cap-storage strong{font-size:18px;}
+  .fs-cap-ring{flex:0 0 58px;width:58px;height:58px;}
+  .topbar{padding-top:max(14px,env(safe-area-inset-top));}
+}
+@media (max-width:420px){
+  .fs-cap-toggle{width:136px;}
+  .fxga-cinematic-noise{display:none;}
+}
+@media (max-height:520px) and (pointer:coarse){
+  .fxga-cinematic-orb,.fxga-cinematic-beam{display:none;}
+  .fs-cap-panel{max-height:72dvh;}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{scroll-behavior:auto!important;}
+  .fxga-cinematic-runtime *{animation:none!important;}
+  .fxga-cinematic-grid,.fxga-cinematic-orb,.fxga-cinematic-beam,.fxga-cinematic-scan{opacity:0!important;}
+  .panel,.hero-card,.pipeline-card,.metric-card{transition:none!important;transform:none!important;}
+}
