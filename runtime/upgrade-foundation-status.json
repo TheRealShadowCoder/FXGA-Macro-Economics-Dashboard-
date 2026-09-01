@@ -1,9 +1,9 @@
 {
   "schema": "fxga.upgrade-foundation.status.v3",
-  "recordedAt": "2026-08-31T16:33:48.556Z",
+  "recordedAt": "2026-09-01T01:36:10.335Z",
   "conclusion": "success",
-  "verifiedSha": "cb73e5a715a7e4125d68b71afc3803c1172a9c7c",
-  "runId": 33414739507,
+  "verifiedSha": "e15269458554139334b21d9a17f868b82d7071d9",
+  "runId": 33459345511,
   "architecture": "cloudflare-r0",
   "authorization": "owner-approved-google-email-allowlist",
   "program": {
