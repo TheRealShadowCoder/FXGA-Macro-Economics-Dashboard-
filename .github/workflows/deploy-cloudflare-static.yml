@@ -80,6 +80,7 @@ jobs:
           npm run build
           test -f dist/index.html
           grep -R -F "Ask FXGA AI" dist >/dev/null || { echo '::error::Compiled frontend is missing Ask FXGA AI'; exit 1; }
+          grep -F "stable-fingerprint-v2" worker/src/auth-gateway.js >/dev/null || { echo '::error::Stable Open Program handoff gateway is missing'; exit 1; }
           if find dist -type f -name '*.map' | grep -q .; then
             echo '::error::Production source maps must not be deployed'; exit 1
           fi
@@ -136,7 +137,7 @@ jobs:
           if [ -n "${FXGA_INGEST_TOKEN:-}" ]; then printf '%s' "$FXGA_INGEST_TOKEN" | npx wrangler@latest secret put FXGA_INGEST_TOKEN --config wrangler.jsonc; fi
           if [ -n "${FXGA_MT5_REPORT_SECRET:-}" ]; then printf '%s' "$FXGA_MT5_REPORT_SECRET" | npx wrangler@latest secret put FXGA_MT5_REPORT_SECRET --config wrangler.jsonc; fi
 
-      - name: Verify R0 runtime, fail-closed auth and edge security
+      - name: Verify R0 runtime, Open Program handoff and edge security
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -163,6 +164,8 @@ jobs:
               if(auth.accessModel!=='owner-approved-google-email-allowlist')throw new Error('Member authorization model mismatch');
               if(auth.enforced!==true)throw new Error('Member authentication must remain fail-closed/enforced');
               if(!String(auth.loginUrl||'').includes('/member'))throw new Error('Member login URL is missing');
+              if(auth.handoffVersion!=='stable-fingerprint-v2')throw new Error('Stable Open Program handoff is not live');
+              if(auth.serviceReachable!==true)throw new Error('Landing authorization service is not reachable from dashboard Worker');
 
               for(const [header,expected] of [['strict-transport-security','max-age=63072000'],['x-frame-options','DENY'],['x-content-type-options','nosniff']]){
                 const value=String(authResult.response.headers.get(header)||'');
@@ -179,8 +182,15 @@ jobs:
               const root=await request('/?authcheck='+Date.now(),{headers:{Accept:'text/html'}});
               if(root.status!==302||!String(root.headers.get('location')||'').includes('/member'))throw new Error('Protected application root must redirect to member login');
 
-              const badExchange=await request('/api/auth/exchange?token=invalid');
+              // Length-valid fake token forces the dashboard Worker to actually call
+              // the landing Worker's introspection endpoint. `transfer-denied` proves
+              // the cross-account server-to-server route is reachable; an outage or
+              // blocked subrequest would return `auth-service-unavailable` instead.
+              const fakeTransfer='x'.repeat(48);
+              const badExchange=await request('/api/auth/exchange?token='+fakeTransfer);
+              const badLocation=String(badExchange.headers.get('location')||'');
               if(badExchange.status!==302)throw new Error('Invalid auth exchange must redirect to login');
+              if(!badLocation.includes('reason=transfer-denied'))throw new Error(`Cross-account auth handoff probe failed: ${badLocation||'missing-location'}`);
 
               const csrfPost=await request('/api/gemini/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:'security-test'})});
               if(csrfPost.status!==403)throw new Error(`Missing-origin protected write must return 403, got ${csrfPost.status}`);
@@ -188,7 +198,7 @@ jobs:
               const sourceMap=await request('/assets/security-test.map');
               if(sourceMap.status!==404)throw new Error(`Source-map access must return 404, got ${sourceMap.status}`);
 
-              console.log('VERIFIED: R0 runtime is live, authentication is fail-closed, unauthenticated program access is blocked, and edge security invariants are active.');
+              console.log('VERIFIED: R0 runtime and stable Open Program cross-account handoff are live; authentication remains fail-closed and edge security invariants are active.');
               process.exit(0);
             }catch(error){last=error;console.log(`Verification ${i}/20:`,String(error?.message||error));await sleep(3000)}
           }
