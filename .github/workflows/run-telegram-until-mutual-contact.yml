@@ -25,7 +25,8 @@ env:
   FIRESTORE_STATE_COLLECTION: agent_state
   FIRESTORE_STATE_DOCUMENT: telegram-member-agent
   DAILY_HARD_MAX: '50'
-  MAX_SINGLE_USER_EXECUTIONS: '100'
+  RUN_SUCCESS_LIMIT: '10'
+  MAX_SINGLE_USER_EXECUTIONS: '40'
 
 jobs:
   guarded-run:
@@ -67,22 +68,53 @@ jobs:
           gcloud scheduler jobs describe "$SCHEDULER_NAME" --location "$GCP_REGION" --format='value(name)' >/dev/null
 
       - id: gate
-        name: Refuse to run during Telegram cooldown
+        name: Honor only explicit Telegram timed waits
         working-directory: agents/telegram-member-agent
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
+          import { Firestore, FieldValue } from '@google-cloud/firestore';
+          const db = new Firestore();
+          const ref = db.collection(process.env.FIRESTORE_STATE_COLLECTION).doc(process.env.FIRESTORE_STATE_DOCUMENT);
+          const snap = await ref.get();
+          const state = snap.exists ? snap.data() : {};
+          const blockedUntil = state.blockedUntil?.toDate?.();
+          const active = Boolean(blockedUntil && blockedUntil > new Date());
+
+          if (active && state.lastError === 'PEER_FLOOD') {
+            await ref.set({
+              blockedUntil: FieldValue.delete(),
+              syntheticPeerFloodCooldownClearedAt: FieldValue.serverTimestamp()
+            }, { merge: true });
+            console.log('Cleared the locally invented PEER_FLOOD fallback timer. Proceeding with an explicit user-requested guarded test.');
+          } else if (active) {
+            console.error(`::error::Telegram supplied/retained a timed wait until ${blockedUntil.toISOString()}. The run will not bypass an explicit timed wait.`);
+            process.exit(5);
+          } else {
+            console.log('No active explicit Telegram timed wait.');
+          }
+          NODE
+
+      - id: baseline
+        name: Capture starting successful-add count
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          BASELINE="$(node --input-type=module <<'NODE'
           import { Firestore } from '@google-cloud/firestore';
           const db = new Firestore();
           const snap = await db.collection(process.env.FIRESTORE_STATE_COLLECTION).doc(process.env.FIRESTORE_STATE_DOCUMENT).get();
           const state = snap.exists ? snap.data() : {};
-          const blockedUntil = state.blockedUntil?.toDate?.();
-          if (blockedUntil && blockedUntil > new Date()) {
-            console.error(`::error::Telegram cooldown is active until ${blockedUntil.toISOString()}. No add attempt will be made.`);
-            process.exit(5);
-          }
-          console.log('No active stored Telegram cooldown.');
+          process.stdout.write(String(Math.max(0, Number(state.dailyAdded || 0))));
           NODE
+          )"
+          TARGET=$((BASELINE + RUN_SUCCESS_LIMIT))
+          if [ "$TARGET" -gt "$DAILY_HARD_MAX" ]; then
+            TARGET="$DAILY_HARD_MAX"
+          fi
+          echo "baseline=$BASELINE" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Starting daily count: $BASELINE; guarded target: $TARGET; maximum new successful additions: $RUN_SUCCESS_LIMIT."
 
       - id: pause
         name: Pause normal daily scheduler
@@ -106,8 +138,11 @@ jobs:
           echo 'Worker configured for exactly one attempted queue member per Cloud Run execution.'
 
       - id: operate
-        name: Add one-by-one until Telegram requires mutual contact
+        name: Add one-by-one up to 10 successes or mutual-contact stop
         working-directory: agents/telegram-member-agent
+        env:
+          START_COUNT: ${{ steps.baseline.outputs.baseline }}
+          RUN_TARGET: ${{ steps.baseline.outputs.target }}
         run: |
           set -euo pipefail
           STOP_REASON=''
@@ -140,15 +175,18 @@ jobs:
             const dailyAdded = Math.max(0, Number(state.dailyAdded || s.dailyAddedTotal || 0));
             const attempted = Math.max(0, Number(s.attempted || 0));
             const added = Math.max(0, Number(s.added || 0));
+            const target = Math.max(0, Number(process.env.RUN_TARGET || 0));
 
             console.error(`Redacted single-user result: attempted=${attempted}; added=${added}; dailyAdded=${dailyAdded}; rateLimited=${s.stoppedByRateLimit || blocked ? 'yes' : 'no'}; mutualContact=${Number(errors.USER_NOT_MUTUAL_CONTACT || 0) > 0 ? 'yes' : 'no'}.`);
 
-            if (Number(errors.USER_NOT_MUTUAL_CONTACT || 0) > 0) {
+            if (Number(errors.USER_NOT_MUTUAL_CONTACT || 0) > 0 || s.stoppedByMutualContact) {
               process.stdout.write('mutual_contact_required');
             } else if (s.stoppedByRateLimit || blocked) {
               process.stdout.write('rate_limit');
             } else if (s.fatalError) {
               process.stdout.write('fatal_error');
+            } else if (dailyAdded >= target) {
+              process.stdout.write('run_target');
             } else if (dailyAdded >= Number(process.env.DAILY_HARD_MAX || 50)) {
               process.stdout.write('daily_max');
             } else if (attempted === 0) {
@@ -167,7 +205,7 @@ jobs:
                 ;;
               rate_limit)
                 STOP_REASON='rate_limit'
-                echo '::warning::Telegram rate-limit condition detected. Stopping without further attempts.'
+                echo '::warning::Telegram returned a rate-limit condition. Stopping this run immediately.'
                 break
                 ;;
               fatal_error)
@@ -175,9 +213,14 @@ jobs:
                 echo '::error::Fatal Telegram/account/channel condition detected. Stopping.'
                 break
                 ;;
+              run_target)
+                STOP_REASON='run_target'
+                echo "Guarded test reached its maximum of $RUN_SUCCESS_LIMIT new successful additions."
+                break
+                ;;
               daily_max)
                 STOP_REASON='daily_max'
-                echo 'Daily hard safety ceiling reached before a mutual-contact restriction appeared.'
+                echo 'Daily hard ceiling reached.'
                 break
                 ;;
               no_progress)
@@ -202,9 +245,28 @@ jobs:
           echo "stop_reason=$STOP_REASON" >> "$GITHUB_OUTPUT"
           echo "executions=$EXECUTIONS" >> "$GITHUB_OUTPUT"
 
-          if [ "$STOP_REASON" != 'mutual_contact_required' ]; then
-            echo "::warning::Guarded operation stopped for $STOP_REASON before receiving USER_NOT_MUTUAL_CONTACT."
-          fi
+      - id: clear-peer-flood
+        name: Do not persist invented PEER_FLOOD cooldowns
+        if: always()
+        working-directory: agents/telegram-member-agent
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { Firestore, FieldValue } from '@google-cloud/firestore';
+          const db = new Firestore();
+          const ref = db.collection(process.env.FIRESTORE_STATE_COLLECTION).doc(process.env.FIRESTORE_STATE_DOCUMENT);
+          const snap = await ref.get();
+          const state = snap.exists ? snap.data() : {};
+          if (state.lastError === 'PEER_FLOOD' && state.blockedUntil) {
+            await ref.set({
+              blockedUntil: FieldValue.delete(),
+              peerFloodObservedAt: FieldValue.serverTimestamp()
+            }, { merge: true });
+            console.log('Removed locally invented PEER_FLOOD fallback timer. The PEER_FLOOD event remains recorded.');
+          } else {
+            console.log('No synthetic PEER_FLOOD timer to remove.');
+          }
+          NODE
 
       - id: restore
         name: Restore normal production worker configuration
@@ -218,9 +280,8 @@ jobs:
       - name: Guarded operation summary
         if: always()
         run: |
+          echo "Starting count: ${{ steps.baseline.outputs.baseline }}"
+          echo "Guarded target: ${{ steps.baseline.outputs.target }}"
           echo "Stop reason: ${{ steps.operate.outputs.stop_reason }}"
           echo "Single-user executions: ${{ steps.operate.outputs.executions }}"
           echo "Scheduler remains paused after this guarded operation."
-          if [ "${{ steps.operate.outputs.stop_reason }}" = 'mutual_contact_required' ]; then
-            echo 'Requested stop condition reached: Telegram requires mutual contact.'
-          fi
