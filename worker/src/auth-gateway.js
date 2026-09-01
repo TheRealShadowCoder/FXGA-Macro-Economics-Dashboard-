@@ -1,4 +1,5 @@
 import r0Worker from './r0-entry.js';
+import { runtimeCapacityResponse } from './runtime-capacity.js';
 import { clientFingerprint, clientLegacyFingerprint, guardRequest, hardenResponse, securityFailure } from './security.js';
 
 const PROGRAM_COOKIE = 'fxga_program_session';
@@ -238,7 +239,11 @@ export default {
       if (!status.enforced) return hardenResponse(await r0Worker.fetch(request, env, ctx), request);
 
       const session = await validateProgramSession(request, env);
-      if (session) return hardenResponse(await r0Worker.fetch(request, env, ctx), request);
+      if (session) {
+        const capacity = await runtimeCapacityResponse(request, env);
+        if (capacity) return hardenResponse(capacity, request);
+        return hardenResponse(await r0Worker.fetch(request, env, ctx), request);
+      }
 
       if (path.startsWith('/api/')) {
         return hardenResponse(json({
