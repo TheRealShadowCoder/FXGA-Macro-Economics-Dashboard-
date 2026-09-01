@@ -9,12 +9,26 @@ export async function sha256Hex(value) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function clientFingerprint(request) {
-  const material = [
+// Bind program sessions to a browser characteristic that remains stable across
+// top-level redirects and same-origin API calls. Accept-Language can vary between
+// navigation/request classes, so it is retained only as a legacy migration signal.
+export function clientUaMaterial(request) {
+  return String(request.headers.get('user-agent') || '').slice(0, 350);
+}
+
+export function clientLegacyUaMaterial(request) {
+  return [
     String(request.headers.get('user-agent') || '').slice(0, 350),
     String(request.headers.get('accept-language') || '').slice(0, 120),
   ].join('|');
-  return sha256Hex(material);
+}
+
+export async function clientFingerprint(request) {
+  return sha256Hex(clientUaMaterial(request));
+}
+
+export async function clientLegacyFingerprint(request) {
+  return sha256Hex(clientLegacyUaMaterial(request));
 }
 
 async function sourceHash(request) {
