@@ -1,0 +1,70 @@
+name: Cleanup FXGA Member-Added Service Messages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'agents/telegram-member-agent/scripts/cleanup-add-service-messages.mjs'
+      - '.github/workflows/cleanup-telegram-add-service-messages.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: fxglobalavengerstradingacademy
+  GCP_REGION: us-central1
+  DEPLOY_SERVICE_ACCOUNT: fxga-github-deployer@fxglobalavengerstradingacademy.iam.gserviceaccount.com
+  TELEGRAM_API_ID_SECRET: fxga-telegram-api-id
+  TELEGRAM_API_HASH_SECRET: fxga-telegram-api-hash
+  TELEGRAM_SESSION_SECRET: fxga-telegram-session
+  TELEGRAM_CHANNEL_SECRET: fxga-telegram-channel
+  TELEGRAM_BOT_TOKEN_SECRET: fxga-telegram-bot-token
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - id: config
+        name: Resolve Google authentication
+        env:
+          WIF_PROVIDER_SECRET: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_PROVIDER_VAR: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          set -euo pipefail
+          WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
+          test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
+          echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Load Telegram secrets without exposing values
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GCP_PROJECT_ID"
+          printf 'TELEGRAM_BOT_TOKEN<<EOF\n%s\nEOF\n' "$(gcloud secrets versions access latest --secret="$TELEGRAM_BOT_TOKEN_SECRET")" >> "$GITHUB_ENV"
+          printf 'TELEGRAM_API_ID<<EOF\n%s\nEOF\n' "$(gcloud secrets versions access latest --secret="$TELEGRAM_API_ID_SECRET")" >> "$GITHUB_ENV"
+          printf 'TELEGRAM_API_HASH<<EOF\n%s\nEOF\n' "$(gcloud secrets versions access latest --secret="$TELEGRAM_API_HASH_SECRET")" >> "$GITHUB_ENV"
+          printf 'TELEGRAM_SESSION<<EOF\n%s\nEOF\n' "$(gcloud secrets versions access latest --secret="$TELEGRAM_SESSION_SECRET")" >> "$GITHUB_ENV"
+          printf 'TELEGRAM_CHANNEL<<EOF\n%s\nEOF\n' "$(gcloud secrets versions access latest --secret="$TELEGRAM_CHANNEL_SECRET")" >> "$GITHUB_ENV"
+
+      - name: Install agent dependencies
+        working-directory: agents/telegram-member-agent
+        run: npm install --omit=dev --no-audit --no-fund
+
+      - name: Delete member-added service messages with the bot
+        working-directory: agents/telegram-member-agent
+        run: node scripts/cleanup-add-service-messages.mjs
