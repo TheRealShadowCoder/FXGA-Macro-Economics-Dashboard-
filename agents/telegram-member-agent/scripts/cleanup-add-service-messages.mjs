@@ -1,6 +1,6 @@
 import bigInt from "big-integer";
 import { Api, TelegramClient } from "teleproto";
-import { StringSession } from "teleproto/sessions";
+import { StringSession } from "teleproto/sessions/index.js";
 
 const botToken = required("TELEGRAM_BOT_TOKEN");
 const apiId = Number(required("TELEGRAM_API_ID"));
@@ -64,7 +64,7 @@ try {
 
     const oldest = messages[messages.length - 1];
     const nextOffset = Number(oldest?.id || 0);
-    if (!nextOffset || messages.length < 100 || nextOffset >= offsetId && offsetId !== 0) break;
+    if (!nextOffset || messages.length < 100 || (nextOffset >= offsetId && offsetId !== 0)) break;
     offsetId = nextOffset;
   }
 
