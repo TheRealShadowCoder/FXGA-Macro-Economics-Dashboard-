@@ -22,11 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-
       - id: config
         name: Resolve Google authentication
         env:
@@ -37,27 +35,22 @@ jobs:
           WIF_PROVIDER="${WIF_PROVIDER_SECRET:-$WIF_PROVIDER_VAR}"
           test -n "$WIF_PROVIDER" || { echo '::error::GCP_WIF_PROVIDER is missing'; exit 1; }
           echo "wif_provider=$WIF_PROVIDER" >> "$GITHUB_OUTPUT"
-
       - uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
           service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
-
       - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Load MTProto session into environment without printing it
+      - name: Load MTProto session without printing it
         run: |
           set -euo pipefail
           gcloud config set project "$GCP_PROJECT_ID"
           printf 'TELEGRAM_API_ID<<EOF\n%s\nEOF\n' "$(gcloud secrets versions access latest --secret="$TELEGRAM_API_ID_SECRET")" >> "$GITHUB_ENV"
           printf 'TELEGRAM_API_HASH<<EOF\n%s\nEOF\n' "$(gcloud secrets versions access latest --secret="$TELEGRAM_API_HASH_SECRET")" >> "$GITHUB_ENV"
           printf 'TELEGRAM_SESSION<<EOF\n%s\nEOF\n' "$(gcloud secrets versions access latest --secret="$TELEGRAM_SESSION_SECRET")" >> "$GITHUB_ENV"
-
       - name: Install agent dependencies
         working-directory: agents/telegram-member-agent
         run: npm install --omit=dev --no-audit --no-fund
-
       - name: Revoke exposed Telegram user session
         working-directory: agents/telegram-member-agent
         env:
@@ -79,8 +72,7 @@ jobs:
             await client.disconnect().catch(() => {});
           }
           NODE
-
-      - name: Replace Secret Manager session with revoked marker
+      - name: Mark Secret Manager session slot revoked
         run: |
           set -euo pipefail
           printf '%s' 'REVOKED_AFTER_CREDENTIAL_EXPOSURE' | gcloud secrets versions add "$TELEGRAM_SESSION_SECRET" --data-file=- >/dev/null
